@@ -1,9 +1,23 @@
-import pm4py
 import pandas as pd
 import numpy as np
+import traceback
+import gc
+import os # Verplaatst naar boven
+from typing import Dict, Any
+
+# PM4Py imports
+import pm4py
+from pm4py.objects.log.obj import EventLog, Trace, Event
+from pm4py.objects.petri_net.obj import Marking
+from pm4py.algo.discovery.inductive import algorithm as inductive_miner
+from pm4py.algo.discovery.dfg import algorithm as dfg_discovery
+from pm4py.algo.discovery.alpha import algorithm as alpha_miner
+from pm4py.algo.discovery.heuristics import algorithm as heuristics_miner
+from pm4py.objects.conversion.process_tree import converter as pt_converter
+from pm4py.objects.conversion.dfg import converter as dfg_converter
 from pm4py.algo.evaluation.replay_fitness import algorithm as replay_fitness_evaluator
+from pm4py.algo.evaluation.precision import algorithm as precision_evaluator
 from pm4py.algo.conformance.alignments.petri_net import algorithm as alignments_algorithm
-from typing import List, Dict, Any
 
 cpdef double calculate_fitness_in_batches(object log, object net, object im, object fm, int batch_size=200):
     cdef double total_fitness_sum = 0.0
