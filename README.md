@@ -1,3 +1,32 @@
+# Process Miner Pro
+
+A modular, high-performance Process Mining tool built in Python. It leverages **PM4Py** for mining algorithms and **Cython** for accelerated conformance checking. Designed to handle medium-to-large datasets on standard laptops (8GB RAM) through memory optimization and chunked loading.
+
+## Features
+
+* **Automated Discovery:** Supports Inductive, Heuristics, and Alpha Miners.
+* **High-Performance Conformance:** Custom Cython implementation for fast fitness and alignment calculation.
+* **Business Analytics:** Automated detection of bottlenecks, repeat purchase rates, and process deviations.
+* **Memory Efficient:** Optimized data types and chunked CSV loading for constrained environments.
+* **Visual Insights:** Auto-generates BPMN models for "Happy Paths" and "Main Process Flows".
+
+---
+
+## Installation & Setup
+
+### 1. Prerequisites
+* Python 3.9+
+* [GraphViz](https://graphviz.org/download/) (Required for visualizations)
+    * *Windows:* Download installer, run it, and **add GraphViz to System PATH**.
+    * *Mac:* `brew install graphviz`
+
+### 2. Install Python Dependencies
+Run the following command in your terminal:
+```bash
+pip install -r requirements.txt
+
+---
+
 **Process mining documentation**
 
 - The Process Model is your ideal customer journey map. The perfect, most efficient path you want users to take to convert (e.g., Homepage → Product Page → Add to Cart → Checkout → Purchase).
