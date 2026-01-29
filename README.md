@@ -1,6 +1,6 @@
 # Process Miner Pro
 
-A modular, high-performance Process Mining tool built in Python. It leverages **PM4Py** for mining algorithms and **Cython** for accelerated conformance checking. Designed to handle medium-to-large datasets on standard laptops (8GB RAM) through memory optimization and chunked loading.
+A modular, high-performance Process Mining tool built in Python. It leverages **PM4Py** for mining algorithms and **Cython** for accelerated conformance checking. Designed to handle medium-to-large datasets on standard laptops through memory optimization and chunked loading.
 
 ## Features
 
