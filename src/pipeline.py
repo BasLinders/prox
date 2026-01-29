@@ -1,11 +1,22 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 import pandas as pd
+import pm4py
+import os
+from IPython.display import Image, display
 
 # Import custom modules
 from discovery import perform_process_discovery
 from conformance import run_conformance_checking
-from analytics import analyze_process_performance, get_event_log_summary
-from visualizer import visualize_focused_insights
+from analytics import (
+    analyze_process_performance, 
+    get_event_log_summary, 
+    analyze_repeat_purchases
+)
+from visualizer import (
+    visualize_focused_insights, 
+    export_results
+)
+from data_manager import filter_event_log
 
 def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]):
     """
@@ -244,11 +255,11 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]):
     # Export variants to CSV if available
     if variants:
         top_variants_dict = variants.get('top_variants', {})
-    if top_variants_dict:
-        variants_df = pd.DataFrame.from_dict(top_variants_dict, orient='index')
-        # Ensure index is named 'Variant'
-        variants_df.index.name = 'Variant_Path'
-        export_results(variants_df, "process_variant_analysis", "csv")
+        if top_variants_dict:
+            variants_df = pd.DataFrame.from_dict(top_variants_dict, orient='index')
+            # Ensure index is named 'Variant'
+            variants_df.index.name = 'Variant_Path'
+            export_results(variants_df, "process_variant_analysis", "csv")
 
     conformance_data = pipeline_results.get('conformance', {})
     case_analysis = conformance_data.get('case_analysis', {})
