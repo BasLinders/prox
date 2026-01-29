@@ -187,6 +187,19 @@ def _load_csv_chunked(uploaded_file, chunk_size=50000):
 
     except Exception as e:
 
+def optimize_dataframe_memory(df: pd.DataFrame):
+    """
+    Optimizes memory usage by converting object columns to categories.
+    CRITICAL for 8GB RAM machines.
+    """
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            num_unique = len(df[col].unique())
+            num_total = len(df[col])
+            if num_unique / num_total < 0.5:
+                df[col] = df[col].astype('category')
+    return df
+    
 def check_trace_length(df):
     case_lengths = df_clean.groupby('case:concept:name').size()
     
