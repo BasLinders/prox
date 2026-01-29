@@ -99,7 +99,8 @@ def visualize_focused_insights(event_log, output_folder="output", bottleneck_top
 def export_results(
     data: Union[pd.DataFrame, Dict, List[Dict]],
     filename: str,
-    file_format: str = 'csv'
+    file_format: str = 'csv',
+    output_folder: str = 'output'
 ) -> tuple[bool, str]:
     """
     Purpose:
@@ -121,9 +122,13 @@ def export_results(
     if data is None:
         return False, "Error: The data to export is None."
 
+    # Create output folder if it doesn't exist
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+        
     # Ensure the filename has the correct extension
     base_filename, _ = os.path.splitext(filename)
-    output_filename = f"{base_filename}.{file_format}"
+    output_filename = os.path.join(output_folder, f"{base_filename}.{file_format}")
 
     try:
         if file_format == 'csv':
