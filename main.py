@@ -66,6 +66,9 @@ if __name__ == '__main__':
             print("ANALYSIS DASHBOARD")
             print("="*80)
 
+            # Show trace length
+            check_trace_length(df_ready)
+
             # --- A. VISUALIZATION (Process Map) ---
             print("\n--- 1. Process Map (Petri Net) ---")
             model_data = pipeline_results.get('model')
