@@ -4,7 +4,6 @@ from IPython.display import display, Image
 
 # === IMPORT YOUR MODULES ===
 from src.config import CONFIG
-from src.data_manager import load_and_validate_csv, refine_activity_labels
 from src.conformance import run_conformance_checking
 from src.pipeline import run_full_analysis
 from src.visualizer import export_results
