@@ -1,5 +1,10 @@
 import pandas as pd
-from typing import Dict, Any
+import numpy as np
+import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+import traceback
+from typing import Dict, Any, Tuple, List, Union
 
 def get_event_log_summary(event_log_df: pd.DataFrame) -> Tuple[Dict[str, Any] | None, list]:
     """
