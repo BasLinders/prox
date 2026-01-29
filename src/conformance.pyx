@@ -5,6 +5,9 @@ import gc
 import os # Verplaatst naar boven
 from typing import Dict, Any
 
+# Custom functions
+from data_manager import sample_log_stratified
+
 # PM4Py imports
 import pm4py
 from pm4py.objects.log.obj import EventLog, Trace, Event
