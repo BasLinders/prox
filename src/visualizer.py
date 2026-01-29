@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+import pm4py
 from typing import Union, Dict, List, Any
 from pm4py.algo.filtering.log.variants import variants_filter
 from pm4py.visualization.bpmn import visualizer as bpmn_visualizer
@@ -94,3 +95,66 @@ def visualize_focused_insights(event_log, output_folder="output", bottleneck_top
         print(f"   -> Error preparing Main Process data: {e}")
 
     return happy_output, process_output
+
+def export_results(
+    data: Union[pd.DataFrame, Dict, List[Dict]],
+    filename: str,
+    file_format: str = 'csv'
+) -> tuple[bool, str]:
+    """
+    Purpose:
+        A general function to save results (e.g., a performance report DataFrame or a
+        summary dictionary) to a file for the user.
+
+    Args:
+        data: The data to export. Can be a Pandas DataFrame, a single dictionary,
+              or a list of dictionaries.
+        filename (str): The desired filename without the extension (e.g., "performance_report").
+        file_format (str): The format to save in. Currently supports 'csv'.
+
+    Returns:
+        A tuple containing:
+        - A boolean indicating success (True) or failure (False).
+        - A message string with the outcome.
+    """
+    # --- 1. Input Validation ---
+    if data is None:
+        return False, "Error: The data to export is None."
+
+    # Ensure the filename has the correct extension
+    base_filename, _ = os.path.splitext(filename)
+    output_filename = f"{base_filename}.{file_format}"
+
+    try:
+        if file_format == 'csv':
+            # --- 2. Handle different data types ---
+            if isinstance(data, pd.DataFrame):
+                # Data is already a DataFrame, save it directly
+                df_to_save = data
+            elif isinstance(data, dict):
+                # Convert a single dictionary to a DataFrame
+                # We'll create a two-column DataFrame: 'Metric' and 'Value'
+                df_to_save = pd.DataFrame(list(data.items()), columns=['Metric', 'Value'])
+            elif isinstance(data, list) and all(isinstance(item, dict) for item in data):
+                # Convert a list of dictionaries to a DataFrame
+                df_to_save = pd.DataFrame(data)
+            else:
+                return False, f"Error: Unsupported data type for CSV export: {type(data).__name__}."
+
+            # --- 3. Save the file ---
+            df_to_save.to_csv(output_filename, index=False)
+            message = f"Successfully exported data to '{output_filename}'."
+            print(message)  # Provide feedback in non-UI environments like Colab
+            return True, message
+
+        else:
+            return False, f"Error: Unsupported file format '{file_format}'. Only 'csv' is supported."
+
+    except IOError as e:
+        message = f"Error: Could not write to file '{output_filename}'. Check permissions. Details: {e}"
+        print(message)
+        return False, message
+    except Exception as e:
+        message = f"An unexpected error occurred during export: {e}"
+        print(message)
+        return False, message
