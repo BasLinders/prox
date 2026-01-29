@@ -1,6 +1,16 @@
 import pandas as pd
 import pm4py
+from typing import Tuple, List, Union
+
+# === IMPORT MINING ALGORITHMS ===
 from pm4py.algo.discovery.inductive import algorithm as inductive_miner
+from pm4py.algo.discovery.dfg import algorithm as dfg_discovery
+from pm4py.algo.discovery.alpha import algorithm as alpha_miner
+from pm4py.algo.discovery.heuristics import algorithm as heuristics_miner
+
+# === IMPORT CONVERTERS ===
+from pm4py.objects.conversion.process_tree import converter as pt_converter
+from pm4py.objects.conversion.dfg import converter as dfg_converter
 
 def perform_process_discovery(
     event_log_df: pd.DataFrame,
