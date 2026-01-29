@@ -3,7 +3,7 @@ from Cython.Build import cythonize
 import numpy as np
 
 setup(
-    ext_modules=cythonize("conformance.pyx"),
+    ext_modules=cythonize("src.conformance.pyx"),
     include_dirs=[np.get_include()] # Essential if you use NumPy arrays in Cython
 )
 
