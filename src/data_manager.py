@@ -186,6 +186,7 @@ def _load_csv_chunked(uploaded_file, chunk_size=50000):
         return pd.concat(chunks, ignore_index=True)
 
     except Exception as e:
+        raise Exception(f"Error during chunked processing: {e}")
 
 def optimize_dataframe_memory(df: pd.DataFrame):
     """
@@ -200,7 +201,7 @@ def optimize_dataframe_memory(df: pd.DataFrame):
                 df[col] = df[col].astype('category')
     return df
     
-def check_trace_length(df):
+def check_trace_length(df_clean):
     case_lengths = df_clean.groupby('case:concept:name').size()
     
     print("--- Trace Length Statistics ---")
