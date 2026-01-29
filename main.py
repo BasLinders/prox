@@ -11,7 +11,8 @@ from src.visualizer import export_results
 from src.data_manager import (
     load_and_validate_csv,
     refine_activity_labels,
-    check_trace_length
+    check_trace_length,
+    optimize_dataframe_memory
 )
 
 if __name__ == '__main__':
