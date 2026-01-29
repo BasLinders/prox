@@ -24,7 +24,7 @@ A modular, high-performance Process Mining tool built in Python. It leverages **
 Run the following command in your terminal:
 ```bash
 pip install -r requirements.txt
-
+```
 ---
 
 **Process mining documentation**
