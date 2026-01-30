@@ -29,7 +29,7 @@ pip install -r requirements.txt
 
 **Process mining documentation**
 
-- The Process Model is your ideal customer journey map. The perfect, most efficient path you want users to take to convert (e.g., Homepage → Product Page → Add to Cart → Checkout → Purchase).
+- The Process Model is your ideal customer journey map. The most efficient path you want users to take to convert (e.g., Homepage → Product Page → Add to Cart → Checkout → Purchase).
 - The Event Log is the messy, real-world data of what all your users actually did.
 
 Metrics
