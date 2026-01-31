@@ -1,8 +1,9 @@
+# === IMPORT PYTHON MODULES ===
 import pandas as pd
 import matplotlib.pyplot as plt
 from IPython.display import display, Image
 
-# === IMPORT YOUR MODULES ===
+# === IMPORT CUSTOM MODULES ===
 from src.config import CONFIG
 from src.conformance import run_conformance_checking
 from src.pipeline import run_full_analysis
