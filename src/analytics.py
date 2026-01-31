@@ -409,7 +409,23 @@ def analyze_process_performance(
 
 def _generate_performance_recommendations(results: Dict[str, Any]) -> List[str]:
     """
-    Analyzes processed results to provide actionable business intelligence.
+    Analyzes process mining results to generate a list of actionable business recommendations.
+    
+    This internal helper function evaluates several key performance indicators (KPIs) 
+    including process variability, activity bottlenecks, variant complexity, temporal 
+    patterns, and resource utilization. It synthesizes these data points into human-readable 
+    strings intended for business intelligence reporting.
+    
+    Args:
+        results (Dict[str, Any]): A dictionary containing processed analysis data. 
+            Expected keys include 'case_performance', 'bottlenecks', 
+            'variant_performance', 'temporal_patterns', 'resource_performance', 
+            and 'summary_statistics'.
+    
+    Returns:
+        List[str]: A list of strings, each representing a specific recommendation 
+            or observation based on the input data. Returns a default message if 
+            no specific issues are identified or an error occurs during analysis.
     """
     recommendations = []
 
