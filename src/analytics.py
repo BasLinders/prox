@@ -8,19 +8,33 @@ from typing import Dict, Any, Tuple, List, Union
 
 def get_event_log_summary(event_log_df: pd.DataFrame) -> Tuple[Dict[str, Any] | None, list]:
     """
-    Purpose:
-        Provides quick statistics about the loaded event log, such as the number of cases,
-        events, start/end timestamps, and unique activities.
-
-    Args:
-        event_log_df (pd.DataFrame): The input event log DataFrame. It must contain
-                                     'case:concept:name', 'concept:name', and
-                                     'time:timestamp' columns.
-
-    Returns:
-        A tuple containing:
-        - A dictionary of summary statistics.
-        - A list of error messages. Returns (None, errors) if a critical error occurs.
+    Provides quick statistics about the loaded event log.
+    
+    Calculates high-level metrics including total case counts, event counts,
+    temporal range (start/end timestamps), and unique activity counts from
+    the provided event log.
+    
+    Parameters
+    ----------
+    event_log_df : pd.DataFrame
+        The input event log DataFrame. Must follow XES-standard naming 
+        conventions and contain the following columns:
+        * 'case:concept:name' : Unique identifier for each process instance.
+        * 'concept:name' : The name of the activity performed.
+        * 'time:timestamp' : The date and time of the event.
+    
+    Returns
+    -------
+    summary_stats : dict or None
+        A dictionary containing the calculated metrics. If a critical 
+        validation error occurs, this will be None.
+    error_messages : list of str
+        A list of strings describing any issues encountered during 
+        processing (e.g., missing columns or empty data).
+    
+    See Also
+    --------
+    _generate_performance_recommendations : Generates business insights from these stats.
     """
     errors = []
     SECONDS_PER_DAY = 86400
@@ -87,19 +101,40 @@ def analyze_process_performance(
     time_unit: str = 'hours'
 ) -> Dict[str, Any]:
     """
-    Purpose: Extracts comprehensive performance metrics from the event log including activity durations,
-             case durations, waiting times, bottleneck identification, and resource utilization patterns.
-
-    Args:
-        event_log_df (pd.DataFrame): PM4Py-formatted event log with columns:
-                                    ['case:concept:name', 'concept:name', 'time:timestamp']
-        aggregation_level (str): Statistical aggregation for metrics ('mean', 'median', 'both')
-        bottleneck_threshold_percentile (float): Percentile threshold for bottleneck identification (0-100)
-        include_variants (bool): Whether to include variant-specific performance analysis
-        time_unit (str): Time unit for duration reporting ('seconds', 'minutes', 'hours', 'days')
-
-    Returns:
-        Dict[str, Any]: Comprehensive performance statistics.
+    Extracts comprehensive performance metrics from the event log.
+    
+    Calculates a wide range of process mining KPIs, including activity and 
+    case durations, waiting times, bottleneck identification, and 
+    resource utilization patterns.
+    
+    Parameters
+    ----------
+    event_log_df : pd.DataFrame
+        PM4Py-formatted event log. Must contain the standard columns:
+        'case:concept:name', 'concept:name', and 'time:timestamp'.
+    aggregation_level : {'mean', 'median', 'both'}
+        The statistical method used to aggregate duration metrics.
+    bottleneck_threshold_percentile : float
+        Percentile threshold (0-100) used to flag activities or transitions 
+        as bottlenecks.
+    include_variants : bool
+        If True, includes performance analysis specific to unique process 
+        variants (execution paths).
+    time_unit : {'seconds', 'minutes', 'hours', 'days'}
+        The temporal unit used for reporting all duration-based metrics.
+    
+    Returns
+    -------
+    Dict[str, Any]
+        A nested dictionary containing comprehensive performance statistics. 
+        Commonly includes keys for 'case_performance', 'activity_performance', 
+        and 'resource_utilization'.
+    
+    Notes
+    -----
+    Waiting time is calculated as the time difference between the completion 
+    of a preceding activity and the start of the current activity within 
+    the same case.
     """
     results = {
         'case_performance': {},
@@ -409,23 +444,38 @@ def analyze_process_performance(
 
 def _generate_performance_recommendations(results: Dict[str, Any]) -> List[str]:
     """
-    Analyzes process mining results to generate a list of actionable business recommendations.
+    Analyzes processed results to provide actionable business intelligence.
     
-    This internal helper function evaluates several key performance indicators (KPIs) 
-    including process variability, activity bottlenecks, variant complexity, temporal 
-    patterns, and resource utilization. It synthesizes these data points into human-readable 
-    strings intended for business intelligence reporting.
+    This function evaluates process mining metrics across multiple dimensions—
+    variability, bottlenecks, complexity, and resource performance—to 
+    identify operational inefficiencies and suggest improvements.
     
-    Args:
-        results (Dict[str, Any]): A dictionary containing processed analysis data. 
-            Expected keys include 'case_performance', 'bottlenecks', 
-            'variant_performance', 'temporal_patterns', 'resource_performance', 
-            and 'summary_statistics'.
+    Parameters
+    ----------
+    results : Dict[str, Any]
+        A dictionary containing the processed analysis data. Expected 
+        structure includes:
+        * 'case_performance': Statistics on process duration.
+        * 'bottlenecks': Activity-level congestion data.
+        * 'variant_performance': Process path variety and coverage.
+        * 'temporal_patterns': Time-based activity trends.
+        * 'resource_performance': Metric-level resource data.
+        * 'summary_statistics': Overall health scores.
     
-    Returns:
-        List[str]: A list of strings, each representing a specific recommendation 
-            or observation based on the input data. Returns a default message if 
-            no specific issues are identified or an error occurs during analysis.
+    Returns
+    -------
+    List[str]
+        A list of strings containing human-readable recommendations. 
+        If analysis fails or no issues are found, returns a list with 
+        a single fallback message.
+    
+    Notes
+    -----
+    The function calculates the Coefficient of Variation ($CV$) for process 
+    duration as:
+    $$CV = \frac{\sigma}{\mu}$$
+    where $\sigma$ is the standard deviation and $\mu$ is the mean. A $CV > 0.5$ 
+    triggers a variability warning.
     """
     recommendations = []
 
@@ -508,18 +558,40 @@ def _generate_performance_recommendations(results: Dict[str, Any]) -> List[str]:
 
 def analyze_repeat_purchases(df, output_folder="output", user_col="user_id", activity_col="concept:name", purchase_values=None):
     """
-    Analyzes repeat purchases by grouping data by User ID.
+    Analyzes repeat purchase behavior by grouping data at the user level.
     
-    Args:
-        df: The Pandas DataFrame containing the event log.
-        output_folder: Where to save the chart.
-        user_col: The column name representing the unique User (NOT the Session/Case ID).
-        activity_col: The column containing activity names.
-        purchase_values: List of strings that represent a purchase (e.g. ['purchase', 'order_confirmation']).
-                         If None, defaults to ['purchase'].
+    Evaluates customer loyalty and purchase frequency by identifying 
+    recurring conversion events within the event log. Generates a 
+    visual distribution of purchase counts and saves it to disk.
     
-    Returns:
-        Dictionary containing KPIs (Repeat Rate, etc.) and path to the chart.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame containing the event log.
+    output_folder : str
+        The local directory path where the generated repeat purchase 
+        chart will be saved.
+    user_col : str
+        The column name representing the unique identity of the customer 
+        (User ID), distinct from specific sessions or case IDs.
+    activity_col : str
+        The column name containing activity names or event types.
+    purchase_values : list of str, optional
+        List of activity names that signify a successful transaction 
+        (e.g., ['purchase', 'order_confirmation']). If None, defaults 
+        to ['purchase'].
+    
+    Returns
+    -------
+    Dict[str, Union[float, str]]
+        A dictionary containing:
+        * 'repeat_rate' : The percentage of users with more than one purchase.
+        * 'avg_purchases_per_user' : The mean number of purchases across all buyers.
+        * 'chart_path' : The absolute file path to the saved visualization.
+    
+    See Also
+    --------
+    _generate_performance_recommendations : Can be used to interpret low repeat rates.
     """
     print("--- Business Logic: Analyzing Repeat Purchases ---")
     
