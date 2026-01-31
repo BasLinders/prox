@@ -6,8 +6,53 @@ from config import COLUMN_MAPPINGS
 
 def load_and_validate_csv(uploaded_file, max_file_size_mb=500, chunk_size=50000):
     """
-    Main function: Loads, validates, and cleans the event log.
-    Includes memory protection and strict logic ordering.
+    Loads, validates, and cleans an event log from a CSV file with memory protection.
+    
+    This function implements a robust ingestion pipeline designed for process mining. 
+    It includes file size checks, automated column mapping to XES standards, 
+    composite key generation for session tracking, and strict data cleaning to 
+    ensure compatibility with downstream analysis tools.
+    
+    Parameters
+    ----------
+    uploaded_file : file-like object
+        The CSV file to be processed. Supports objects with a `seek` method 
+        (e.g., FileUpload objects or local file handles).
+    max_file_size_mb : int, optional
+        The maximum allowable file size in megabytes before rejecting the 
+        upload (default is 500).
+    chunk_size : int, optional
+        The number of rows per batch when using optimized chunked loading for 
+        large files (default is 50000).
+    
+    Returns
+    -------
+    df : pd.DataFrame or None
+        The cleaned and validated DataFrame with standardized column names. 
+        Returns None if a critical error occurs.
+    messages : list of str
+        A combined list of error messages and informational notes generated 
+        during the loading and cleaning process.
+    has_category : bool
+        A flag indicating whether a 'category' column was successfully 
+        identified or mapped in the final dataset.
+    
+    Notes
+    -----
+    The validation logic follows a strict order of operations:
+    1. **Memory Protection**: Files exceeding `CHUNK_THRESHOLD_MB` are 
+       processed in chunks to prevent memory overflow.
+    2. **Column Mapping**: Uses `COLUMN_MAPPINGS` to perform exact and partial 
+       string matching for 'case', 'activity', and 'timestamp' identifiers.
+    3. **Composite Key Construction**: Generates a unique case identifier 
+       using the logic:
+       $$Case\_ID = User\_ID + "\_" + Session\_ID$$
+    4. **Temporal Validation**: Parses timestamps and removes any rows 
+       containing NaT (Not-a-Time) values.
+    
+    See Also
+    --------
+    _load_csv_chunked : Internal helper for memory-efficient loading.
     """
     errors = []
     notes = []
@@ -166,7 +211,40 @@ def load_and_validate_csv(uploaded_file, max_file_size_mb=500, chunk_size=50000)
 
 def _load_csv_chunked(uploaded_file, chunk_size=50000):
     """
-    Loads large CSV files efficiently using chunking.
+    Loads large CSV files efficiently using memory-optimized chunking.
+    
+    This internal helper function processes massive datasets by reading them 
+    into memory in manageable segments. It standardizes column formatting 
+    and removes empty rows at the chunk level to minimize the memory footprint 
+    before merging the segments into a single DataFrame.
+    
+    Parameters
+    ----------
+    uploaded_file : file-like object
+        The CSV file to be read. Must support the file interface (e.g., 
+        `io.BytesIO` or a system file handle). The function resets the 
+        file pointer to the start before reading.
+    chunk_size : int, optional
+        The number of rows to process per iteration (default is 50,000). 
+        Higher values increase speed but consume more RAM.
+    
+    Returns
+    -------
+    pd.DataFrame
+        A single concatenated DataFrame containing all valid data from the 
+        CSV file. Returns an empty DataFrame if no data is found.
+    
+    Raises
+    ------
+    Exception
+        If an error occurs during the chunked reading or concatenation 
+        process, specifically wrapping the underlying pandas or file system error.
+    
+    Notes
+    -----
+    The function performs two cleaning steps during the chunk iteration:
+    1. Strips whitespace and converts all column names to lowercase.
+    2. Removes rows where every single value is NaN (`how='all'`).
     """
     chunks = []
 
@@ -190,8 +268,33 @@ def _load_csv_chunked(uploaded_file, chunk_size=50000):
 
 def optimize_dataframe_memory(df: pd.DataFrame):
     """
-    Optimizes memory usage by converting object columns to categories.
-    CRITICAL for 8GB RAM machines.
+    Optimizes memory usage by converting object-type columns to categories.
+    
+    Reduces the RAM footprint of a DataFrame by identifying string-based 
+    columns with low cardinality and downcasting them to the 'category' 
+    dtype. This is particularly critical for data processing on 
+    memory-constrained hardware.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The input DataFrame to be optimized. The transformation is 
+        performed in-place on the original object.
+    
+    Returns
+    -------
+    pd.DataFrame
+        The optimized DataFrame with reduced memory usage.
+    
+    Notes
+    -----
+    The optimization strategy uses a threshold based on the ratio of unique 
+    values to the total number of entries. A column is converted to 
+    'category' only if:
+    $$ \frac{N_{unique}}{N_{total}} < 0.5 $$
+    Categorical types are highly efficient for columns where many rows share 
+    identical string values (e.g., activity names, resource IDs, or status 
+    codes), as they store the data as integers under the hood.
     """
     for col in df.columns:
         if df[col].dtype == 'object':
@@ -202,6 +305,36 @@ def optimize_dataframe_memory(df: pd.DataFrame):
     return df
     
 def check_trace_length(df_clean):
+    """
+    Calculates and displays descriptive statistics for trace lengths in the event log.
+    
+    Groups the cleaned DataFrame by case identifier to determine the number of 
+    events (length) per process instance. It outputs a statistical summary 
+    including mean, standard deviation, and key quantiles to identify 
+    potential outlier cases or process complexity.
+    
+    Parameters
+    ----------
+    df_clean : pd.DataFrame
+        The cleaned event log DataFrame. Must contain a 'case:concept:name' 
+        column to facilitate grouping.
+    
+    Returns
+    -------
+    None
+        This function performs calculations and prints the summary directly 
+        to the standard output.
+    
+    Notes
+    -----
+    Trace length is defined as the total count of events associated with a 
+    single `case_id`. High variability in trace length often indicates 
+    unstructured processes or the presence of "spaghetti" process models.
+    
+    The 95th and 99th percentiles are specifically highlighted to help 
+    determine appropriate thresholds for filtering or performance 
+    optimization.
+    """
     case_lengths = df_clean.groupby('case:concept:name').size()
     
     print("--- Trace Length Statistics ---")
@@ -212,14 +345,82 @@ def check_trace_length(df_clean):
     print(f"99% of cases have fewer than {int(case_lengths.quantile(0.99))} events.")
     
 def get_trace_signature(trace):
+    """
+    Generates a hashable signature representing the execution path of a trace.
+    
+    Converts a process trace into a tuple of activity names. This "signature" 
+    serves as a unique representation of the control-flow path, allowing for 
+    efficient grouping, frequency analysis, and identification of unique 
+    process variants.
+    
+    Parameters
+    ----------
+    trace : iterable of dict-like
+        A single process trace, typically a PM4Py Trace object or a list of 
+        events. Each event must contain a 'concept:name' key representing 
+        the activity performed.
+    
+    Returns
+    -------
+    tuple of str
+        An ordered tuple of activity labels. Using a tuple ensures the 
+        signature is hashable and can be used as a key in dictionaries or 
+        within set operations.
+    
+    Notes
+    -----
+    The trace signature is the foundation for variant analysis in process 
+    mining. Two traces are considered part of the same variant if and only 
+    if their signatures are identical.
+    
+    Example
+    -------
+    >>> trace = [{'concept:name': 'Alpha'}, {'concept:name': 'Beta'}]
+    >>> get_trace_signature(trace)
+    ('Alpha', 'Beta')
+    """
      return tuple(str(e['concept:name']) for e in trace)
 
 def refine_activity_labels(df: pd.DataFrame, target_activity='page_view', context_column=None):
     """
-    Renames a generic activity (e.g., 'page_view') by appending context from another column
-    (e.g., 'page_title' or 'page_path').
-
-    Example: 'page_view' + 'checkout' -> 'page_view_CHECKOUT'
+    Refines generic activity labels by appending contextual information from another column.
+    
+    This function transforms broad activity categories (e.g., 'page_view') into 
+    more specific process steps by concatenating the original label with values 
+    from a specified context column. It includes logic to clean URL paths and 
+    strip query parameters, ensuring that the resulting process model remains 
+    concise rather than over-fragmented.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The event log DataFrame. Must contain a 'concept:name' column.
+    target_activity : str, optional
+        The specific activity label to be refined (default is 'page_view').
+    context_column : str, optional
+        The name of the column containing the context to append. If None or 
+        not found in the DataFrame, no refinement is performed.
+    
+    Returns
+    -------
+    pd.DataFrame
+        The DataFrame with updated labels in the 'concept:name' column for 
+        the target activity rows.
+    
+    Notes
+    -----
+    The refinement process follows these cleaning rules for the context values:
+    1. **Query Stripping**: Everything following a '?' is removed to group 
+       identical paths with different parameters.
+    2. **Path Normalization**: Trailing slashes are removed and only the final 
+       segment of a URL or file path is retained.
+    3. **Standardization**: The context is converted to uppercase and joined 
+       with an underscore (e.g., `target_activity_CONTEXT`).
+    
+    Example
+    -------
+    Input 'concept:name' is "page_view" and 'page_path' is "/shop/checkout?id=1".
+    Output 'concept:name' becomes "page_view_CHECKOUT".
     """
     if context_column is not None and context_column not in df.columns:
         print(f"Warning: Context column '{context_column}' not found. Skipping refinement.")
@@ -243,8 +444,8 @@ def refine_activity_labels(df: pd.DataFrame, target_activity='page_view', contex
         # Check first element to see if it looks like a URL/Path
         first_val = str(context_values.iloc[0])
         if 'http' in first_val or '/' in first_val:
-            context_values = context_values.str.split('?').str[0]  # Strip query params
-            context_values = context_values.str.strip('/')          # Remove trailing slashes
+            context_values = context_values.str.split('?').str[0] # Strip query params
+            context_values = context_values.str.strip('/') # Remove trailing slashes
             # Take last path segment
             context_values = context_values.apply(lambda x: x.split('/')[-1] if '/' in x else x)
 
@@ -260,39 +461,62 @@ def filter_event_log(
     **kwargs
 ) -> Tuple[pd.DataFrame | None, list]:
     """
-    Purpose:
-        Provides various filtering options for an event log DataFrame. This is crucial for
-        drilling down into specific user segments, paths, or performance brackets.
-
-    Args:
-        event_log_df (pd.DataFrame): The input event log.
-        filter_type (str): The type of filter to apply. Supported values:
-            - 'case_duration': Filters cases based on their total duration.
-            - 'activity': Filters cases that contain or do not contain specific activities.
-            - 'attribute': Filters events based on the value of a specific attribute column.
-            - 'top_variants': Keeps only the cases belonging to the most frequent variants.
-
-    Keyword Args (**kwargs):
-        For 'case_duration':
-            - min_duration (float): The minimum duration to keep.
-            - max_duration (float): The maximum duration to keep.
-            - time_unit (str): 'seconds', 'minutes', 'hours', or 'days'.
-
-        For 'activity':
-            - activities (List[str]): A list of activity names to filter by.
-            - mode (str): 'contains' (default) to keep cases with any of the activities,
-                          or 'not_contains' to remove them.
-
-        For 'attribute':
-            - attribute_col (str): The name of the column to filter on.
-            - attribute_values (List[Any]): A list of values to keep.
-
-        For 'top_variants':
-            - top_n (int): The number of most frequent variants to keep (e.g., 10).
-
-    Returns:
-        A tuple containing the filtered event log DataFrame and a list of info/error messages.
-        Returns (None, errors) if a critical error occurs.
+    Provides various filtering options for an event log DataFrame.
+    
+    Enables precise log slicing for drilling down into specific user segments, 
+    execution paths, or performance brackets. This function acts as a unified 
+    interface for case-level and event-level filtering logic.
+    
+    Parameters
+    ----------
+    event_log_df : pd.DataFrame
+        The input event log to be filtered.
+    filter_type : {'case_duration', 'activity', 'attribute', 'top_variants'}
+        The logic to apply for filtering:
+        * 'case_duration': Filters cases based on total throughput time.
+        * 'activity': Keeps/removes cases based on the presence of activities.
+        * 'attribute': Filters events by specific column values.
+        * 'top_variants': Retains cases belonging to the most frequent paths.
+    **kwargs : dict
+        Additional arguments specific to the `filter_type`:
+    
+        **For 'case_duration':**
+        * min_duration : float, optional
+            Minimum throughput time to retain.
+        * max_duration : float, optional
+            Maximum throughput time to retain.
+        * time_unit : {'seconds', 'minutes', 'hours', 'days'}
+            Temporal unit for duration thresholds.
+    
+        **For 'activity':**
+        * activities : list of str
+            The activity names to target.
+        * mode : {'contains', 'not_contains'}, default: 'contains'
+            Whether to keep or discard cases matching the activity list.
+    
+        **For 'attribute':**
+        * attribute_col : str
+            The name of the DataFrame column to evaluate.
+        * attribute_values : list
+            The list of values to retain in the specified column.
+    
+        **For 'top_variants':**
+        * top_n : int
+            The number of most frequent variants to keep (e.g., 10).
+    
+    Returns
+    -------
+    filtered_df : pd.DataFrame or None
+        The resulting event log after filters are applied. Returns None if 
+        a critical error occurs during processing.
+    messages : list of str
+        A list of strings containing informational notes or error logs 
+        describing the result of the filter operation.
+    
+    Notes
+    -----
+    Filtering is a fundamental step in process mining to reduce "spaghetti" 
+    complexity and focus on the "happy path" or specific deviations.
     """
     messages = []
 
@@ -404,21 +628,51 @@ def sample_log_stratified(
     max_priority_ratio=0.5
 ):
     """
-    Executes a stratified sample check on case-level.
+    Executes a stratified sample of the event log at the case level.
     
-    This is designed to *guarantee* rare, important cases (such as 'purchase == 1')
-    in the sample, while the rest are randomly filled to the total sample size.
+    This function ensures that "priority" cases (e.g., successful purchases, 
+    rare errors) are represented in the sample, even if they are statistically 
+    infrequent. It calculates strata based on whether a case identifier 
+    is associated with a specific priority value at any point in its history.
     
-    Args:
-    - event_log_df: The complete, prepared event log DataFrame.
-    - strata_col: The column name to be stratified by (e.g., 'purchase').
-    - priority_value: The value in the strata_col that has priority (e.g., 1).
-    - total_sample_size: The *desired* total number of cases in the sample.
-    - max_priority_ratio: The maximum proportion of 'priority' cases
-      in the final sample (e.g., 0.5 = 50%).
+    Parameters
+    ----------
+    event_log_df : pd.DataFrame
+        The complete, prepared event log DataFrame containing a 
+        'case:concept:name' column.
+    strata_col : str
+        The column name to be used for stratification (e.g., 'purchase' or 
+        'is_error').
+    priority_value : Any, optional
+        The value within `strata_col` that designates a case as high-priority 
+        (default is 1).
+    total_sample_size : int, optional
+        The target number of unique cases to include in the final sample 
+        (default is 500).
+    max_priority_ratio : float, optional
+        The maximum allowable proportion (0.0 to 1.0) of priority cases 
+        in the final sample to prevent over-representation (default is 0.5).
     
-    Returns:
-    A DataFrame containing the sample and a list of messages.
+    Returns
+    -------
+    sampled_df : pd.DataFrame
+        A DataFrame containing all events associated with the selected 
+        sample of case IDs.
+    messages : list of str
+        A list of informational notes detailing the sampling results, 
+        including the count of priority vs. standard cases selected.
+    
+    Notes
+    -----
+    The sampling logic follows a two-tier approach:
+    1. **Priority Tier**: Selects up to `total_sample_size * max_priority_ratio` 
+       cases that match the `priority_value`.
+    2. **Filler Tier**: Randomly selects standard cases to reach the 
+       `total_sample_size`.
+       
+    If the `strata_col` is missing or an error occurs, the function 
+    automatically falls back to simple random sampling to ensure 
+    pipeline continuity.
     """
     messages = []
     
