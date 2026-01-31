@@ -20,7 +20,54 @@ def perform_process_discovery(
     activity_threshold: int = 0
 ) -> Tuple[tuple | dict | None, list, list]:
     """
-    Purpose: Applies a chosen process discovery algorithm to the event log.
+    Applies a chosen process discovery algorithm to the event log to generate a process model.
+    
+    This function acts as a centralized interface for various process discovery 
+    techniques. It transforms raw event data into a formal Petri net representation 
+    (net, initial marking, final marking), handling the necessary conversions 
+    between DataFrames and PM4Py EventLog objects while applying algorithm-specific 
+    hyperparameters.
+    
+    Parameters
+    ----------
+    event_log_df : pd.DataFrame
+        The input event log. Must contain the standard PM4Py columns: 
+        'case:concept:name', 'concept:name', and 'time:timestamp'.
+    discovery_algo : {'inductive_miner', 'dfg', 'alpha_miner', 'heuristics_miner'}, optional
+        The algorithm to use for model discovery (default is 'inductive_miner').
+        * 'inductive_miner': Guarantees sound process trees/Petri nets.
+        * 'dfg': Directly-Follows Graph discovery, converted to a Petri net.
+        * 'alpha_miner': The classic approach to process discovery.
+        * 'heuristics_miner': Robust against noise by focusing on frequent paths.
+    noise_threshold : float, optional
+        Threshold used by the Inductive Miner to filter out infrequent behavior 
+        (default is 0.0).
+    dependency_threshold : float, optional
+        Threshold used by the Heuristics Miner to determine the strength of 
+        causal dependencies (default is 0.5).
+    activity_threshold : int, optional
+        Minimum occurrences required for an activity to be included in the 
+        discovery (default is 0).
+    
+    Returns
+    -------
+    process_model : tuple (net, im, fm) or None
+        A triple containing the Petri net, the initial marking, and the 
+        final marking. Returns None if a critical error occurs.
+    errors : list of str
+        A list of error messages or stack traces if the discovery process fails.
+    messages : list of str
+        A list of informational notes regarding the discovery parameters used.
+    
+    Notes
+    -----
+    Discovery algorithms vary significantly in how they handle noise and 
+    completeness. The Inductive Miner is generally preferred for producing 
+    reproducible, sound models.
+    
+    See Also
+    --------
+    run_conformance_checking : Uses the discovered model to evaluate log fitness.
     """
 
     errors = []
