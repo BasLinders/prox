@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import traceback
 import gc
-import os # Verplaatst naar boven
+import os
 from typing import Dict, Any
 
 # Custom functions
@@ -319,4 +319,3 @@ cpdef dict run_conformance_checking(
     }
 
     return results
-  
