@@ -23,6 +23,43 @@ from pm4py.algo.evaluation.precision import algorithm as precision_evaluator
 from pm4py.algo.conformance.alignments.petri_net import algorithm as alignments_algorithm
 
 cpdef double calculate_fitness_in_batches(object log, object net, object im, object fm, int batch_size=200):
+    """
+    Calculates the average alignment fitness of an event log against a Petri net using batch processing.
+    
+    This Cython-optimized function computes the fitness by partitioning the event log 
+    into smaller batches to manage memory consumption and performing alignment-based 
+    conformance checking. Fitness is defined as the degree to which the observed 
+    traces in the log can be replayed by the Petri net.
+    
+    Parameters
+    ----------
+    log : object
+        The event log containing traces to be evaluated. Expected to be a 
+        list-like object (e.g., PM4Py EventLog) that supports slicing.
+    net : object
+        The Petri net model (Accepting Petri Net) against which fitness is measured.
+    im : object
+        The initial marking of the Petri net.
+    fm : object
+        The final marking of the Petri net.
+    batch_size : int, optional
+        The number of traces to process in a single iteration (default is 200). 
+        Adjusting this can optimize the trade-off between speed and memory usage.
+    
+    Returns
+    -------
+    double
+        The mean fitness value across all processed traces. The value ranges 
+        from 0.0 to 1.0, where 1.0 indicates perfect conformance.
+    
+    Notes
+    -----
+    The fitness calculation is based on the following formula:
+    $$Fitness = \frac{\sum_{i=1}^{n} fitness(trace_i)}{n}$$
+    where $n$ is the total number of traces. Manual garbage collection (`gc.collect()`) 
+    is triggered after each batch to prevent memory fragmentation during large-scale 
+    conformance checking.
+    """
     cdef double total_fitness_sum = 0.0
     cdef Py_ssize_t total_traces = 0
     cdef Py_ssize_t log_len = len(log)
@@ -49,6 +86,45 @@ cpdef double calculate_fitness_in_batches(object log, object net, object im, obj
     return 0.0
 
 cpdef list parse_alignments_cython(object clean_log, list alignments):
+    """
+    Parses alignment results into a structured format containing fitness and deviations.
+    
+    This Cython-optimized function iterates through the results of a process 
+    alignment algorithm, calculating trace-level fitness and identifying 
+    specific process deviations (skips and unsolicited moves). It maps log 
+    traces to model moves to pinpoint exactly where a process went off-track.
+    
+    Parameters
+    ----------
+    clean_log : object
+        The event log object (typically a PM4Py log) containing the original 
+        traces. Used to extract trace attributes like 'concept:name'.
+    alignments : list of dict
+        A list of alignment results corresponding to the traces in `clean_log`. 
+        Each dictionary is expected to contain 'alignment' (a list of moves) 
+        and optionally 'fitness' or 'cost'.
+    
+    Returns
+    -------
+    list of dict
+        A list of dictionaries, one for each trace, containing:
+        * 'case_id' (str): The identifier for the case.
+        * 'fitness' (float): The calculated fitness score for the trace.
+        * 'deviations' (dict): A sub-dictionary containing:
+            - 'skipped' (list): Model activities that did not occur in the log.
+            - 'unsolicited' (list): Log activities that were not predicted 
+              by the model.
+    
+    Notes
+    -----
+    The function distinguishes between log moves, model moves, and synchronous 
+    moves. It specifically ignores "silent" transitions (e.g., those starting 
+    with 'tau', 'skip', or 'init') when recording skipped steps.
+    
+    If a pre-calculated 'fitness' is not found in the alignment dictionary, 
+    it is derived using the cost:
+    $$Fitness = 1.0 - \frac{cost}{length(trace) + 1}$$
+    """
     cdef list details = []
     cdef Py_ssize_t i
     cdef object trace
@@ -133,6 +209,64 @@ cpdef dict run_conformance_checking(
     bint perform_sampling = True,
     str strata_col = None
 ):
+    """
+    Executes comprehensive conformance checking between an event log and a process model.
+    
+    This high-level function orchestrates data sampling, fitness calculation, precision 
+    evaluation, and trace alignment. It utilizes Cython-optimized routines and 
+    optional variant grouping to provide a structured analysis of how well the 
+    observed behavior (event log) matches the theoretical behavior (Petri net).
+    
+    Parameters
+    ----------
+    event_log_df : pd.DataFrame
+        The input event log in a Pandas DataFrame format.
+    process_model : object
+        The Petri net model (Accepting Petri Net) used for conformance checking.
+    initial_marking : object
+        The initial marking (start state) of the Petri net.
+    final_marking : object
+        The final marking (end state) of the Petri net.
+    max_align : int, optional
+        Maximum number of traces to align to manage computational load (default 250).
+    max_prec_cases : int, optional
+        Maximum number of traces to use for precision calculation (default 250).
+    cores : int, optional
+        Number of CPU cores for parallel processing. Set to 0 to use all 
+        available cores minus one (default 1).
+    alignment_variant : str, optional
+        The PM4Py alignment algorithm variant to use (default 'state_equation_a_star').
+    enable_detailed_analysis : bool, optional
+        If True, calculates precision and detailed case-level deviations (default False).
+    calculate_fitness : bool, optional
+        If True, triggers a standalone batched fitness calculation (default False).
+    optimize_variants : bool, optional
+        If True, groups identical traces into variants to reduce the number of 
+        alignment operations (default True).
+    perform_sampling : bool, optional
+        If True, uses stratified sampling to select traces for analysis 
+        instead of simple head-slicing (default True).
+    strata_col : str, optional
+        The column name to use for stratified sampling. If None, defaults to 
+        'case:concept:name' or 'purchase'.
+    
+    Returns
+    -------
+    results : dict
+        A dictionary containing the analysis output:
+        * 'fitness' (dict): Log-level fitness score and calculation method.
+        * 'precision' (dict): Precision score (degree of model over-generalization).
+        * 'alignments' (dict): Summary of alignment costs and trace counts.
+        * 'case_analysis' (dict): Detailed list of deviations per case.
+        * 'overall_summary' (dict): Aggregated quality assessment (Excellent to Poor).
+        * 'errors' (list): Captured exceptions and stack traces.
+    
+    Notes
+    -----
+    Conformance checking evaluates two primary dimensions:
+    1. **Fitness**: Can the model explain the traces in the log?
+    2. **Precision**: Does the model allow for behavior not found in the log?
+    """
     cdef dict results = {
         'fitness': {'log_fitness': 0, 'note': 'Pending calculation'},
         'precision': {'precision_score': 0},
