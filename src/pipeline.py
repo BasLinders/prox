@@ -20,7 +20,57 @@ from data_manager import filter_event_log
 
 def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]):
     """
-    Executes the full process analysis based on a provided configuration dictionary.
+    Executes a comprehensive process mining pipeline based on a configuration profile.
+    
+    This orchestrator function manages the end-to-end analytical workflow, 
+    sequencing data filtering, log summarization, automated process discovery, 
+    conformance checking, performance profiling, and business intelligence 
+    extraction. It serves as the primary entry point for batch-processing event logs.
+    
+    Parameters
+    ----------
+    event_log_df : pd.DataFrame
+        The raw or pre-cleaned event log to be analyzed.
+    config : Dict[str, Any]
+        A nested configuration dictionary defining the pipeline behavior. 
+        Supported top-level keys include:
+        * 'filter_steps' (list): List of dictionaries defining filter types 
+          and parameters.
+        * 'discovery_params' (dict): Configuration for `perform_process_discovery`.
+        * 'conformance_params' (dict): Settings for `run_conformance_checking`.
+        * 'performance_params' (dict): Settings for `analyze_process_performance`.
+        * 'visualisation_params' (dict): Parameters for chart and BPMN generation.
+        * 'sampling_config' (dict): Toggles for stratified or random sampling.
+        * 'speed_params' (dict): Limits on trace counts for alignment operations.
+    
+    Returns
+    -------
+    pipeline_results : dict or None
+        A dictionary containing the collective output of all pipeline stages:
+        * 'log_summary': Descriptive statistics of the filtered log.
+        * 'model': The discovered Petri net (net, im, fm).
+        * 'conformance': Results including fitness, precision, and deviations.
+        * 'performance': Bottleneck analysis and lead time metrics.
+        * 'visualizations': Paths to generated BPMN images and plots.
+        * 'repeat_purchase_analysis': Customer-centric loyalty metrics.
+        Returns None if a critical failure occurs in early stages.
+    
+    Notes
+    -----
+    The pipeline enforces a strict logical order:
+    1. **Data Reduction**: Filters and sampling are applied first to ensure 
+       computational feasibility.
+    2. **Structural Discovery**: A model is built to define "intended" behavior.
+    3. **Comparative Analysis**: Conformance checking measures the gap between 
+       the data and the model.
+    4. **Temporal Analysis**: Performance metrics are calculated to identify 
+       operational friction.
+       
+    See Also
+    --------
+    perform_process_discovery : The discovery engine used in Step 3.
+    run_conformance_checking : The comparison engine used in Step 4.
+    analyze_process_performance : The performance engine used in Step 5.
     """
     print("="*80)
     print("START OF CONFIGURED PROCESS ANALYSIS")
