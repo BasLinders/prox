@@ -7,11 +7,51 @@ from pm4py.visualization.bpmn import visualizer as bpmn_visualizer
 from pm4py.visualization.petri_net import visualizer as pn_visualizer
 
 def visualize_focused_insights(event_log, output_folder="output", bottleneck_top_k=15):
-    """ 
-    Generates two specific visualizations for analysts using BPMN (Flowcharts).
+    """
+    Generates specialized BPMN visualizations for process behavior and deviations.
     
-    1. Happy Path: The single most frequent path.
-    2. Main Process Flow: The top K variants combined (showing structure of deviations).
+    This function creates two distinct process maps to assist analysts in 
+    understanding process execution:
+    1. **Happy Path**: A visualization of the single most frequent variant, 
+       representing the "standard" or intended process flow.
+    2. **Main Process Flow**: A combined model of the top K variants, 
+       highlighting common deviations and structural bottlenecks.
+    
+    Parameters
+    ----------
+    event_log : EventLog
+        A PM4Py EventLog object or compatible collection of traces.
+    output_folder : str, optional
+        The directory where the generated PNG images will be stored 
+        (default is "output").
+    bottleneck_top_k : int, optional
+        The number of most frequent variants to include in the "Main Process 
+        Flow" model (default is 15).
+    
+    Returns
+    -------
+    happy_output : str or None
+        The absolute file path to the saved Happy Path BPMN image. 
+        Returns None if generation fails.
+    process_output : str or None
+        The absolute file path to the saved Main Process Flow image. 
+        Returns None if generation fails.
+    
+    Notes
+    -----
+    The function uses the Inductive Miner algorithm to discover a process tree, 
+    which is then converted to BPMN (Business Process Model and Notation). 
+    If BPMN conversion fails, it attempts a fallback to a Petri Net 
+    visualization.
+    
+    The "Main Process Flow" uses a noise threshold ($0.2$) to ensure 
+    readability by filtering out infrequent transitions that would 
+    otherwise create a "spaghetti" model.
+    
+    See Also
+    --------
+    pm4py.discover_process_tree_inductive : The underlying discovery algorithm.
+    pm4py.filter_variants_top_k : Used to isolate the most frequent process paths.
     """
     print("--- Generating Focused Visualizations (BPMN Style) ---")
     
@@ -103,20 +143,48 @@ def export_results(
     output_folder: str = 'output'
 ) -> tuple[bool, str]:
     """
-    Purpose:
-        A general function to save results (e.g., a performance report DataFrame or a
-        summary dictionary) to a file for the user.
-
-    Args:
-        data: The data to export. Can be a Pandas DataFrame, a single dictionary,
-              or a list of dictionaries.
-        filename (str): The desired filename without the extension (e.g., "performance_report").
-        file_format (str): The format to save in. Currently supports 'csv'.
-
-    Returns:
-        A tuple containing:
-        - A boolean indicating success (True) or failure (False).
-        - A message string with the outcome.
+    Saves analytical results to a file, handling various input data structures.
+    
+    This utility function acts as a flexible data sink for the analysis pipeline. 
+    It automatically transforms process mining artifacts (like summary 
+    dictionaries or performance DataFrames) into a standardized format for 
+    storage. It ensures the target directory exists and manages file extensions 
+    to prevent path errors.
+    
+    Parameters
+    ----------
+    data : pd.DataFrame or dict or list of dict
+        The data object to be exported. 
+        * If `pd.DataFrame`: Saved directly.
+        * If `dict`: Converted to a two-column 'Metric' and 'Value' format.
+        * If `list` of `dict`: Flattened into a row-per-dictionary DataFrame.
+    filename : str
+        The base name of the file without the extension (e.g., "case_deviations").
+    file_format : str, optional
+        The target file extension. Currently, only 'csv' is supported 
+        (default is 'csv').
+    output_folder : str, optional
+        The directory path where the file will be created. If the folder 
+        does not exist, it will be generated automatically (default is 'output').
+    
+    Returns
+    -------
+    success : bool
+        True if the file was written successfully, False otherwise.
+    message : str
+        A descriptive string confirming the output path or detailing the 
+        specific failure (e.g., permission errors or unsupported types).
+    
+    Notes
+    -----
+    The function provides an abstraction layer over `pandas.to_csv`, 
+    standardizing how process metrics are persisted for business reporting.
+    
+    Raises
+    ------
+    IOError
+        If the file cannot be written due to disk space, naming conflicts, 
+        or restricted folder permissions.
     """
     # --- 1. Input Validation ---
     if data is None:
