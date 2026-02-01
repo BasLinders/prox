@@ -1,4 +1,4 @@
-# Process Miner Pro
+# PRocess eXcavator
 
 A modular, high-performance Process Mining tool built in Python. It leverages **PM4Py** for mining algorithms and **Cython** for accelerated conformance checking. Designed to handle medium-to-large datasets on standard laptops through memory optimization and chunked loading.
 
