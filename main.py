@@ -14,6 +14,7 @@ from src.data_manager import (
     check_trace_length,
     optimize_dataframe_memory
 )
+from src.analytics import analyze_repeat_purchases, print_business_report
 
 if __name__ == '__main__':
     uploaded_file = 'C:/Users/Bas Linders/Documents/pm_dummy_data.csv'
@@ -132,6 +133,27 @@ if __name__ == '__main__':
                 print(f" - Unsolicited: {worst_case.get('deviations', {}).get('unsolicited', 'N/A with Token Replay')}")
             else:
                 print("All sampled cases follow the model perfectly.")
+
+        else:
+            print("Analysis failed to return results.")
+
+        # --- Business Insights ---
+        results = analyze_repeat_purchases(
+            df_clean,
+            output_folder="output",
+            user_col="user_id", 
+            revenue_col="price"
+        )
+        
+        print_business_report(results)
+        
+        from IPython.display import Image, display # Jupyter only, change for streamlit local UI
+        
+        if results and results.get('charts'):
+            for chart_name, chart_path in results['charts'].items():
+                if chart_path:
+                    print(f"\n--- {chart_name.title()} ---")
+                    display(Image(filename=chart_path))
 
         else:
             print("Analysis failed to return results.")
