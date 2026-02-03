@@ -672,3 +672,407 @@ def analyze_repeat_purchases(df, output_folder="output", user_col="user_id", act
         "repeat_rate_percent": repeat_rate,
         "chart_path": chart_path
     }
+
+def analyze_repeat_purchases(df, output_folder="output", user_col="user_id", activity_col="concept:name", timestamp_col="time:timestamp", revenue_col="event_value", case_col="case:concept:name", purchase_values=None):
+    """
+    Perform advanced repeat purchase analysis on an event log.
+
+    This function identifies purchase events across multiple signal types (textual matches, 
+    boolean flags, or revenue values), aggregates them into unique transactions, 
+    and calculates loyalty, latency, and revenue impact metrics.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        The event log containing user activities and timestamps.
+    output_folder : str, default "output"
+        The directory where generated visualization charts will be saved.
+    user_col : str, default "user_id"
+        The column name representing unique user/customer identifiers.
+    activity_col : str, default "concept:name"
+        The column name representing the activity or event name.
+    timestamp_col : str, default "time:timestamp"
+        The column name representing the event occurrence time.
+    revenue_col : str, default "event_value"
+        The column name representing transaction revenue or price.
+    case_col : str, default "case:concept:name"
+        The column name representing unique session or process instance identifiers.
+    purchase_values : list of str or str, optional
+        Keywords used to identify purchase events via textual matching. 
+        Defaults to ['purchase', 'order', 'has_purchase', 'payment', 'transaction'].
+
+    Returns
+    -------
+    dict
+        A dictionary containing:
+        - 'metrics': {total_buyers, repeat_rate, avg_days_between, median_days_between, revenue_stats}
+        - 'charts': {distribution, timing, revenue} (paths to saved image files)
+    """
+    print("--- Business Logic: Advanced Repeat Purchase Analysis ---")
+    
+    # Default empty result to prevent crashes in function call
+    empty_result = {
+        "metrics": {
+            "total_buyers": 0,
+            "repeat_rate": 0,
+            "avg_days_between": 0,
+            "median_days_between": 0,
+            "revenue_stats": {}
+        },
+        "charts": {}
+    }
+
+    # Defaults
+    if purchase_values is None:
+        purchase_values = ['purchase', 'order', 'has_purchase', 'payment', 'transaction']
+    elif isinstance(purchase_values, str):
+        purchase_values = [purchase_values]
+
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    cols_map = {c.lower(): c for c in df.columns}
+    
+    # --- 1. Column Detection ---
+    
+    # User
+    real_user_col = cols_map.get(user_col.lower())
+    if not real_user_col:
+        for candidate in ['customer_id', 'user', 'user_id', 'case_id']:
+            if candidate in cols_map:
+                print(f"   -> Info: '{user_col}' not found, fallback to '{cols_map[candidate]}'")
+                real_user_col = cols_map[candidate]
+                break
+    
+    # Case (Crucial for deduplication)
+    real_case_col = cols_map.get(case_col.lower())
+    if not real_case_col:
+        for candidate in ['case_id', 'case', 'session_id', 'session']:
+            if candidate in cols_map:
+                real_case_col = cols_map[candidate]
+                break
+                
+    # Time
+    real_time_col = cols_map.get(timestamp_col.lower())
+    
+    # Revenue (Priority: event_value -> price -> amount)
+    real_rev_col = cols_map.get(revenue_col.lower())
+    if not real_rev_col:
+        for candidate in ['event_value', 'revenue', 'total_amount', 'value', 'price', 'amount']:
+            if candidate in cols_map:
+                print(f"   -> Info: Revenue column '{revenue_col}' not found, fallback to '{cols_map[candidate]}'")
+                real_rev_col = cols_map[candidate]
+                break
+    
+    # Activity
+    real_activity_col = cols_map.get(activity_col.lower(), activity_col)
+
+    if not real_user_col or not real_time_col or not real_case_col or real_activity_col not in df.columns:
+        print(f"   -> Warning: Required columns not found.")
+        return empty_result
+
+    # Datetime conversion
+    df[real_time_col] = pd.to_datetime(df[real_time_col], utc=True)
+
+    # --- 2. IDENTIFY PURCHASE CASES (Sessions) ---
+    print(f"   -> Purchase detection started on {len(df)} rows...")
+    
+    # Textual Match
+    pattern = '|'.join([p.lower() for p in purchase_values])
+    mask_text = df[real_activity_col].astype(str).str.lower().str.contains(pattern, na=False)
+    
+    # Indicator Columns (Explicit Flags)
+    mask_col = pd.Series(False, index=df.index)
+    potential_flag_cols = [c for c in df.columns if 'purchase' in c.lower() or 'conversion' in c.lower()]
+    
+    for flag_col in potential_flag_cols:
+        if flag_col == real_activity_col: continue 
+        try:
+            col_data = df[flag_col]
+            if pd.api.types.is_bool_dtype(col_data):
+                is_positive = col_data == True
+            else:
+                numeric_series = pd.to_numeric(col_data, errors='coerce').fillna(0)
+                is_positive = numeric_series > 0
+            
+            hits = is_positive.sum()
+            if hits > 0:
+                print(f"      - Using column '{flag_col}' as indicator ({hits} hits).")
+                mask_col = mask_col | is_positive
+        except:
+            pass
+
+    # Revenue Column Check
+    mask_rev = pd.Series(False, index=df.index)
+    if real_rev_col:
+        try:
+            rev_data = pd.to_numeric(df[real_rev_col], errors='coerce').fillna(0)
+            mask_rev = rev_data > 0
+            rev_hits = mask_rev.sum()
+            if rev_hits > 0:
+                print(f"      - Using revenue column '{real_rev_col}' > 0 as indicator ({rev_hits} hits).")
+            else:
+                print(f"      - Column '{real_rev_col}' found but contains only 0 or empty values.")
+        except Exception as e:
+            print(f"      - Error checking revenue column: {e}")
+
+    # Combine All Signals
+    purchase_raw_df = df[mask_text | mask_col | mask_rev].copy()
+    purchase_case_ids = purchase_raw_df[real_case_col].unique()
+    
+    if len(purchase_case_ids) == 0:
+        print("   -> No purchase events/cases found.")
+        print(f"      Checked activities: {purchase_values}")
+        return empty_result
+
+    print(f"   -> Found {len(purchase_case_ids)} sessions with a purchase.")
+
+    # Filter full traces for these cases
+    purchase_full_traces = df[df[real_case_col].isin(purchase_case_ids)].copy()
+
+    # --- 3. AGGREGATION TO UNIQUE TRANSACTIES ---
+    agg_rules = {
+        real_time_col: 'min', # Start time of session
+        real_user_col: 'first' # Link User ID
+    }
+    
+    if real_rev_col:
+        purchase_full_traces[real_rev_col] = pd.to_numeric(purchase_full_traces[real_rev_col], errors='coerce').fillna(0)
+        agg_rules[real_rev_col] = 'max' 
+
+    purchase_df = purchase_full_traces.groupby(real_case_col).agg(agg_rules).reset_index()
+
+    # Revenue Sanity Check
+    total_rev = 0
+    if real_rev_col:
+        total_rev = purchase_df[real_rev_col].sum()
+        if total_rev == 0:
+            print(f"   -> WARNING: Total revenue is 0.0 (check '{real_rev_col}' values).")
+
+    if not real_rev_col:
+        purchase_df['dummy_count'] = 1
+
+    print(f"   -> Analysis proceeding with {len(purchase_df)} unique transactions.")
+    
+    # --- 4. ANALYSIS (User Level) ---
+    user_counts = purchase_df.groupby(real_user_col).size().reset_index(name='purchase_count')
+    repeat_buyers = user_counts[user_counts['purchase_count'] > 1]
+    
+    if len(user_counts) > 0:
+        repeat_rate = (len(repeat_buyers) / len(user_counts)) * 100
+    else:
+        repeat_rate = 0
+    
+    # --- PLOT 1: Distribution ---
+    chart_dist = os.path.join(output_folder, "repeat_purchases_dist.png")
+    try:
+        plt.figure(figsize=(8, 5))
+        viz_data = user_counts.copy()
+        viz_data['bucket'] = viz_data['purchase_count'].apply(lambda x: str(x) if x < 5 else "5+")
+        sns.countplot(data=viz_data, x='bucket', order=['1', '2', '3', '4', '5+'], palette="viridis", hue='bucket', legend=False)
+        plt.title(f"Orders per Customer (Repeat Rate: {repeat_rate:.1f}%)")
+        plt.ylabel("Customer Count")
+        plt.xlabel('Amount of Transactions')
+        plt.tight_layout()
+        plt.savefig(chart_dist)
+        plt.close()
+    except:
+        chart_dist = None
+
+    # --- PLOT 2: Time Between Purchases ---
+    avg_days = 0
+    med_days = 0
+    chart_time = None
+    
+    purchase_df = purchase_df.sort_values([real_user_col, real_time_col])
+    purchase_df['prev_time'] = purchase_df.groupby(real_user_col)[real_time_col].shift(1)
+    purchase_df['days_diff'] = (purchase_df[real_time_col] - purchase_df['prev_time']).dt.total_seconds() / (3600 * 24)
+    
+    repeat_data = purchase_df.dropna(subset=['days_diff']).copy()
+    
+    if not repeat_data.empty:
+        avg_days = repeat_data['days_diff'].mean()
+        med_days = repeat_data['days_diff'].median()
+        
+        repeat_data = repeat_data.merge(user_counts[[real_user_col, 'purchase_count']], on=real_user_col, how='left')
+        repeat_data['transactions'] = repeat_data['purchase_count'].apply(lambda x: str(x) if x < 5 else "5+")
+
+        if len(repeat_data) > 5:
+            chart_time = os.path.join(output_folder, "time_between_purchases.png")
+            try:
+                plt.figure(figsize=(8, 5))
+                max_d = repeat_data['days_diff'].max()
+                if pd.isna(max_d): max_d = 0
+                
+                bin_w = None if max_d <= 1 else (1 if max_d < 60 else 7)
+                use_kde = False if repeat_data['days_diff'].std() == 0 else True
+
+                ax = sns.histplot(
+                    data=repeat_data, 
+                    x='days_diff', 
+                    hue='transactions',
+                    hue_order=['2', '3', '4', '5+'], 
+                    kde=use_kde, 
+                    binwidth=bin_w,
+                    palette="viridis",
+                    multiple="stack"
+                )
+                plt.axvline(med_days, color='r', linestyle='--')
+
+                y_pos = ax.get_ylim()[1] * 0.95
+                x_pos = med_days + (max_d * 0.02) # Slight offset to the right
+                plt.text(x_pos, y_pos, f'Median: {med_days:.1f} days', color='r', fontweight='bold')
+
+                plt.title("Time between purchases")
+                plt.xlabel("Days")
+                
+                # Safe x-axis range (prevent xlim(0,0) crash)
+                if max_d > 0: 
+                    plt.xlim(0, max_d * 1.05)
+                else:
+                    plt.xlim(0, 1) # Fallback width if max_days is 0
+                
+                plt.tight_layout()
+                plt.savefig(chart_time)
+                plt.close()
+            except:
+                chart_time = None
+
+    # --- PLOT 3: Revenue Impact ---
+    rev_stats = {}
+    chart_rev = None
+    
+    if real_rev_col:
+        purchase_df = purchase_df.merge(user_counts[[real_user_col, 'purchase_count']], on=real_user_col, how='left')
+        purchase_df['type'] = purchase_df['purchase_count'].apply(lambda x: 'Repeat Buyer' if x > 1 else 'One-time Buyer')
+        
+        clv_df = purchase_df.groupby([real_user_col, 'type'])[real_rev_col].sum().reset_index()
+        
+        avg_rep = clv_df[clv_df['type'] == 'Repeat Buyer'][real_rev_col].mean()
+        avg_once = clv_df[clv_df['type'] == 'One-time Buyer'][real_rev_col].mean()
+        
+        avg_rep = 0 if pd.isna(avg_rep) else avg_rep
+        avg_once = 0 if pd.isna(avg_once) else avg_once
+        
+        mult = avg_rep / avg_once if avg_once > 0 else 0
+        
+        rev_stats = {
+            "avg_value_one_time": avg_once,
+            "avg_value_repeat": avg_rep,
+            "multiplier": mult
+        }
+        
+        if avg_rep > 0 or avg_once > 0:
+            chart_rev = os.path.join(output_folder, "value_comparison.png")
+            try:
+                plt.figure(figsize=(6, 5))
+                
+                # --- Create explicit DataFrame for visualization ---
+                viz_rev_df = pd.DataFrame({
+                    'Customer Type': ['One-time', 'Repeater'],
+                    'Value': [avg_once, avg_rep]
+                })
+                
+                # Use explicite data= and allocate ax
+                ax = sns.barplot(
+                    data=viz_rev_df, 
+                    x='Customer Type', 
+                    y='Value', 
+                    hue='Customer Type', # Fix for FutureWarning in new Seaborn
+                    legend=False,
+                    palette="rocket"
+                )
+                
+                ax.set_title(f"Average Lifetime Value (Factor {mult:.1f}x)")
+                ax.set_ylabel(f"Revenue ({real_rev_col})")
+                
+                plt.tight_layout()
+                plt.savefig(chart_rev)
+                plt.close()
+            except Exception as e:
+                print(f"   -> Error with chart 3 (Revenue): {e}")
+                chart_rev = None
+
+    return {
+        "metrics": {
+            "total_buyers": len(user_counts),
+            "repeat_rate": repeat_rate,
+            "avg_days_between": avg_days,
+            "median_days_between": med_days,
+            "revenue_stats": rev_stats
+        },
+        "charts": {
+            "distribution": chart_dist,
+            "timing": chart_time,
+            "revenue": chart_rev
+        }
+    }
+
+def print_business_report(results):
+    """
+    Print a human-readable summary of the repeat purchase analysis.
+
+    Parses the metrics dictionary to output insights regarding customer loyalty, 
+    return timing, and lifetime value multipliers, including status indicators 
+    based on performance thresholds.
+
+    Parameters
+    ----------
+    results : dict
+        The result dictionary returned by the `analyze_repeat_purchases` function.
+        Expected to contain 'metrics' and 'charts' keys.
+
+    Returns
+    -------
+    None
+    """
+    if not results:
+        print("No business insights available to report.")
+        return
+
+    m = results.get('metrics', {})
+    
+    print("\n" + "="*40)
+    print("REPEAT PURCHASE INSIGHTS")
+    print("="*40)
+    
+    # 1. Loyalty
+    rate = m.get('repeat_rate', 0)
+    buyers = m.get('total_buyers', 0)
+    print(f"LOYALTY: {rate:.2f}% of {buyers} buyers bought more than once.")
+    
+    if rate > 40:
+        print("   -> STATUS: Excellent. High retention.")
+    elif rate < 10:
+        print("   -> STATUS: Low. Focus on post-purchase engagement.")
+    else:
+        print("   -> STATUS: Moderate.")
+        
+    # 2. Timing
+    med_days = m.get('median_days_between', 0)
+    avg_days = m.get('avg_days_between', 0)
+    
+    if med_days > 0 or avg_days > 0:
+        print(f"\nTIMING: Customers return after approx. {med_days:.1f} days (median).")
+        if med_days < 1 and avg_days < 1:
+            print("   -> NOTE: Purchases happen very close together (likely same session).")
+    else:
+        print("\nTIMING: No return timing data (0 days).")
+        
+    # 3. Value
+    rev = m.get('revenue_stats', {})
+    if rev:
+        mult = rev.get('multiplier', 0)
+        rep_val = rev.get('avg_value_repeat', 0)
+        if rep_val > 0:
+            print(f"\nVALUE: Repeaters are {mult:.1f}x more valuable than one-timers.")
+        else:
+            print(f"\nVALUE: Revenue data found but values appear to be 0 (Multiplier: {mult:.1f}x).")
+    else:
+        print("\nVALUE: No revenue data detected.")
+        
+    # 4. Charts
+    print("\nCHARTS GENERATED:")
+    for name, path in results.get('charts', {}).items():
+        if path: print(f"   - {name}: {path}")
+    print("="*40 + "\n")
