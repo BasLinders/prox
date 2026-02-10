@@ -621,13 +621,12 @@ def filter_event_log(
                             hit_source = f"column attribute '{target}' > 0"
                             used_target = target
                             
-                            # --- CRITICAL FIX: Materialize the attribute as an Activity ---
                             # If we found 'purchase' via a column, we RENAME the activity 
                             # on these rows to 'purchase' so it shows up in the Process Map.
                             filtered_df.loc[target_hits.index, 'concept:name'] = target
                             messages.append(f"Injecting activity '{target}' for rows where column '{target}' > 0.")
                             
-                            break # Stop looking
+                            break
                     except:
                         pass
 
