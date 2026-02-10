@@ -105,13 +105,13 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]):
             # We pass f_type as the positional arg, and the rest as kwargs
             log_df_for_analysis, messages = filter_event_log(log_df_for_analysis, filter_type=f_type, **params)
 
-        if messages:
-            for msg in messages: print(f"   -> {msg}")
-
-        # Stop if filter creates empty log
-        if log_df_for_analysis is None or log_df_for_analysis.empty:
-            print("Critical: Filter resulted in an empty dataset. Analysis stopped.")
-            return None
+            if messages:
+                for msg in messages: print(f"   -> {msg}")
+    
+            # Stop if filter creates empty log
+            if log_df_for_analysis is None or log_df_for_analysis.empty:
+                print("Critical: Filter resulted in an empty dataset. Analysis stopped.")
+                return None
         else:
             print(f"Warning: Filter step {i+1} missing 'type'. Skipped.")
     else:
@@ -305,11 +305,11 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]):
     # Export variants to CSV if available
     if variants:
         top_variants_dict = variants.get('top_variants', {})
-        if top_variants_dict:
-            variants_df = pd.DataFrame.from_dict(top_variants_dict, orient='index')
-            # Ensure index is named 'Variant'
-            variants_df.index.name = 'Variant_Path'
-            export_results(variants_df, "process_variant_analysis", "csv")
+    if top_variants_dict:
+        variants_df = pd.DataFrame.from_dict(top_variants_dict, orient='index')
+        # Ensure index is named 'Variant'
+        variants_df.index.name = 'Variant_Path'
+        export_results(variants_df, "process_variant_analysis", "csv")
 
     conformance_data = pipeline_results.get('conformance', {})
     case_analysis = conformance_data.get('case_analysis', {})
@@ -343,11 +343,14 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]):
             target_user_col = col
             break
 
+    biz_conf = CONFIG.get('business_params', {}) # Get params from CONFIG
+    
     repeat_stats = analyze_repeat_purchases(
         log_df_for_analysis,
         output_folder="output",
-        user_col=target_user_col,
-        purchase_values=['purchase']
+        user_col=biz_conf.get("user_col", ["user_id", "session_unique_id", "session_id"]),
+        purchase_values=biz_conf.get("purchase_values", ['purchase', 'order']),
+        revenue_col=biz_conf.get("revenue_col", "event_value")
     )
 
     if repeat_stats:
