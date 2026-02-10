@@ -615,10 +615,18 @@ def filter_event_log(
                         # Coerce to numeric (handles boolean and numbers)
                         vals = pd.to_numeric(filtered_df[target], errors='coerce').fillna(0)
                         temp_hits = filtered_df[vals > 0]
+                        
                         if not temp_hits.empty:
                             target_hits = temp_hits
                             hit_source = f"column attribute '{target}' > 0"
                             used_target = target
+                            
+                            # --- CRITICAL FIX: Materialize the attribute as an Activity ---
+                            # If we found 'purchase' via a column, we RENAME the activity 
+                            # on these rows to 'purchase' so it shows up in the Process Map.
+                            filtered_df.loc[target_hits.index, 'concept:name'] = target
+                            messages.append(f"Injecting activity '{target}' for rows where column '{target}' > 0.")
+                            
                             break # Stop looking
                     except:
                         pass
@@ -630,7 +638,10 @@ def filter_event_log(
 
             # 2. Find cutoff timestamps
             # Group by case and take the minimum timestamp (first time it happened)
-            cutoff_times = target_hits.groupby('case:concept:name')['time:timestamp'].min().reset_index()
+            # Note: We must re-filter target_hits from filtered_df in case we modified filtered_df in Check B
+            final_target_hits = filtered_df[filtered_df['concept:name'] == used_target]
+            
+            cutoff_times = final_target_hits.groupby('case:concept:name')['time:timestamp'].min().reset_index()
             cutoff_times.rename(columns={'time:timestamp': 'cutoff_time'}, inplace=True)
 
             # 3. Join and Filter
@@ -641,6 +652,17 @@ def filter_event_log(
             filtered_df = merged[merged['time:timestamp'] <= merged['cutoff_time']].drop(columns=['cutoff_time'])
             
             messages.append(f"Cropped traces based on {hit_source}. Cases without it were dropped.")
+
+            # 5. Optional: Filter Top N Variants of the result (Golden Paths)
+            top_n = kwargs.get('top_n')
+            if top_n:
+                variants = filtered_df.groupby('case:concept:name')['concept:name'].apply(lambda x: ' -> '.join(x))
+                top_variant_sequences = variants.value_counts().nlargest(top_n).index
+                
+                cases_to_keep = variants[variants.isin(top_variant_sequences)].index
+                filtered_df = filtered_df[filtered_df['case:concept:name'].isin(cases_to_keep)]
+                
+                messages.append(f"Refined cropped log to keep the top {top_n} most frequent 'Golden Paths'.")
 
         elif filter_type == 'endpoints':
             # --- Filter cases based on start or end activities (Standard filtering) ---
