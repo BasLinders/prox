@@ -550,7 +550,7 @@ def filter_event_log(
             messages.append(f"Filtered cases by duration (min: {min_d}, max: {max_d} {time_unit}).")
 
         elif filter_type == 'activity':
-            # --- Filter cases based on the activities they contain ---
+            # --- Filter based on activities ---
             activities = kwargs.get('activities', [])
             mode = kwargs.get('mode', 'contains')
 
@@ -558,17 +558,108 @@ def filter_event_log(
                 messages.append("Error: 'activities' must be a non-empty list.")
                 return None, messages
 
-            cases_with_activities = filtered_df[filtered_df['concept:name'].isin(activities)]['case:concept:name'].unique()
-
             if mode == 'contains':
+                # Case Level: Keep cases having X
+                cases_with_activities = filtered_df[filtered_df['concept:name'].isin(activities)]['case:concept:name'].unique()
                 filtered_df = filtered_df[filtered_df['case:concept:name'].isin(cases_with_activities)]
                 messages.append(f"Kept cases containing activities: {activities}.")
+            
             elif mode == 'not_contains':
+                # Case Level: Remove cases having X
+                cases_with_activities = filtered_df[filtered_df['concept:name'].isin(activities)]['case:concept:name'].unique()
                 filtered_df = filtered_df[~filtered_df['case:concept:name'].isin(cases_with_activities)]
                 messages.append(f"Removed cases containing activities: {activities}.")
+            
+            elif mode == 'remove_events':
+                # Event Level: Remove specific rows (Surgical cleaning)
+                filtered_df = filtered_df[~filtered_df['concept:name'].isin(activities)]
+                messages.append(f"Removed specific events (rows) matching: {activities}.")
+                
+            elif mode == 'keep_events':
+                # Event Level: Keep only specific rows
+                filtered_df = filtered_df[filtered_df['concept:name'].isin(activities)]
+                messages.append(f"Kept only specific events (rows) matching: {activities}.")
+                
             else:
                 messages.append(f"Error: Invalid mode '{mode}' for activity filter.")
                 return None, messages
+
+        elif filter_type == 'crop':
+            # --- Trim traces: Stop exactly at the target activity OR attribute ---
+            target_input = kwargs.get('activity')
+            
+            if not target_input:
+                messages.append("Error: 'activity' must be specified for crop filter.")
+                return None, messages
+
+            # Support single string or list of targets
+            targets = [target_input] if isinstance(target_input, str) else target_input
+
+            target_hits = pd.DataFrame()
+            hit_source = "unknown"
+            used_target = ""
+
+            # Iterate through targets to find one that works
+            for target in targets:
+                # Check A: Is it an Activity Name?
+                if target in filtered_df['concept:name'].values:
+                    target_hits = filtered_df[filtered_df['concept:name'] == target]
+                    hit_source = f"activity name '{target}'"
+                    used_target = target
+                    break # Stop looking, we found a target
+                
+                # Check B: Is it a Column/Attribute? (Fallback)
+                elif target in filtered_df.columns:
+                    # Treat as a flag: Keep rows where value > 0 or True
+                    try:
+                        # Coerce to numeric (handles boolean and numbers)
+                        vals = pd.to_numeric(filtered_df[target], errors='coerce').fillna(0)
+                        temp_hits = filtered_df[vals > 0]
+                        if not temp_hits.empty:
+                            target_hits = temp_hits
+                            hit_source = f"column attribute '{target}' > 0"
+                            used_target = target
+                            break # Stop looking
+                    except:
+                        pass
+
+            if target_hits.empty:
+                messages.append(f"Warning: None of the targets {targets} found as Activity OR active Column Attribute. Skipping crop filter.")
+                # Soft fail: return original df so pipeline continues
+                return filtered_df, messages
+
+            # 2. Find cutoff timestamps
+            # Group by case and take the minimum timestamp (first time it happened)
+            cutoff_times = target_hits.groupby('case:concept:name')['time:timestamp'].min().reset_index()
+            cutoff_times.rename(columns={'time:timestamp': 'cutoff_time'}, inplace=True)
+
+            # 3. Join and Filter
+            # 'inner' join automatically removes cases that NEVER had the target activity
+            merged = filtered_df.merge(cutoff_times, on='case:concept:name', how='inner')
+
+            # 4. Keep only events that happened on or before the cutoff time
+            filtered_df = merged[merged['time:timestamp'] <= merged['cutoff_time']].drop(columns=['cutoff_time'])
+            
+            messages.append(f"Cropped traces based on {hit_source}. Cases without it were dropped.")
+
+        elif filter_type == 'endpoints':
+            # --- Filter cases based on start or end activities (Standard filtering) ---
+            start_acts = kwargs.get('start_activities', [])
+            end_acts = kwargs.get('end_activities', [])
+
+            if start_acts:
+                # Sort by time, group by case, take first item
+                starts = filtered_df.sort_values('time:timestamp').groupby('case:concept:name').first()['concept:name']
+                cases_to_keep = starts[starts.isin(start_acts)].index
+                filtered_df = filtered_df[filtered_df['case:concept:name'].isin(cases_to_keep)]
+                messages.append(f"Kept cases starting with: {start_acts}")
+
+            if end_acts:
+                # Sort by time, group by case, take last item
+                ends = filtered_df.sort_values('time:timestamp').groupby('case:concept:name').last()['concept:name']
+                cases_to_keep = ends[ends.isin(end_acts)].index
+                filtered_df = filtered_df[filtered_df['case:concept:name'].isin(cases_to_keep)]
+                messages.append(f"Kept cases ending with: {end_acts}")
 
         elif filter_type == 'attribute':
             # --- Filter events directly by an attribute's value ---
