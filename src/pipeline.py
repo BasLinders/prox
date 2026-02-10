@@ -93,27 +93,27 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]):
     if filter_steps:
         print(f"\n--- Applying filters ({len(filter_steps)} step(s)) ---")
 
-    for i, step_config in enumerate(filter_steps):
-        # Make a copy to avoid modifying the original config
-        params = step_config.copy()
-
-        # Extract 'type' because filter_event_log expects 'filter_type' as a specific arg
-        f_type = params.pop('type', None)
-
-        if f_type:
-            print(f"Step {i+1}: Filter type '{f_type}'...")
-            # We pass f_type as the positional arg, and the rest as kwargs
-            log_df_for_analysis, messages = filter_event_log(log_df_for_analysis, filter_type=f_type, **params)
-
-            if messages:
-                for msg in messages: print(f"   -> {msg}")
+        for i, step_config in enumerate(filter_steps):
+            # Make a copy to avoid modifying the original config
+            params = step_config.copy()
     
-            # Stop if filter creates empty log
-            if log_df_for_analysis is None or log_df_for_analysis.empty:
-                print("Critical: Filter resulted in an empty dataset. Analysis stopped.")
-                return None
-        else:
-            print(f"Warning: Filter step {i+1} missing 'type'. Skipped.")
+            # Extract 'type' because filter_event_log expects 'filter_type' as a specific arg
+            f_type = params.pop('type', None)
+    
+            if f_type:
+                print(f"Step {i+1}: Filter type '{f_type}'...")
+                # We pass f_type as the positional arg, and the rest as kwargs
+                log_df_for_analysis, messages = filter_event_log(log_df_for_analysis, filter_type=f_type, **params)
+    
+                if messages:
+                    for msg in messages: print(f"   -> {msg}")
+        
+                # Stop if filter creates empty log
+                if log_df_for_analysis is None or log_df_for_analysis.empty:
+                    print("Critical: Filter resulted in an empty dataset. Analysis stopped.")
+                    return None
+            else:
+                print(f"Warning: Filter step {i+1} missing 'type'. Skipped.")
     else:
         print("\n--- No filters applied, full dataset is being used ---")
 
