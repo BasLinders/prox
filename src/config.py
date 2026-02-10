@@ -118,9 +118,8 @@ def get_column_mappings():
     }
 
 # --- 2. BASE CONFIGURATION (Balanced) ---
-# This is the default setup: Good balance between speed and detail.
 CONFIG = {
-    "app_name": "Process Miner Pro",
+    "app_name": "Process Miner",
 
     "active_case_id": "session_unique_id",
     
@@ -133,15 +132,15 @@ CONFIG = {
 
     # Parameters for capping the event log after sampling to increase computing speed
     "speed_params": {
-        "max_align": 15, # Choose a number lower than the sample below to increase performance, or set it as equal
+        "max_align": 250, # Choose a number lower than the sample below to increase performance, or set it as equal
         "cores": 1, # set to 0 for max core utilization
-        "max_prec_traces": 15 # Choose a number lower than the sample to increase performance, or set it as equal
+        "max_prec_traces": 250 # Choose a number lower than the sample to increase performance, or set it as equal
     },
 
     # 1. Discovery (The Visual Model)
     "discovery_params": {
         "algorithm": "inductive_miner", # inductive_minder, heuristics_miner, alpha_miner
-        "noise_threshold": 0.6,       # 0.4 removes 40% of rarest edges (cleaner map)
+        "noise_threshold": 0.2,       # 0.4 removes 40% of rarest edges (cleaner map)
         "dependency_threshold": 0.9   # Used only for Heuristics Miner
     },
 
@@ -150,7 +149,7 @@ CONFIG = {
         # 'state_equation_a_star' gives trace deviations.
         # 'token_replay' is faster but gives fewer details.
         # 'dijkstra' is very slow and with a lot of potentially useless noise.
-        "algorithm": "token_replay", # dijkstra, token_replay
+        "algorithm": "token_replay",
         
         # Calculate alignments per variant instead of per case.
         # True = Calculate once per unique path (Factor 10-100x faster for repetitive logs)
@@ -159,18 +158,18 @@ CONFIG = {
 
         # Calculate Precision? (Slowest part of the pipeline)
         "calculate_precision": True,
-        "calculate_fitness": True # Preliminary fitness; irrelevant and expensive, EXCEPT for TBR (required).
+        "calculate_fitness": False # Preliminary fitness; irrelevant and expensive, EXCEPT for TBR (required).
     },
 
     # 3. Sampling (Speed Optimization)
     "sampling_config": {
         "enabled": True,
-        "total_sample_size": 15,
+        "total_sample_size": 250,
         "max_priority_ratio": 0.5, # Max 50% priority cases (e.g. purchases)
 
         # Auto-detect priority column (Purchase > Transaction > Error)
         # Set to explicit string (e.g., "purchase") to force it.
-        "strata_col": 'has_purchase'
+        "strata_col": 'purchase'
     },
 
     # 4. Performance (Bottlenecks)
@@ -185,20 +184,37 @@ CONFIG = {
     "filter_steps": [
         {
             "type": "activity",
-            "activities": ["experience_impression"],
-            "mode": "not_contains" # Filters out CASES
+            "activities": [
+                "experience_impression", 
+                "view_cookie_bar", 
+                "javascript_error", 
+                "scroll", 
+                "view_item_list_empty",
+                "user_engagement", 
+                "page_timestamp",
+                "session_start",
+                "first_visit"
+            ],
+            "mode": "remove_events" # Filters out EVENTS
+        },
+        {
+            "type": "crop",
+            "activity": ["purchase", "event_value", "has_purchase"],
+            "top_n": 10
         }
-        #{
-        #    "type": "activity",
-        #    "activities": ["add_to_cart"],
-        #    "mode": "contains" # includes EVENTS
-        #}
     ],
 
     # Visualization params
     "visualisation_params": {
         "bottleneck_top_k": 50,
         "max_bottleneck_edges": 2
+    },
+
+    # Business insights
+    "business_params": {
+        "user_col": "user_id",       # Or 'email', 'user'
+        "revenue_col": "event_value",   # Or 'price', 'purchase_revenue'
+        "purchase_values": ["purchase", "has_purchase"]
     }
 }
 
