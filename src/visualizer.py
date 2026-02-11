@@ -121,11 +121,11 @@ def visualize_focused_insights(event_log, output_folder="output", bottleneck_top
         print(f"    -> Error preparing Happy Path data: {e}")
 
     # ---------------------------------------------------------
-    # 2. Main Process Flow (Top K Variants)
+    # 2. Main Process Flow (Top K Bottlenecks)
     # ---------------------------------------------------------
     process_output = None
     try:
-        print(f"   -> Filtering log for Main Process Flow (Top {bottleneck_top_k} variants)...")
+        print(f"   -> Filtering log for Main Process Flow (Top {bottleneck_top_k} bottlenecks)...")
         # Filter top K variants
         filtered_log = pm4py.filter_variants_top_k(event_log, bottleneck_top_k)
         
