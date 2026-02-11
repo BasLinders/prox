@@ -16,10 +16,10 @@ from src.data_manager import (
 )
 from src.analytics import analyze_repeat_purchases, print_business_report
 
+# --- EXECUTION BLOCK ---
 if __name__ == '__main__':
-    uploaded_file = 'C:/Users/Bas Linders/Documents/pm_dummy_data.csv'
-    df_clean, errors_or_notes, _ = load_and_validate_csv(uploaded_file)
-    df_clean = df_clean[df_clean.groupby('case:concept:name')['case:concept:name'].transform('count') < 30]
+    import matplotlib.pyplot as plt
+    from IPython.display import display, Image
 
     # 1. Load Data Check
     if 'df_clean' not in locals():
@@ -57,6 +57,14 @@ if __name__ == '__main__':
         # 6. Select Config
         current_config = CONFIG
 
+        replacements = {
+            'page_view_CART': 'view_cart',
+            'page_view_PRODUCT': 'view_item',
+            'page_view_CATEGORY': 'view_item_list',
+            'click_add_to_cart': 'add_to_cart'
+        }
+        df_ready['concept:name'] = df_ready['concept:name'].replace(replacements)
+
         # 7. Run Analysis
         print(f"Starting analysis on {len(df_ready)} events...")
         pipeline_results = run_full_analysis(df_ready, config=current_config)
@@ -69,9 +77,6 @@ if __name__ == '__main__':
             print("ANALYSIS DASHBOARD")
             print("="*80)
 
-            # Show trace length
-            check_trace_length(df_ready)
-
             # --- A. VISUALIZATION (Process Map) ---
             print("\n--- 1. Process Map (Petri Net) ---")
             model_data = pipeline_results.get('model')
@@ -79,7 +84,12 @@ if __name__ == '__main__':
                 net, im, fm = model_data['net'], model_data['im'], model_data['fm']
 
                 # Save to file and display
-                output_file = "process_model.png"
+                output_folder = "output"
+                if not os.path.exists(output_folder):
+                    os.makedirs(output_folder)
+                    
+                output_file = os.path.join(output_folder, "process_model.png")
+                
                 pm4py.save_vis_petri_net(net, im, fm, output_file)
                 display(Image(filename=output_file))
                 print(f"Map saved to: {output_file}")
@@ -134,15 +144,12 @@ if __name__ == '__main__':
             else:
                 print("All sampled cases follow the model perfectly.")
 
-        else:
-            print("Analysis failed to return results.")
-
         # --- Business Insights ---
         results = analyze_repeat_purchases(
             df_clean,
             output_folder="output",
             user_col="user_id", 
-            revenue_col="price"
+            revenue_col="event_value"
         )
         
         print_business_report(results)
