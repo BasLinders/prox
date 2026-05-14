@@ -1,166 +1,322 @@
-# === IMPORT PYTHON MODULES ===
-import pandas as pd
-import matplotlib.pyplot as plt
-from IPython.display import display, Image
+import logging
+import os
 
-# === IMPORT CUSTOM MODULES ===
-from src.config import CONFIG
-from src.conformance import run_conformance_checking
-from src.pipeline import run_full_analysis
-from src.visualizer import export_results
-from src.data_manager import (
+import pandas as pd
+import streamlit as st
+
+from prox import (
     load_and_validate_csv,
     refine_activity_labels,
-    check_trace_length,
-    optimize_dataframe_memory
+    optimize_dataframe_memory,
+    create_analysis_config,
+    run_full_analysis,
+    format_business_report,
 )
-from src.analytics import analyze_repeat_purchases, print_business_report
 
-# --- EXECUTION BLOCK ---
-if __name__ == '__main__':
-    import matplotlib.pyplot as plt
-    from IPython.display import display, Image
+logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 
-    # 1. Load Data Check
-    if 'df_clean' not in locals():
-        print("Please load 'df_clean' first using load_and_validate_csv()")
-    else:
-        # Create working copy
-        df_ready = df_clean.copy()
+st.set_page_config(
+    page_title="PRoX — Process Excavator",
+    page_icon="⚙️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-        # 2. PRE-PROCESSING: UNLOCK COLUMNS
-        # Critical Fix: Convert categories back to objects so we can edit text/rename columns
-        for col in df_ready.select_dtypes(include=['category']).columns:
-            df_ready[col] = df_ready[col].astype('object')
+# ---------------------------------------------------------------------------
+# Sidebar — configuration
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.title("PRoX ⚙️")
+    st.caption("Process Excavator")
+    st.divider()
 
-        # 3. Activity Refinement
-        if 'page_type' in df_ready.columns:
-            print("Context Found: Refining 'page_view' using 'page_type'...")
-            df_ready = refine_activity_labels(df_ready, target_activity='page_view', context_column='page_type')
+    st.header("Data")
+    uploaded_file = st.file_uploader("Upload Event Log (CSV)", type=["csv"])
 
-        # 4. Determine & Apply Case ID
-        # (Must happen after df_ready exists but before optimization)
-        target_case_id = CONFIG.get("active_case_id", "auto")
-        
-        if target_case_id != "auto":
-            if target_case_id in df_ready.columns:
-                print(f"Switching Case ID to: {target_case_id}")
-                df_ready.rename(columns={target_case_id: 'case:concept:name'}, inplace=True)
-            else:
-                print(f"Warning: Configured ID '{target_case_id}' not found. Using default mapping.")
-
-        # 5. Optimize Memory (Re-lock for speed)
-        print('\n--- Optimizing Memory ---')
-        if 'optimize_dataframe_memory' in locals():
-            optimize_dataframe_memory(df_ready)
-
-        # 6. Select Config
-        current_config = CONFIG
-
-        replacements = {
-            'page_view_CART': 'view_cart',
-            'page_view_PRODUCT': 'view_item',
-            'page_view_CATEGORY': 'view_item_list',
-            'click_add_to_cart': 'add_to_cart'
-        }
-        df_ready['concept:name'] = df_ready['concept:name'].replace(replacements)
-
-        # 7. Run Analysis
-        print(f"Starting analysis on {len(df_ready)} events...")
-        pipeline_results = run_full_analysis(df_ready, config=current_config)
-
-        # =========================================================
-        # 8. POST-ANALYSIS DASHBOARD
-        # =========================================================
-        if pipeline_results:
-            print("\n" + "="*80)
-            print("ANALYSIS DASHBOARD")
-            print("="*80)
-
-            # --- A. VISUALIZATION (Process Map) ---
-            print("\n--- 1. Process Map (Petri Net) ---")
-            model_data = pipeline_results.get('model')
-            if model_data:
-                net, im, fm = model_data['net'], model_data['im'], model_data['fm']
-
-                # Save to file and display
-                output_folder = "output"
-                if not os.path.exists(output_folder):
-                    os.makedirs(output_folder)
-                    
-                output_file = os.path.join(output_folder, "process_model.png")
-                
-                pm4py.save_vis_petri_net(net, im, fm, output_file)
-                display(Image(filename=output_file))
-                print(f"Map saved to: {output_file}")
-            else:
-                print("No model generated.")
-
-            # --- B. TOP VARIANTS (Happy Paths) ---
-            print("\n--- 2. Top 10 Process Variants (The 'Happy Paths') ---")
-            variants = pipeline_results.get('performance', {}).get('variant_performance', {}).get('top_variants', {})
-            if variants:
-                # Convert dictionary to clean DataFrame for display
-                var_df = pd.DataFrame.from_dict(variants, orient='index')
-                var_df = var_df[['frequency', 'percentage', 'num_activities']]
-                display(var_df.head(10))
-            else:
-                print("No variant data available.")
-
-            # --- C. BOTTLENECKS (Where is it slow?) ---
-            print("\n--- 3. Top Bottlenecks (Slowest Activities) ---")
-            bottlenecks = pipeline_results.get('performance', {}).get('bottlenecks', {}).get('activity_bottlenecks', {})
-            if bottlenecks:
-                # Create readable DataFrame
-                bot_df = pd.DataFrame.from_dict(bottlenecks, orient='index')
-                bot_df = bot_df[['mean_duration', 'frequency', 'severity']].sort_values('mean_duration', ascending=False)
-                display(bot_df.head(10))
-            else:
-                print("No significant bottlenecks found.")
-
-            # --- D. DEVIATIONS (Why is fitness low?) ---
-            print("\n--- 4. Deviation Analysis (Conformance) ---")
-            # Handle nested key safely
-            fitness_data = pipeline_results.get('fitness', {})
-            # Depending on function version, it might be nested or direct
-            fitness = fitness_data.get('log_fitness', 0) if isinstance(fitness_data, dict) else 0
-            
-            print(f"Overall Fitness: {fitness:.2%}")
-
-            cases = pipeline_results.get('conformance', {}).get('case_analysis', {}).get('cases', [])
-            imperfect_cases = [c for c in cases if c['fitness'] < 1.0]
-            if len(cases) == 0:
-                print("No case details available.")
-                if fitness == 0:
-                    print("Verify Configuration: 'enable_fitness' and/or 'alignments' may have been set to 'False'.")
-            elif imperfect_cases:
-                print(f"Found {len(imperfect_cases)} deviant cases in the sample.")
-                worst_case = min(imperfect_cases, key=lambda x: x['fitness'])
-                print(f"\nWorst Case Example (ID: {worst_case['case_id']}):")
-                print(f" - Fitness: {worst_case['fitness']:.2%}")
-                # Use .get() with default string to avoid crashing if keys are missing (common in TBR)
-                print(f" - Skipped: {worst_case.get('deviations', {}).get('skipped', 'N/A with Token Replay')}")
-                print(f" - Unsolicited: {worst_case.get('deviations', {}).get('unsolicited', 'N/A with Token Replay')}")
-            else:
-                print("All sampled cases follow the model perfectly.")
-
-        # --- Business Insights ---
-        results = analyze_repeat_purchases(
-            df_clean,
-            output_folder="output",
-            user_col="user_id", 
-            revenue_col="event_value"
+    st.divider()
+    st.header("Discovery")
+    discovery_algo = st.selectbox(
+        "Algorithm",
+        ["inductive_miner", "heuristics_miner"],
+        help=(
+            "**Inductive Miner** — guaranteed sound model, best for most datasets.\n\n"
+            "**Heuristics Miner** — better for noisy or very large logs."
         )
-        
-        print_business_report(results)
-        
-        from IPython.display import Image, display # Jupyter only, change for streamlit local UI
-        
-        if results and results.get('charts'):
-            for chart_name, chart_path in results['charts'].items():
-                if chart_path:
-                    print(f"\n--- {chart_name.title()} ---")
-                    display(Image(filename=chart_path))
+    )
+    noise_threshold = st.slider(
+        "Noise Threshold", 0.0, 0.8, 0.2, 0.05,
+        help="Higher values produce a simpler model by filtering rare paths."
+    )
 
+    st.divider()
+    st.header("Conformance")
+    conformance_algo = st.selectbox(
+        "Method",
+        ["token_replay", "state_equation_a_star"],
+        help=(
+            "**Token Replay** — fast, gives fitness & precision.\n\n"
+            "**State Equation A\\*** — slower, gives exact per-trace deviations."
+        )
+    )
+    calculate_precision = st.checkbox("Calculate Precision", value=True)
+
+    st.divider()
+    st.header("Sampling")
+    sample_size = st.number_input(
+        "Sample Size (cases)", min_value=50, max_value=1000, value=250, step=50,
+        help="Cases used for conformance. Higher = more accurate but slower."
+    )
+
+    st.divider()
+    run_btn = st.button("Run Analysis", type="primary", use_container_width=True)
+    if st.button("Clear Results", use_container_width=True):
+        for key in ("results", "df", "load_messages"):
+            st.session_state.pop(key, None)
+        st.rerun()
+
+# ---------------------------------------------------------------------------
+# Main area
+# ---------------------------------------------------------------------------
+st.title("Process Excavator")
+st.caption("Upload a website event log to discover customer journeys and golden paths.")
+
+if not uploaded_file:
+    st.info("Upload a CSV event log in the sidebar to get started.")
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# Run analysis when button is pressed
+# ---------------------------------------------------------------------------
+if run_btn:
+    with st.spinner("Loading and validating data..."):
+        df, messages, has_category = load_and_validate_csv(uploaded_file)
+
+    st.session_state["load_messages"] = messages
+
+    if df is None:
+        st.error("Failed to load data. See messages below.")
+        for msg in messages:
+            if "Critical" in msg or "Error" in msg:
+                st.error(msg)
+            else:
+                st.warning(msg)
+        st.stop()
+
+    # Pre-processing: convert category columns back to object for label editing
+    df_ready = df.copy()
+    for col in df_ready.select_dtypes(include=["category"]).columns:
+        df_ready[col] = df_ready[col].astype("object")
+
+    if "page_type" in df_ready.columns:
+        df_ready = refine_activity_labels(df_ready, target_activity="page_view", context_column="page_type")
+
+    optimize_dataframe_memory(df_ready)
+
+    config = create_analysis_config(
+        discovery_algo=discovery_algo,
+        noise_threshold=noise_threshold,
+        conformance_algo=conformance_algo,
+        calculate_precision=calculate_precision,
+        sample_size=int(sample_size),
+    )
+
+    with st.spinner("Running process mining pipeline... This may take a minute."):
+        results = run_full_analysis(df_ready, config=config)
+
+    if results is None:
+        st.error("Analysis failed. Check the application logs for details.")
+        st.stop()
+
+    st.session_state["results"] = results
+    st.session_state["df"] = df
+
+# ---------------------------------------------------------------------------
+# Display results
+# ---------------------------------------------------------------------------
+results = st.session_state.get("results")
+if not results:
+    st.info("Configure the options in the sidebar and click **Run Analysis**.")
+    st.stop()
+
+# Load messages expander
+load_messages = st.session_state.get("load_messages", [])
+if load_messages:
+    with st.expander("Data loading messages", expanded=False):
+        for msg in load_messages:
+            st.text(msg)
+
+# Top-level metrics strip
+summary = results.get("log_summary", {})
+if summary:
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Cases", f"{summary.get('Number of Cases', 0):,}")
+    c2.metric("Events", f"{summary.get('Number of Events', 0):,}")
+    c3.metric("Activities", summary.get("Number of Unique Activities", 0))
+    c4.metric("Duration (days)", summary.get("Total Duration (Days)", 0))
+
+st.divider()
+
+tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_biz = st.tabs([
+    "Process Maps",
+    "Variants",
+    "Bottlenecks",
+    "Conformance",
+    "Business Insights",
+])
+
+# ---------------------------------------------------------------------------
+# Tab 1: Process Maps
+# ---------------------------------------------------------------------------
+with tab_map:
+    viz = results.get("visualizations", {})
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Happy Path")
+        st.caption("Most frequent variant — the intended customer journey.")
+        hp = viz.get("happy_path")
+        if hp and os.path.exists(hp):
+            st.image(hp, use_container_width=True)
         else:
-            print("Analysis failed to return results.")
+            st.info("Happy path image not available. Check that Graphviz is installed.")
+
+    with col2:
+        st.subheader("Main Process Flow")
+        st.caption("Top-K variants combined, showing common deviations.")
+        mf = viz.get("bottlenecks")
+        if mf and os.path.exists(mf):
+            st.image(mf, use_container_width=True)
+        else:
+            st.info("Main flow image not available.")
+
+# ---------------------------------------------------------------------------
+# Tab 2: Variants
+# ---------------------------------------------------------------------------
+with tab_variants:
+    vp = results.get("performance", {}).get("variant_performance", {})
+    if vp:
+        total_v = vp.get("total_variants", 0)
+        coverage = vp.get("variant_coverage", {})
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Variants", total_v)
+        c2.metric("Top 5 Coverage", f"{coverage.get('top_5_coverage', 0):.1f}%")
+        c3.metric("Top 10 Coverage", f"{coverage.get('top_10_coverage', 0):.1f}%")
+
+        top = vp.get("top_variants", {})
+        if top:
+            var_df = pd.DataFrame.from_dict(top, orient="index")
+            var_df.index.name = "Variant"
+            show_cols = [c for c in ["frequency", "percentage", "num_activities"] if c in var_df.columns]
+            st.dataframe(var_df[show_cols], use_container_width=True)
+    else:
+        st.info("No variant data available.")
+
+# ---------------------------------------------------------------------------
+# Tab 3: Bottlenecks
+# ---------------------------------------------------------------------------
+with tab_bottlenecks:
+    perf = results.get("performance", {})
+    stats = perf.get("summary_statistics", {})
+    case_stats = perf.get("case_performance", {}).get("duration_stats", {})
+    time_unit = case_stats.get("unit", "")
+
+    if stats:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Health Score", f"{stats.get('process_health_score', 0):.0f} / 100")
+        c2.metric(f"Avg Lead Time ({time_unit})", f"{case_stats.get('mean', 0):.1f}")
+        c3.metric(f"Median Lead Time ({time_unit})", f"{case_stats.get('median', 0):.1f}")
+        c4.metric("Unique Variants", perf.get("variant_performance", {}).get("total_variants", 0))
+
+    bns = perf.get("bottlenecks", {}).get("activity_bottlenecks", {})
+    if bns:
+        st.subheader("Activity Bottlenecks")
+        bn_df = pd.DataFrame.from_dict(bns, orient="index")
+        display_cols = [c for c in ["mean_duration", "frequency", "impact_score", "severity"] if c in bn_df.columns]
+        st.dataframe(
+            bn_df[display_cols].sort_values("impact_score", ascending=False),
+            use_container_width=True
+        )
+    else:
+        st.info("No significant activity bottlenecks found.")
+
+    recs = stats.get("recommendations", [])
+    if recs:
+        st.subheader("Recommendations")
+        for r in recs:
+            st.write(f"- {r}")
+
+# ---------------------------------------------------------------------------
+# Tab 4: Conformance
+# ---------------------------------------------------------------------------
+with tab_conf:
+    conf = results.get("conformance", {})
+    overall = conf.get("overall_summary", {})
+
+    if overall:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Fitness", f"{overall.get('fitness_score', 0):.1%}")
+        c2.metric("Precision", f"{overall.get('precision_score', 0):.1%}")
+        c3.metric("Quality", overall.get("quality_assessment", "N/A"))
+
+    cases = conf.get("case_analysis", {}).get("cases", [])
+    imperfect = sorted(
+        [c for c in cases if c.get("fitness", 1.0) < 1.0],
+        key=lambda x: x["fitness"]
+    )
+
+    if cases:
+        st.caption(f"{len(imperfect)} deviant case(s) out of {len(cases)} sampled.")
+        if imperfect:
+            dev_rows = [
+                {
+                    "Case ID": c["case_id"],
+                    "Fitness": f"{c['fitness']:.2%}",
+                    "Skipped": ", ".join(c.get("deviations", {}).get("skipped", [])) or "—",
+                    "Unsolicited": ", ".join(c.get("deviations", {}).get("unsolicited", [])) or "—"
+                }
+                for c in imperfect[:100]
+            ]
+            st.dataframe(pd.DataFrame(dev_rows), use_container_width=True)
+        else:
+            st.success("All sampled cases follow the model perfectly.")
+    else:
+        st.info(
+            "No per-trace deviation data. "
+            "Token Replay mode does not produce trace-level details — "
+            "switch to State Equation A* for per-case deviations."
+        )
+
+# ---------------------------------------------------------------------------
+# Tab 5: Business Insights
+# ---------------------------------------------------------------------------
+with tab_biz:
+    biz = results.get("repeat_purchase_analysis")
+    if biz:
+        metrics = biz.get("metrics", {})
+        rev = metrics.get("revenue_stats", {})
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Buyers", f"{metrics.get('total_buyers', 0):,}")
+        c2.metric("Repeat Rate", f"{metrics.get('repeat_rate', 0):.1f}%")
+        c3.metric("Median Days Between", f"{metrics.get('median_days_between', 0):.1f}")
+        c4.metric(
+            "Value Multiplier",
+            f"{rev.get('multiplier', 0):.1f}x" if rev else "N/A",
+            help="Average revenue: repeat buyers vs. one-time buyers."
+        )
+
+        charts = {k: v for k, v in biz.get("charts", {}).items() if v and os.path.exists(v)}
+        if charts:
+            chart_cols = st.columns(len(charts))
+            for col, (name, path) in zip(chart_cols, charts.items()):
+                with col:
+                    st.image(path, caption=name.replace("_", " ").title(), use_container_width=True)
+
+        with st.expander("Full Report"):
+            st.text(format_business_report(biz))
+    else:
+        st.info(
+            "No business insight data. "
+            "Ensure the log contains purchase activity labels or a revenue column."
+        )
