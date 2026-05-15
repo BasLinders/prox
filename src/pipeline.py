@@ -122,7 +122,7 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]):
     
     print(f"\n--- DATA STATUS AFTER FILTERING ---")
     print(f"Events remaining: {num_remaining_events}")
-    print(f"Cases remaining:  {num_remaining_cases}")
+    print(f"Cases remaining: {num_remaining_cases}")
     
     # Safety check:
     if num_remaining_events > 10000:
