@@ -1,4 +1,4 @@
-# PRoX — Process Excavator
+# PRoX - Process Excavator
 
 A modular process mining tool for analysing website customer journeys. Upload an event log, and PRoX automatically discovers the paths users take, identifies where they drop off or deviate, and surfaces business intelligence like repeat purchase rates and revenue lift. Built on [PM4Py](https://pm4py.fit.fraunhofer.de/), designed to run locally on a standard laptop.
 
@@ -6,13 +6,13 @@ A modular process mining tool for analysing website customer journeys. Upload an
 
 ## Features
 
-- **Golden Path Discovery** — Inductive Miner and Heuristics Miner produce sound Petri net models. The most frequent variant is rendered as a "Happy Path" BPMN diagram.
-- **Conformance Checking** — Token Replay for fast fitness and precision scores; State Equation A\* for exact per-trace deviations (skipped and unsolicited activities).
-- **Bottleneck Analysis** — Activity and transition durations ranked by impact score; overall process health score.
-- **Variant Analysis** — Top-20 variants with frequency, coverage, and duration statistics.
-- **Business Insights** — Repeat buyer detection, inter-purchase timing, and revenue multiplier (repeat vs. one-time buyers).
-- **Memory Efficient** — Chunked CSV loading for files up to 500 MB; categorical downcasting to reduce RAM usage.
-- **Streamlit UI** — All results presented in a five-tab browser interface; no notebook required.
+- **Golden Path Discovery** - Inductive Miner and Heuristics Miner produce sound Petri net models. The most frequent variant is rendered as a "Happy Path" BPMN diagram.
+- **Conformance Checking** - Token Replay for fast fitness and precision scores; State Equation A\* for exact per-trace deviations (skipped and unsolicited activities).
+- **Bottleneck Analysis** - Activity and transition durations ranked by impact score; overall process health score.
+- **Variant Analysis** - Top-20 variants with frequency, coverage, and duration statistics.
+- **Business Insights** - Repeat buyer detection, inter-purchase timing, and revenue multiplier (repeat vs. one-time buyers).
+- **Memory Efficient** - Chunked CSV loading for files up to 500 MB; categorical downcasting to reduce RAM usage.
+- **Streamlit UI** - All results presented in a five-tab browser interface; no notebook required.
 
 ---
 
@@ -21,7 +21,7 @@ A modular process mining tool for analysing website customer journeys. Upload an
 ### Prerequisites
 
 - Python 3.9+
-- [Graphviz](https://graphviz.org/download/) — required for BPMN and Petri net visualisations
+- [Graphviz](https://graphviz.org/download/) - required for BPMN and Petri net visualisations
   - **Windows:** run the installer and add Graphviz to your system PATH
   - **macOS:** `brew install graphviz`
 
@@ -102,7 +102,7 @@ Optional columns that unlock additional analytics:
 | Parameter | Default | Description |
 |---|---|---|
 | `discovery_algo` | `"inductive_miner"` | `"inductive_miner"` or `"heuristics_miner"` |
-| `noise_threshold` | `0.2` | Inductive Miner noise filter (0.0–0.8). Higher = simpler model. |
+| `noise_threshold` | `0.2` | Inductive Miner noise filter (0.0-0.8). Higher = simpler model. |
 | `conformance_algo` | `"token_replay"` | `"token_replay"` (fast) or `"state_equation_a_star"` (per-trace deviations) |
 | `calculate_precision` | `True` | Include precision score in conformance output |
 | `sample_size` | `250` | Cases used for conformance checking |
@@ -151,9 +151,9 @@ output/             Generated PNGs and CSVs (created on first run)
 
 | Metric | What it means |
 |---|---|
-| **Fitness** | How much of the log the model can replay (0–1). Low fitness means many cases deviate. |
-| **Precision** | How much the model allows behaviour not seen in the log (0–1). Low precision means an overly permissive model. |
-| **Health Score** | Composite score (0–100) penalising high duration variability and a large bottleneck ratio. |
+| **Fitness** | How much of the log the model can replay (0-1). Low fitness means many cases deviate. |
+| **Precision** | How much the model allows behaviour not seen in the log (0-1). Low precision means an overly permissive model. |
+| **Health Score** | Composite score (0-100) penalising high duration variability and a large bottleneck ratio. |
 | **Repeat Rate** | Percentage of identified buyers who made more than one purchase. |
 | **Value Multiplier** | Average lifetime revenue: repeat buyers ÷ one-time buyers. |
 
