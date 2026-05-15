@@ -16,14 +16,14 @@ from prox import (
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 
 st.set_page_config(
-    page_title="PRoX — Process Excavator",
+    page_title="PRoX - Process Excavator",
     page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ---------------------------------------------------------------------------
-# Sidebar — configuration
+# Sidebar - configuration
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.title("PRoX ⚙️")
@@ -39,8 +39,8 @@ with st.sidebar:
         "Algorithm",
         ["inductive_miner", "heuristics_miner"],
         help=(
-            "**Inductive Miner** — guaranteed sound model, best for most datasets.\n\n"
-            "**Heuristics Miner** — better for noisy or very large logs."
+            "**Inductive Miner** - guaranteed sound model, best for most datasets.\n\n"
+            "**Heuristics Miner** - better for noisy or very large logs."
         )
     )
     noise_threshold = st.slider(
@@ -54,8 +54,8 @@ with st.sidebar:
         "Method",
         ["token_replay", "state_equation_a_star"],
         help=(
-            "**Token Replay** — fast, gives fitness & precision.\n\n"
-            "**State Equation A\\*** — slower, gives exact per-trace deviations."
+            "**Token Replay** - fast, gives fitness & precision.\n\n"
+            "**State Equation A\\*** - slower, gives exact per-trace deviations."
         )
     )
     calculate_precision = st.checkbox("Calculate Precision", value=True)
@@ -173,7 +173,7 @@ with tab_map:
 
     with col1:
         st.subheader("Happy Path")
-        st.caption("Most frequent variant — the intended customer journey.")
+        st.caption("Most frequent variant - the intended customer journey.")
         hp = viz.get("happy_path")
         if hp and os.path.exists(hp):
             st.image(hp, use_container_width=True)
@@ -272,8 +272,8 @@ with tab_conf:
                 {
                     "Case ID": c["case_id"],
                     "Fitness": f"{c['fitness']:.2%}",
-                    "Skipped": ", ".join(c.get("deviations", {}).get("skipped", [])) or "—",
-                    "Unsolicited": ", ".join(c.get("deviations", {}).get("unsolicited", [])) or "—"
+                    "Skipped": ", ".join(c.get("deviations", {}).get("skipped", [])) or "-",
+                    "Unsolicited": ", ".join(c.get("deviations", {}).get("unsolicited", [])) or "-"
                 }
                 for c in imperfect[:100]
             ]
@@ -283,7 +283,7 @@ with tab_conf:
     else:
         st.info(
             "No per-trace deviation data. "
-            "Token Replay mode does not produce trace-level details — "
+            "Token Replay mode does not produce trace-level details - "
             "switch to State Equation A* for per-case deviations."
         )
 
