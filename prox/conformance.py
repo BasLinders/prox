@@ -111,7 +111,8 @@ def run_conformance_checking(
     calculate_fitness: bool = False,
     optimize_variants: bool = True,
     perform_sampling: bool = True,
-    strata_col: str = None
+    strata_col: str = None,
+    max_priority_ratio: float = 0.5
 ) -> Dict[str, Any]:
     """
     Orchestrates conformance checking: sampling, fitness, precision, and alignments.
@@ -131,6 +132,7 @@ def run_conformance_checking(
     optimize_variants   : If True, align once per unique variant (10-100x speedup).
     perform_sampling    : If True, use stratified sampling before alignment.
     strata_col          : Column for stratified sampling (default: 'purchase').
+    max_priority_ratio  : Max share of the sample reserved for priority (strata) cases.
 
     Returns
     -------
@@ -153,7 +155,11 @@ def run_conformance_checking(
                 sc = strata_col if (strata_col and strata_col in event_log_df.columns) else (
                     'purchase' if 'purchase' in event_log_df.columns else 'case:concept:name'
                 )
-                s_df, _ = sample_log_stratified(event_log_df, sc, total_sample_size=100)
+                s_df, _ = sample_log_stratified(
+                    event_log_df, sc,
+                    total_sample_size=max_align,
+                    max_priority_ratio=max_priority_ratio
+                )
                 sampled_log = pm4py.convert_to_event_log(s_df)
             else:
                 sampled_log = pm4py.convert_to_event_log(event_log_df.iloc[:max_align])
