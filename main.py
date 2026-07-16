@@ -135,6 +135,7 @@ if run_btn:
 
     st.session_state["results"] = results
     st.session_state["df"] = df
+    st.session_state["config"] = config
 
 # ---------------------------------------------------------------------------
 # Display results
@@ -245,6 +246,23 @@ with tab_bottlenecks:
         )
     else:
         st.info("No significant activity bottlenecks found.")
+
+    max_bottleneck_edges = (
+        st.session_state.get("config", {})
+        .get("visualisation_params", {})
+        .get("max_bottleneck_edges", 2)
+    )
+    tbns = perf.get("bottlenecks", {}).get("transition_bottlenecks", {})
+    if tbns:
+        st.subheader("Slowest Transitions")
+        st.caption(f"Top {max_bottleneck_edges} step-to-step transitions by impact score.")
+        tbn_df = pd.DataFrame.from_dict(tbns, orient="index")
+        display_cols = [c for c in ["mean_duration", "frequency", "impact_score", "severity"] if c in tbn_df.columns]
+        tbn_df.index.name = "Transition"
+        st.dataframe(
+            tbn_df[display_cols].sort_values("impact_score", ascending=False).head(max_bottleneck_edges),
+            use_container_width=True
+        )
 
     recs = stats.get("recommendations", [])
     if recs:
