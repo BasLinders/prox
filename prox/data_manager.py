@@ -1,9 +1,7 @@
 import logging
 import pandas as pd
 import numpy as np
-import pm4py
-import os
-from typing import Dict, Any, Union, List, Tuple
+from typing import Dict, Any, Tuple
 
 from .config import COLUMN_MAPPINGS
 
@@ -13,6 +11,7 @@ logger = logging.getLogger(__name__)
 def load_and_validate_csv(
     uploaded_file,
     max_file_size_mb: int = 500,
+    chunk_threshold_mb: int = 50,
     chunk_size: int = 50000
 ) -> Tuple[pd.DataFrame | None, list, bool]:
     """
@@ -38,13 +37,11 @@ def load_and_validate_csv(
         else:
             file_size_mb = 0
 
-        CHUNK_THRESHOLD_MB = 50
-
         if file_size_mb > max_file_size_mb:
             errors.append(f"File too large ({file_size_mb:.2f} MB). Max allowed: {max_file_size_mb} MB.")
             return None, errors, False
 
-        if file_size_mb > CHUNK_THRESHOLD_MB:
+        if file_size_mb > chunk_threshold_mb:
             notes.append(f"Large file ({file_size_mb:.1f} MB). Using chunked loading.")
             try:
                 df = _load_csv_chunked(uploaded_file, chunk_size=chunk_size)

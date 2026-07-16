@@ -134,7 +134,9 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]) -> Dic
         enable_detailed_analysis=conf_cfg.get("calculate_precision", True),
         calculate_fitness=conf_cfg.get("calculate_fitness", False),
         optimize_variants=conf_cfg.get("optimize_variants", True),
-        perform_sampling=sampling_enabled
+        perform_sampling=sampling_enabled,
+        strata_col=sampling_config.get("strata_col", "purchase"),
+        max_priority_ratio=sampling_config.get("max_priority_ratio", 0.5)
     )
 
     pipeline_results['conformance'] = conformance_results
