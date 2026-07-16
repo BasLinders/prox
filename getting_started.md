@@ -1,6 +1,6 @@
-# Getting Started with Process Miner Pro
+# Getting Started with PRoX
 
-This guide covers everything you need to set up, configure, and run the **Process Miner Pro** tool.
+This guide covers everything you need to set up, configure, and run **PRoX (Process Excavator)**.
 
 ## Prerequisites
 
@@ -22,109 +22,84 @@ It is best practice to run this tool in a clean environment to avoid conflicts.
 ```bash
 python -m venv venv
 venv\Scripts\activate
-
 ```
 
 **Mac / Linux:**
-
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-
 ```
 
 ### 2. Install Python Dependencies
 
-Install all required libraries (Pandas, PM4Py, Cython, etc.):
+Install all required libraries (pandas, numpy, matplotlib, seaborn, pm4py, streamlit):
 
 ```bash
 pip install -r requirements.txt
-
 ```
 
-### 3. Activate the Cython Module (Critical Step)
-
-This tool uses Cython to accelerate heavy calculations (fitness & alignments) by compiling Python code into C. You must perform this step before running the tool, or you will encounter import errors.
-
-Run this command in the project root folder:
-
-```bash
-python setup.py build_ext --inplace
-
-```
-
-**Verification:**
-
-* If successful, you will see a new file in your directory ending in `.so` (Linux/Mac) or `.pyd` (Windows), such as `conformance.cp39-win_amd64.pyd`.
-* You only need to run this command once (or whenever you modify `conformance.pyx`).
-
----
-
-## Data Setup
-
-1. **Export Data:** Export your event log as a CSV file.
-2. **Placement:** Place the CSV file inside the project folder (e.g., named `input_data.csv`).
-3. **Update Path:** Open `main.py` and update the `uploaded_file` variable to match your filename:
-
-```python
-# main.py
-uploaded_file = 'input_data.csv' 
-
-```
-
-4. **Required Columns:** Your CSV must contain at least these three columns:
-* **Case ID:** (e.g., Session ID, Order ID)
-* **Activity Name:** (e.g., Page View, Button Click)
-* **Timestamp:** (e.g., 2023-10-27 14:30:00)
-
----
-
-## Configuration
-
-All settings are managed in `config.py`. You do not need to change code logic to adapt the tool to new datasets.
-
-### 1. Column Mappings
-
-Map your CSV column headers to the tool's standard names in `COLUMN_MAPPINGS`.
-
-```python
-# config.py
-COLUMN_MAPPINGS = {
-    'case:concept:name': frozenset(['session_id', 'order_id', 'trace_id']),  # Your Case ID column
-    'concept:name': frozenset(['event_name', 'activity', 'action']),         # Your Activity column
-    'time:timestamp': frozenset(['timestamp', 'created_at', 'datetime'])     # Your Timestamp column
-}
-
-```
-
-### 2. Analysis Parameters
-
-Tune performance and depth in the `CONFIG` dictionary:
-
-* **speed_params:**
-* `max_align`: Set lower (e.g., 15) for faster results.
-
-* **sampling_config:**
-* `strata_col`: Set this to a column (e.g., `'has_purchase'`) to ensure rare cases are included.
+No compilation step is needed — PRoX is pure Python.
 
 ---
 
 ## Running the Tool
 
-Once setup is complete, run the analysis:
+Start the Streamlit app:
 
 ```bash
-python main.py
-
+streamlit run main.py
 ```
 
-### Output Locations
+This opens PRoX in your browser. From there:
 
-* **Console:** Displays real-time analysis logs and fitness scores.
-* **`output/` Folder:** Contains generated artifacts:
-* `process_model.png`: The visual Petri Net.
-* `happy_path_model.png`: BPMN of the most frequent variant.
-* `process_variant_analysis.csv`: Detailed statistics on process paths.
+1. **Upload** a CSV event log using the sidebar file uploader.
+2. **Configure** the discovery algorithm, noise threshold, conformance method, and sample size in the sidebar.
+3. Click **Run Analysis**.
+4. Explore results across five tabs: Process Maps, Variants, Bottlenecks, Conformance, and Business Insights.
+
+### Required Columns
+
+Your CSV must contain at least these three columns (names are auto-detected, see `COLUMN_MAPPINGS` in `prox/config.py`):
+
+* **Case ID:** (e.g., `session_id`, `case_id`, `trace_id`)
+* **Activity Name:** (e.g., `event_name`, `activity`, `action`)
+* **Timestamp:** (e.g., `timestamp`, `created_at`, `datetime`)
+
+Optional columns (`price`/`revenue`, `purchase`/`transaction`, `page_type`, `category`) unlock additional analytics — see `README.md` for the full table.
+
+---
+
+## Configuration
+
+All defaults are managed in `prox/config.py`. You do not need to change code logic to adapt the tool to new datasets — the sidebar controls the most common settings, and `create_analysis_config()` exposes the rest for scripted use.
+
+### 1. Column Mappings
+
+Map your CSV column headers to PRoX's standard names in `COLUMN_MAPPINGS`:
+
+```python
+# prox/config.py
+COLUMN_MAPPINGS = {
+    'case:concept:name': frozenset(['session_id', 'case_id', 'trace_id', ...]),
+    'concept:name': frozenset(['event_name', 'activity', 'action', ...]),
+    'time:timestamp': frozenset(['timestamp', 'created_at', 'datetime', ...]),
+}
+```
+
+### 2. Analysis Parameters
+
+Tune performance and depth via `create_analysis_config()` or by editing `CONFIG` directly:
+
+* **`sample_size`** — cases used for conformance checking. Lower (e.g. 100) for faster results.
+* **`strata_col`** — set to a column (e.g. `'purchase'`) to ensure rare cases are included when sampling.
+* **`filter_steps`** — list of filter dicts applied before discovery (see `README.md` for the full spec).
+
+---
+
+## Output Locations
+
+* **Browser (Streamlit):** All results — metrics, tables, and diagrams — are displayed live in the app tabs.
+* **`output/` folder:** Generated artifacts referenced by the UI, including process map and happy-path PNGs.
 
 ---
 
@@ -132,7 +107,7 @@ python main.py
 
 | Issue | Cause | Solution |
 | --- | --- | --- |
-| **ModuleNotFoundError:** No module named 'conformance' | Cython module hasn't been compiled. | Run `python setup.py build_ext --inplace`. |
 | **ExecutableNotFound:** failed to execute `dot` | GraphViz is missing or not in PATH. | Install GraphViz and add the `/bin` folder to your System PATH. |
-| **System Freeze / Memory Error** | Dataset is too large for RAM. | Reduce `total_sample_size` in `config.py`. |
-| **Visual C++ Build Tools Missing** | Windows requires a C compiler for Cython. | Install "Desktop development with C++" via Visual Studio Build Tools. |
+| **System Freeze / Memory Error** | Dataset is too large for RAM. | Reduce `sample_size` / `total_sample_size`, or lower the sidebar sample size. |
+| **"Failed to load data"** | Required columns (Case ID, Activity, Timestamp) not found. | Check your CSV headers against `COLUMN_MAPPINGS` in `prox/config.py`, or rename them. |
+| **No process map images shown** | GraphViz not installed/on PATH. | See above. |
