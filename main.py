@@ -88,8 +88,22 @@ if not uploaded_file:
 # Run analysis when button is pressed
 # ---------------------------------------------------------------------------
 if run_btn:
+    config = create_analysis_config(
+        discovery_algo=discovery_algo,
+        noise_threshold=noise_threshold,
+        conformance_algo=conformance_algo,
+        calculate_precision=calculate_precision,
+        sample_size=int(sample_size),
+    )
+    data_loading_cfg = config["data_loading"]
+
     with st.spinner("Loading and validating data..."):
-        df, messages, has_category = load_and_validate_csv(uploaded_file)
+        df, messages, has_category = load_and_validate_csv(
+            uploaded_file,
+            max_file_size_mb=data_loading_cfg["max_file_size_mb"],
+            chunk_threshold_mb=data_loading_cfg["chunk_threshold_mb"],
+            chunk_size=data_loading_cfg["chunk_size"],
+        )
 
     st.session_state["load_messages"] = messages
 
@@ -111,14 +125,6 @@ if run_btn:
         df_ready = refine_activity_labels(df_ready, target_activity="page_view", context_column="page_type")
 
     optimize_dataframe_memory(df_ready)
-
-    config = create_analysis_config(
-        discovery_algo=discovery_algo,
-        noise_threshold=noise_threshold,
-        conformance_algo=conformance_algo,
-        calculate_precision=calculate_precision,
-        sample_size=int(sample_size),
-    )
 
     with st.spinner("Running process mining pipeline... This may take a minute."):
         results = run_full_analysis(df_ready, config=config)
