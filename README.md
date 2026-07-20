@@ -164,3 +164,7 @@ output/             Generated PNGs and CSVs (created on first run)
 - Precision calculation uses ETC Conformance Token (fast approximation). Full alignment-based precision is disabled due to memory cost on standard hardware.
 - Visualisations require Graphviz to be installed and on the system PATH.
 - Very large logs (>10 000 events after filtering) will trigger a warning; enabling sampling is recommended.
+
+## License
+This repository is not licensed for use, modification, or distribution.
+All rights reserved.
