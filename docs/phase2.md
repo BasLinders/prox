@@ -69,6 +69,33 @@ Tests before CI before expansion: without a test suite, a CI workflow only check
 - Verified with 8 new/updated tests (`tests/test_pipeline.py`, plus additions to `test_conformance.py`/`test_data_manager.py` covering the new error-listing behavior) and a live headless Streamlit boot of `main.py` to confirm the registry-driven selectboxes render and behave correctly.
 - All behavior is otherwise unchanged — this was a pure structural refactor verified against the existing Phase 2 test suite before any new tests were added, which is exactly the lower-risk-refactor payoff Phase 2 was meant to unlock.
 
-## Next: Phase 4 — Expand capability
+## Phase 4 — Expand capability
 
-With a safety net and cleaner extensibility seams in place, the next phase is genuinely new capability rather than hardening: candidates from the original status report include full-analysis export/reporting, additional discovery algorithms (e.g. Alpha Miner, now trivial to add via `DISCOVERY_ALGORITHMS`), trace clustering/segment comparison, and incremental analysis for recurring large logs.
+**Status: In progress.**
+
+- **4a. Full-analysis HTML report export — Complete.** `prox/report.py`'s `generate_html_report()` builds a single, self-contained HTML report (metrics, embedded base64 process-map images, bottleneck/variant tables, conformance summary, business insights) from a `run_full_analysis()` results dict. Wired into `main.py` as a "Download Full Report" button. All user-derived strings are HTML-escaped (verified with an XSS test). Shipped directly to `main` (e84026f).
+- **Alpha Miner — considered and rejected.** It has no soundness guarantee, poor short-loop handling, and no noise tolerance — strictly weaker than the existing Inductive Miner (sound/robust), Heuristics Miner (noisy logs), and DFG (fast overview) for this domain (noisy website event logs). Not worth adding just because the Phase 3 registry makes it a one-entry change.
+- **Segment comparison — scoped (v1), not yet implemented.**
+  - New `prox/segments.py` with `compare_segments(df, segment_col, config, top_n_segments=5)`: picks the top-N segment values by case count, runs `run_full_analysis()` once per segment, returns `{segment_value: results}` plus a `comparison_table` (cases, health score, fitness, repeat rate, top variant — one row per segment).
+  - UI: an optional "Segment by" selectbox (columns with sane cardinality, ~2-20 unique values) and a new "Segment Comparison" tab showing the table plus per-segment happy-path images side by side.
+  - Reuses existing building blocks (`filter_event_log(filter_type='attribute', ...)`, `run_full_analysis()`) — mostly orchestration, not new analysis logic.
+  - **Deferred to v2**: automatically diffing golden paths between segments (e.g. "segment A visits checkout, segment B doesn't"). That's genuinely new algorithmic work, not orchestration — worth revisiting once the side-by-side v1 view proves useful in practice.
+  - Cost note: runs the full pipeline N times (once per segment), which is part of why Phase 4b (below) comes before scaling this up to larger segment counts.
+
+## Phase 4b — Optimization
+
+**Status: Scoped, not yet implemented.**
+
+Went through vectorization, clustering, batching, multiprocessing, and CUDA against the actual codebase rather than in the abstract:
+
+- **Vectorization**: already done where it matters — `analytics.py` is groupby/agg-based throughout. No meaningful remaining opportunity.
+- **Clustering**: already implemented as a speed technique, not just an idea — `optimize_variants` in `prox/conformance.py` groups identical traces and aligns once per unique variant instead of once per case (a documented 10-100x speedup on the most expensive stage). If "clustering" instead means auto-discovering segments as a feature (rather than using a known column), that's closer to segment comparison v2 than to optimization — kept separate so the two don't get conflated.
+- **Batching**: already implemented for fitness (`calculate_fitness_in_batches`, batch_size=200 with `gc.collect()`) and CSV loading (chunked above 50MB).
+- **Multiprocessing**: wired but unexposed. `prox/conformance.py` already passes a `cores` parameter all the way through to PM4Py's alignment computation (`params = {'cores': max_cores, ...}`, conformance.py:145), using PM4Py's own internal multiprocessing pool — this is not GIL-blocked at all, since separate processes each get their own interpreter. It's simply never surfaced in `main.py`'s UI, so every run defaults to single-core.
+- **CUDA: considered and rejected, not revisitable.** PRoX's expensive operations (Petri net discovery, alignment-based conformance, token replay) are combinatorial/graph algorithms, not the dense matrix math GPUs accelerate. The one place with real linear algebra (the alignment heuristic's LP relaxation) runs many small, independent per-trace solves — exactly the pattern where GPU kernel-launch/transfer overhead dominates and erases any benefit, short of research-grade batched-GPU-LP-solver work. Requiring CUDA would also mean requiring an NVIDIA GPU, directly contradicting the README's "designed to run locally on a standard laptop" goal and excluding every Mac user outright.
+
+**Proposed scope**: (1) expose `cores` as a UI control, since the wiring already exists; (2) profile the pipeline against a realistically-large synthetic log to find actual bottlenecks empirically rather than guessing further; (3) check whether precision calculation would benefit from the same variant-dedup trick alignments already use — uncertain, since precision uses a token-based method (ETConformance) that may already be fast enough by design; measure before assuming.
+
+## Phase 5 — Incremental analysis (flagged, not scoped)
+
+Deferred from Phase 4: an incremental/cached analysis mode for recurring large logs, so re-running PRoX on a growing dataset doesn't reprocess everything from scratch each time. Flagged rather than scoped because there's no concrete pain signal yet — no evidence of repeat-large-log usage in this project so far — and it's the most architecturally invasive item under discussion (would touch caching, log diffing, and pipeline re-entry points that don't exist today). Revisit once a real use case actually hits this.
