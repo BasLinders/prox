@@ -29,6 +29,7 @@ from .analytics import (
 )
 from .visualizer import visualize_focused_insights, export_results
 from .report import generate_html_report
+from .segments import compare_segments
 
 __all__ = [
     "run_full_analysis",
@@ -52,4 +53,5 @@ __all__ = [
     "visualize_focused_insights",
     "export_results",
     "generate_html_report",
+    "compare_segments",
 ]

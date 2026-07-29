@@ -12,7 +12,11 @@ from .data_manager import filter_event_log, FILTER_HANDLERS
 logger = logging.getLogger(__name__)
 
 
-def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]) -> Dict[str, Any] | None:
+def run_full_analysis(
+    event_log_df: pd.DataFrame,
+    config: Dict[str, Any],
+    output_folder: str = "output"
+) -> Dict[str, Any] | None:
     """
     Executes the full process mining pipeline and returns a structured results dict.
 
@@ -31,6 +35,10 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]) -> Dic
         Pre-cleaned event log with XES-standard columns.
     config : dict
         Pipeline configuration. Use config.create_analysis_config() to build one.
+    output_folder : str
+        Folder for generated images/CSVs. Give each concurrent or repeated run
+        (e.g. one per segment in compare_segments()) a distinct folder, or later
+        runs will silently overwrite earlier runs' images.
 
     Returns
     -------
@@ -199,6 +207,7 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]) -> Dic
     vis_cfg = config.get("visualisation_params", {})
     happy_img, main_img = visualize_focused_insights(
         log_for_vis,
+        output_folder=output_folder,
         bottleneck_top_k=vis_cfg.get("bottleneck_top_k", 15)
     )
 
@@ -215,7 +224,7 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]) -> Dic
     if top_variants_dict:
         variants_df = pd.DataFrame.from_dict(top_variants_dict, orient='index')
         variants_df.index.name = 'Variant_Path'
-        export_results(variants_df, "process_variant_analysis", "csv")
+        export_results(variants_df, "process_variant_analysis", "csv", output_folder=output_folder)
 
     # -------------------------------------------------------------------------
     # Step 7: Business Insights
@@ -225,7 +234,7 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]) -> Dic
 
     repeat_stats = analyze_repeat_purchases(
         log_df,
-        output_folder="output",
+        output_folder=output_folder,
         user_col=biz_cfg.get("user_col", "user_id"),
         purchase_values=biz_cfg.get("purchase_values", ['purchase', 'order']),
         revenue_col=biz_cfg.get("revenue_col", "event_value")
