@@ -11,6 +11,8 @@ from prox import (
     create_analysis_config,
     run_full_analysis,
     format_business_report,
+    DISCOVERY_ALGORITHMS,
+    CONFORMANCE_METHODS,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
@@ -37,11 +39,10 @@ with st.sidebar:
     st.header("Discovery")
     discovery_algo = st.selectbox(
         "Algorithm",
-        ["inductive_miner", "heuristics_miner", "dfg"],
-        help=(
-            "**Inductive Miner** - guaranteed sound model, best for most datasets.\n\n"
-            "**Heuristics Miner** - better for noisy or very large logs.\n\n"
-            "**DFG** - Directly-Follows Graph, fastest option, best for a quick first look."
+        list(DISCOVERY_ALGORITHMS.keys()),
+        format_func=lambda key: DISCOVERY_ALGORITHMS[key]['label'],
+        help="\n\n".join(
+            f"**{v['label']}** - {v['help']}" for v in DISCOVERY_ALGORITHMS.values()
         )
     )
     noise_threshold = st.slider(
@@ -54,10 +55,10 @@ with st.sidebar:
     st.header("Conformance")
     conformance_algo = st.selectbox(
         "Method",
-        ["token_replay", "state_equation_a_star"],
-        help=(
-            "**Token Replay** - fast, gives fitness & precision.\n\n"
-            "**State Equation A\\*** - slower, gives exact per-trace deviations."
+        list(CONFORMANCE_METHODS.keys()),
+        format_func=lambda key: CONFORMANCE_METHODS[key]['label'],
+        help="\n\n".join(
+            f"**{v['label']}** - {v['help']}" for v in CONFORMANCE_METHODS.values()
         )
     )
     calculate_precision = st.checkbox("Calculate Precision", value=True)

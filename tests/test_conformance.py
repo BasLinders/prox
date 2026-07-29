@@ -55,6 +55,17 @@ def test_run_conformance_checking_with_sampling_enabled(perfect_model):
     assert result['fitness']['log_fitness'] > 0.9
 
 
+def test_run_conformance_checking_unknown_method_reports_error(perfect_model):
+    df, (net, im, fm) = perfect_model
+    result = run_conformance_checking(
+        df, net, im, fm,
+        alignment_variant='not_a_real_method',
+        perform_sampling=False
+    )
+    assert any('unknown conformance method' in e.lower() for e in result['errors'])
+    assert result['fitness']['log_fitness'] == 0
+
+
 def test_calculate_fitness_in_batches_matches_expected_range(perfect_model):
     df, (net, im, fm) = perfect_model
     log = pm4py.convert_to_event_log(df)
