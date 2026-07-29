@@ -2,7 +2,7 @@ import logging
 import os
 import pandas as pd
 import pm4py
-from typing import Union, Dict, List, Any, Tuple
+from typing import Union, Dict, List, Tuple
 
 from pm4py.algo.filtering.log.variants import variants_filter
 from pm4py.visualization.bpmn import visualizer as bpmn_visualizer
