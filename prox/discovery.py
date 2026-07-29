@@ -1,10 +1,9 @@
 import logging
 import pandas as pd
 import pm4py
-from typing import Tuple, List
+from typing import Tuple
 
 from pm4py.algo.discovery.inductive import algorithm as inductive_miner
-from pm4py.algo.discovery.dfg import algorithm as dfg_discovery
 from pm4py.algo.discovery.heuristics import algorithm as heuristics_miner
 from pm4py.objects.conversion.process_tree import converter as pt_converter
 from pm4py.objects.conversion.dfg import converter as dfg_converter
@@ -66,8 +65,15 @@ def perform_process_discovery(
             messages.append(f"Petri net discovered via Inductive Miner (noise={noise_threshold})")
 
         elif discovery_algo == 'dfg':
-            dfg = dfg_discovery.apply(log)
-            net, im, fm = dfg_converter.apply(dfg, variant=dfg_converter.Variants.TO_PETRI_NET)
+            dfg, start_activities, end_activities = pm4py.discover_dfg(log)
+            net, im, fm = dfg_converter.apply(
+                dfg,
+                variant=dfg_converter.Variants.VERSION_TO_PETRI_NET_ACTIVITY_DEFINES_PLACE,
+                parameters={
+                    dfg_converter.Variants.VERSION_TO_PETRI_NET_ACTIVITY_DEFINES_PLACE.value.Parameters.START_ACTIVITIES: start_activities,
+                    dfg_converter.Variants.VERSION_TO_PETRI_NET_ACTIVITY_DEFINES_PLACE.value.Parameters.END_ACTIVITIES: end_activities,
+                }
+            )
             messages.append(f"Process discovered via DFG (activity threshold={activity_threshold})")
 
         elif discovery_algo == 'heuristics_miner':
