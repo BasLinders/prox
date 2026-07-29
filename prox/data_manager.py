@@ -170,9 +170,13 @@ def _load_csv_chunked(uploaded_file, chunk_size: int = 50000) -> pd.DataFrame:
 
 
 def optimize_dataframe_memory(df: pd.DataFrame) -> pd.DataFrame:
-    """Converts low-cardinality object columns to category dtype to reduce RAM usage."""
+    """Converts low-cardinality string columns to category dtype to reduce RAM usage.
+
+    Uses is_string_dtype rather than a bare `== 'object'` check, since pandas 2.x+
+    infers plain string columns as a dedicated 'str' dtype rather than 'object'.
+    """
     for col in df.columns:
-        if df[col].dtype == 'object':
+        if pd.api.types.is_string_dtype(df[col].dtype):
             if len(df[col].unique()) / len(df[col]) < 0.5:
                 df[col] = df[col].astype('category')
     return df
