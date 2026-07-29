@@ -37,15 +37,17 @@ with st.sidebar:
     st.header("Discovery")
     discovery_algo = st.selectbox(
         "Algorithm",
-        ["inductive_miner", "heuristics_miner"],
+        ["inductive_miner", "heuristics_miner", "dfg"],
         help=(
             "**Inductive Miner** - guaranteed sound model, best for most datasets.\n\n"
-            "**Heuristics Miner** - better for noisy or very large logs."
+            "**Heuristics Miner** - better for noisy or very large logs.\n\n"
+            "**DFG** - Directly-Follows Graph, fastest option, best for a quick first look."
         )
     )
     noise_threshold = st.slider(
         "Noise Threshold", 0.0, 0.8, 0.2, 0.05,
-        help="Higher values produce a simpler model by filtering rare paths."
+        help="Higher values produce a simpler model by filtering rare paths. Used by Inductive Miner only.",
+        disabled=(discovery_algo != "inductive_miner")
     )
 
     st.divider()
