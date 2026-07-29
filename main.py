@@ -12,6 +12,7 @@ from prox import (
     run_full_analysis,
     format_business_report,
     generate_html_report,
+    compare_segments,
     DISCOVERY_ALGORITHMS,
     CONFORMANCE_METHODS,
 )
@@ -64,6 +65,16 @@ with st.sidebar:
     )
     calculate_precision = st.checkbox("Calculate Precision", value=True)
 
+    cpu_count = os.cpu_count() or 1
+    cores = st.number_input(
+        "CPU Cores", min_value=0, max_value=cpu_count, value=1, step=1,
+        help=(
+            "Parallel alignment computation. 0 = use all available cores minus one. "
+            "1 = sequential (default). Only used by State Equation A\\*, not Token Replay."
+        ),
+        disabled=(conformance_algo == "token_replay")
+    )
+
     st.divider()
     st.header("Sampling")
     sample_size = st.number_input(
@@ -98,6 +109,7 @@ if run_btn:
         conformance_algo=conformance_algo,
         calculate_precision=calculate_precision,
         sample_size=int(sample_size),
+        cores=int(cores),
     )
     data_loading_cfg = config["data_loading"]
 
@@ -175,12 +187,13 @@ if summary:
 
 st.divider()
 
-tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_biz = st.tabs([
+tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_biz, tab_segments = st.tabs([
     "Process Maps",
     "Variants",
     "Bottlenecks",
     "Conformance",
     "Business Insights",
+    "Segment Comparison",
 ])
 
 # ---------------------------------------------------------------------------
@@ -356,3 +369,73 @@ with tab_biz:
             "No business insight data. "
             "Ensure the log contains purchase activity labels or a revenue column."
         )
+
+# ---------------------------------------------------------------------------
+# Tab 6: Segment Comparison
+# ---------------------------------------------------------------------------
+with tab_segments:
+    raw_df = st.session_state.get("df")
+    saved_config = st.session_state.get("config", {})
+
+    exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id"}
+    segment_candidates = [
+        c for c in raw_df.columns
+        if c not in exclude_cols and 2 <= raw_df[c].nunique(dropna=True) <= 20
+    ] if raw_df is not None else []
+
+    if not segment_candidates:
+        st.info(
+            "No suitable segment columns found. A segment column needs 2-20 unique "
+            "values (e.g. device type, traffic source, category)."
+        )
+    else:
+        c1, c2, c3 = st.columns([2, 1, 1])
+        with c1:
+            segment_col = st.selectbox("Segment by column", segment_candidates)
+        with c2:
+            top_n_segments = st.number_input("Max segments", min_value=2, max_value=10, value=5)
+        with c3:
+            st.write("")
+            st.write("")
+            compare_btn = st.button("Compare Segments", use_container_width=True)
+
+        if compare_btn:
+            with st.spinner(f"Running analysis per segment of '{segment_col}'..."):
+                segment_result = compare_segments(
+                    raw_df, segment_col=segment_col, config=saved_config,
+                    top_n_segments=int(top_n_segments)
+                )
+            st.session_state["segment_result"] = segment_result
+
+        segment_result = st.session_state.get("segment_result")
+        if segment_result:
+            for err in segment_result.get("errors", []):
+                st.warning(err)
+
+            comparison_table = segment_result.get("comparison_table", {})
+            if comparison_table:
+                comp_df = pd.DataFrame.from_dict(comparison_table, orient="index")
+                comp_df.index.name = "Segment"
+                st.dataframe(
+                    comp_df.style.format({
+                        "health_score": "{:.0f}", "fitness_score": "{:.1%}",
+                        "precision_score": "{:.1%}", "repeat_rate": "{:.1f}%"
+                    }),
+                    use_container_width=True
+                )
+
+                st.subheader("Happy Path per Segment")
+                segments = segment_result.get("segments", {})
+                img_cols = st.columns(len(segments)) if segments else []
+                for col, (seg_value, seg_results) in zip(img_cols, segments.items()):
+                    with col:
+                        st.caption(str(seg_value))
+                        hp = seg_results.get("visualizations", {}).get("happy_path")
+                        if hp and os.path.exists(hp):
+                            st.image(hp, use_container_width=True)
+                        else:
+                            st.info("Not available.")
+            else:
+                st.info("Comparison produced no results.")
+        else:
+            st.info("Choose a column and click **Compare Segments**.")
