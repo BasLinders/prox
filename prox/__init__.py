@@ -28,6 +28,7 @@ from .analytics import (
     format_business_report,
 )
 from .visualizer import visualize_focused_insights, export_results
+from .report import generate_html_report
 
 __all__ = [
     "run_full_analysis",
@@ -50,4 +51,5 @@ __all__ = [
     "format_business_report",
     "visualize_focused_insights",
     "export_results",
+    "generate_html_report",
 ]
