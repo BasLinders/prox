@@ -11,6 +11,7 @@ from prox import (
     create_analysis_config,
     run_full_analysis,
     format_business_report,
+    generate_html_report,
     DISCOVERY_ALGORITHMS,
     CONFORMANCE_METHODS,
 )
@@ -158,11 +159,19 @@ if load_messages:
 # Top-level metrics strip
 summary = results.get("log_summary", {})
 if summary:
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1.2])
     c1.metric("Cases", f"{summary.get('Number of Cases', 0):,}")
     c2.metric("Events", f"{summary.get('Number of Events', 0):,}")
     c3.metric("Activities", summary.get("Number of Unique Activities", 0))
     c4.metric("Duration (days)", summary.get("Total Duration (Days)", 0))
+    with c5:
+        st.download_button(
+            "Download Full Report",
+            data=generate_html_report(results),
+            file_name="prox_report.html",
+            mime="text/html",
+            use_container_width=True,
+        )
 
 st.divider()
 
