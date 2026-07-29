@@ -49,7 +49,8 @@ CONFIG = {
     "discovery_params": {
         "algorithm": "inductive_miner",
         "noise_threshold": 0.2,
-        "dependency_threshold": 0.9
+        "dependency_threshold": 0.9,
+        "activity_threshold": 0
     },
 
     "conformance_params": {
@@ -114,6 +115,7 @@ def create_analysis_config(
     cores: int = 1,
     noise_threshold: float = 0.2,
     dependency_threshold: float = 0.9,
+    activity_threshold: int = 0,
     conformance_algo: str = "token_replay",
     optimize_variants: bool = True,
     calculate_precision: bool = True,
@@ -121,18 +123,25 @@ def create_analysis_config(
     sample_size: int = 250,
     time_unit: str = "minutes",
     strata_col: str = "purchase",
+    max_priority_ratio: float = 0.5,
     enable_sampling: bool = True,
+    bottleneck_threshold_percentile: float = 75,
     filter_steps: list = None,
+    bottleneck_top_k: int = 50,
+    max_bottleneck_edges: int = 2,
     business_params: dict = None,
+    max_file_size_mb: int = 500,
+    chunk_threshold_mb: int = 50,
+    chunk_size: int = 50000,
 ) -> Dict[str, Any]:
     return {
         "app_name": "PRoX",
         "active_case_id": active_case_id,
 
         "data_loading": {
-            "max_file_size_mb": 500,
-            "chunk_threshold_mb": 50,
-            "chunk_size": 50000,
+            "max_file_size_mb": max_file_size_mb,
+            "chunk_threshold_mb": chunk_threshold_mb,
+            "chunk_size": chunk_size,
         },
 
         "speed_params": {
@@ -144,7 +153,8 @@ def create_analysis_config(
         "discovery_params": {
             "algorithm": discovery_algo,
             "noise_threshold": noise_threshold,
-            "dependency_threshold": dependency_threshold
+            "dependency_threshold": dependency_threshold,
+            "activity_threshold": activity_threshold
         },
 
         "conformance_params": {
@@ -157,13 +167,13 @@ def create_analysis_config(
         "sampling_config": {
             "enabled": enable_sampling,
             "total_sample_size": sample_size,
-            "max_priority_ratio": 0.5,
+            "max_priority_ratio": max_priority_ratio,
             "strata_col": strata_col
         },
 
         "performance_params": {
             "time_unit": time_unit,
-            "bottleneck_threshold_percentile": 75,
+            "bottleneck_threshold_percentile": bottleneck_threshold_percentile,
             "include_variants": True
         },
 
@@ -176,8 +186,8 @@ def create_analysis_config(
         ],
 
         "visualisation_params": {
-            "bottleneck_top_k": 50,
-            "max_bottleneck_edges": 2
+            "bottleneck_top_k": bottleneck_top_k,
+            "max_bottleneck_edges": max_bottleneck_edges
         },
 
         "business_params": business_params if business_params is not None else {

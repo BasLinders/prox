@@ -126,7 +126,9 @@ def run_conformance_checking(
     max_align           : Max traces for alignment computation.
     max_prec_cases      : Max traces for precision computation.
     cores               : CPU cores (0 = all available minus one).
-    alignment_variant   : PM4Py alignment algorithm key.
+    alignment_variant   : 'token_replay' for fast token-based replay fitness (no per-trace
+                          deviations), or 'state_equation_a_star' for exact alignment-based
+                          fitness with per-trace skipped/unsolicited deviations.
     enable_detailed_analysis : If True, compute precision and per-trace deviations.
     calculate_fitness   : If True, compute standalone batched fitness score.
     optimize_variants   : If True, align once per unique variant (10-100x speedup).
@@ -166,7 +168,7 @@ def run_conformance_checking(
         except Exception:
             sampled_log = pm4py.convert_to_event_log(event_log_df)
 
-        # --- 2. Standalone fitness (token replay path) ---
+        # --- 2. Standalone fitness (optional batched-alignment override) ---
         if calculate_fitness:
             try:
                 logger.info("Calculating fitness on %d traces.", len(sampled_log))
@@ -195,8 +197,22 @@ def run_conformance_checking(
             except Exception as e:
                 results['errors'].append(f"Precision calculation failed: {e}")
 
-        # --- 4. Alignments ---
-        if alignment_variant != 'token_replay':
+        # --- 4. Fitness via alignments (state_equation_a_star) or token replay ---
+        if alignment_variant == 'token_replay':
+            try:
+                input_log = sampled_log[:max_align] if len(sampled_log) > max_align else sampled_log
+                logger.info("Calculating fitness via token-based replay on %d traces.", len(input_log))
+                tbr = pm4py.fitness_token_based_replay(
+                    input_log, process_model, initial_marking, final_marking
+                )
+                results['fitness'] = {
+                    'log_fitness': tbr.get('log_fitness', 0.0),
+                    'percentage_fit_traces': tbr.get('percentage_of_fitting_traces', 0.0),
+                    'note': "Calculated via token-based replay"
+                }
+            except Exception as e:
+                results['errors'].append(f"Token replay fitness calculation failed: {e}")
+        else:
             input_log = sampled_log[:max_align] if len(sampled_log) > max_align else sampled_log
 
             # Rebuild a clean log with only string attributes to avoid PM4Py serialisation issues

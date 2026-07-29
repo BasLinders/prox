@@ -1,6 +1,6 @@
 # Phase 2 — Establish a Safety Net
 
-Context: PRoX has no automated tests, no CI, no linter enforcement, no `.gitignore`, and dependencies are pinned with bare `>=` floors and no ceilings. Phase 1 (fixing the token-replay gap and finishing config parameterization) closes correctness issues; Phase 2 makes sure future changes to this codebase can be verified without re-deriving correctness by hand every time, especially given the multi-month gaps between development bursts on this project.
+Context: PRoX has no automated tests, no CI, no linter enforcement, no `.gitignore`, and dependencies are pinned with bare `>=` floors and no ceilings. Phase 1 is now complete: token-based replay is genuinely implemented (`pm4py.fitness_token_based_replay`, `prox/conformance.py`), `create_analysis_config()` is fully parameterized (no more values hardcoded inside the function body), and `dfg` is exposed in the UI's discovery selectbox alongside Inductive Miner and Heuristics Miner. That pass also caught and fixed a real pm4py API-drift bug in the DFG-to-Petri-net conversion (`dfg_converter.Variants.TO_PETRI_NET` no longer exists in pm4py 2.7.23 — replaced with `VERSION_TO_PETRI_NET_ACTIVITY_DEFINES_PLACE`), which is exactly the kind of breakage the loose `>=`-only pinning below was flagged as risking. Phase 2 makes sure future changes to this codebase can be verified without re-deriving correctness by hand every time, especially given the multi-month gaps between development bursts on this project.
 
 ## 1. Test suite (`tests/`)
 
@@ -18,8 +18,12 @@ Add `pytest` and a `tests/` directory. Priority order, highest-value first:
    - Composite case-ID creation (`user_id` + `session_id`).
 
 3. **`prox/conformance.py`**:
-   - Once the Phase 1 token-replay fix lands, verify it actually produces a non-zero fitness score independent of the alignment path.
+   - Token-based replay (`alignment_variant='token_replay'`) produces a non-zero, plausible fitness score independent of the alignment path — regression-test this now that it's real, since a future pm4py upgrade is exactly the kind of change that could silently break it again (as it already did once for the DFG converter).
+   - State-equation A* (`alignment_variant='state_equation_a_star'`) still produces per-trace deviations as expected.
    - Batched fitness (`calculate_fitness_in_batches`) against a known small log with a known expected fitness value.
+
+4. **`prox/discovery.py`**:
+   - All three discovery algorithms (`inductive_miner`, `heuristics_miner`, `dfg`) produce a usable `(net, im, fm)` tuple on a small synthetic log — this would have caught the `dfg` converter API break immediately instead of only surfacing when someone happened to select it in the UI.
 
 Not a priority for Phase 2: `visualizer.py` (PNG output is hard to assert on meaningfully) and `pipeline.py` (better covered by one or two end-to-end smoke tests once the unit layer exists).
 
