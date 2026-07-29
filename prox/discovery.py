@@ -11,6 +11,63 @@ from pm4py.objects.conversion.dfg import converter as dfg_converter
 logger = logging.getLogger(__name__)
 
 
+def _discover_inductive_miner(log, *, noise_threshold=0.2, **_ignored):
+    tree = inductive_miner.apply(log, parameters={'noise_threshold': noise_threshold})
+    net, im, fm = pt_converter.apply(tree, variant=pt_converter.Variants.TO_PETRI_NET)
+    message = f"Petri net discovered via Inductive Miner (noise={noise_threshold})"
+    return net, im, fm, message
+
+
+def _discover_heuristics_miner(log, *, dependency_threshold=0.5, activity_threshold=0, **_ignored):
+    parameters = {
+        "dependency_threshold": dependency_threshold,
+        "min_act_count": activity_threshold
+    }
+    net, im, fm = heuristics_miner.apply(log, parameters=parameters)
+    message = (
+        f"Process discovered via Heuristics Miner "
+        f"(dependency={dependency_threshold}, activity={activity_threshold})"
+    )
+    return net, im, fm, message
+
+
+def _discover_dfg(log, *, activity_threshold=0, **_ignored):
+    dfg, start_activities, end_activities = pm4py.discover_dfg(log)
+    variant = dfg_converter.Variants.VERSION_TO_PETRI_NET_ACTIVITY_DEFINES_PLACE
+    net, im, fm = dfg_converter.apply(
+        dfg,
+        variant=variant,
+        parameters={
+            variant.value.Parameters.START_ACTIVITIES: start_activities,
+            variant.value.Parameters.END_ACTIVITIES: end_activities,
+        }
+    )
+    message = f"Process discovered via DFG (activity threshold={activity_threshold})"
+    return net, im, fm, message
+
+
+# Single source of truth for available discovery algorithms: the engine
+# dispatches on this dict, and the Streamlit UI builds its selectbox options
+# and help text from it, so a new algorithm only needs an entry here.
+DISCOVERY_ALGORITHMS = {
+    'inductive_miner': {
+        'handler': _discover_inductive_miner,
+        'label': 'Inductive Miner',
+        'help': 'Guaranteed sound model, best for most datasets.',
+    },
+    'heuristics_miner': {
+        'handler': _discover_heuristics_miner,
+        'label': 'Heuristics Miner',
+        'help': 'Better for noisy or very large logs.',
+    },
+    'dfg': {
+        'handler': _discover_dfg,
+        'label': 'DFG',
+        'help': 'Directly-Follows Graph, fastest option, best for a quick first look.',
+    },
+}
+
+
 def perform_process_discovery(
     event_log_df: pd.DataFrame,
     discovery_algo: str = 'inductive_miner',
@@ -25,8 +82,8 @@ def perform_process_discovery(
     ----------
     event_log_df : pd.DataFrame
         Must contain 'case:concept:name', 'concept:name', and 'time:timestamp'.
-    discovery_algo : {'inductive_miner', 'dfg', 'heuristics_miner'}
-        Algorithm to use. Inductive Miner is recommended for production use.
+    discovery_algo : str
+        Key into DISCOVERY_ALGORITHMS. Inductive Miner is recommended for production use.
     noise_threshold : float
         Inductive Miner noise filter (0.0–1.0). Higher = simpler model.
     dependency_threshold : float
@@ -58,39 +115,20 @@ def perform_process_discovery(
         errors.append(f"Error converting DataFrame to PM4Py EventLog: {e}")
         return None, errors, messages
 
+    entry = DISCOVERY_ALGORITHMS.get(discovery_algo)
+    if entry is None:
+        valid = ', '.join(DISCOVERY_ALGORITHMS)
+        errors.append(f"Critical Error: Unknown discovery algorithm '{discovery_algo}'. Valid options: {valid}.")
+        return None, errors, messages
+
     try:
-        if discovery_algo == 'inductive_miner':
-            tree = inductive_miner.apply(log, parameters={'noise_threshold': noise_threshold})
-            net, im, fm = pt_converter.apply(tree, variant=pt_converter.Variants.TO_PETRI_NET)
-            messages.append(f"Petri net discovered via Inductive Miner (noise={noise_threshold})")
-
-        elif discovery_algo == 'dfg':
-            dfg, start_activities, end_activities = pm4py.discover_dfg(log)
-            net, im, fm = dfg_converter.apply(
-                dfg,
-                variant=dfg_converter.Variants.VERSION_TO_PETRI_NET_ACTIVITY_DEFINES_PLACE,
-                parameters={
-                    dfg_converter.Variants.VERSION_TO_PETRI_NET_ACTIVITY_DEFINES_PLACE.value.Parameters.START_ACTIVITIES: start_activities,
-                    dfg_converter.Variants.VERSION_TO_PETRI_NET_ACTIVITY_DEFINES_PLACE.value.Parameters.END_ACTIVITIES: end_activities,
-                }
-            )
-            messages.append(f"Process discovered via DFG (activity threshold={activity_threshold})")
-
-        elif discovery_algo == 'heuristics_miner':
-            parameters = {
-                "dependency_threshold": dependency_threshold,
-                "min_act_count": activity_threshold
-            }
-            net, im, fm = heuristics_miner.apply(log, parameters=parameters)
-            messages.append(
-                f"Process discovered via Heuristics Miner "
-                f"(dependency={dependency_threshold}, activity={activity_threshold})"
-            )
-
-        else:
-            errors.append(f"Critical Error: Unknown discovery algorithm '{discovery_algo}'.")
-            return None, errors, messages
-
+        net, im, fm, message = entry['handler'](
+            log,
+            noise_threshold=noise_threshold,
+            dependency_threshold=dependency_threshold,
+            activity_threshold=activity_threshold,
+        )
+        messages.append(message)
     except Exception as e:
         import traceback
         errors.append(f"Error applying discovery algorithm '{discovery_algo}': {e}")

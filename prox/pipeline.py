@@ -7,7 +7,7 @@ from .discovery import perform_process_discovery
 from .conformance import run_conformance_checking
 from .analytics import analyze_process_performance, get_event_log_summary, analyze_repeat_purchases
 from .visualizer import visualize_focused_insights, export_results
-from .data_manager import filter_event_log
+from .data_manager import filter_event_log, FILTER_HANDLERS
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +53,21 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]) -> Dic
     filter_steps = config.get("filter_steps", [])
 
     if filter_steps:
+        unknown_types = sorted({
+            step.get('type') or '<missing>' for step in filter_steps
+            if step.get('type') not in FILTER_HANDLERS
+        })
+        if unknown_types:
+            logger.error(
+                "Unknown or missing filter type(s) in config: %s. Valid options: %s.",
+                unknown_types, ', '.join(FILTER_HANDLERS)
+            )
+            return None
+
         logger.info("Applying %d filter step(s).", len(filter_steps))
         for i, step_config in enumerate(filter_steps):
             params = step_config.copy()
-            f_type = params.pop('type', None)
-            if not f_type:
-                logger.warning("Filter step %d is missing 'type'. Skipped.", i + 1)
-                continue
+            f_type = params.pop('type')
 
             log_df, messages = filter_event_log(log_df, filter_type=f_type, **params)
             for msg in messages:

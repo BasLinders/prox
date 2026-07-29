@@ -98,6 +98,127 @@ def parse_alignments(clean_log, alignments: list) -> list:
     return details
 
 
+def _fitness_token_replay(sampled_log, process_model, initial_marking, final_marking, *, max_align, **_ignored):
+    """Fast token-based replay: fitness only, no per-trace deviations."""
+    input_log = sampled_log[:max_align] if len(sampled_log) > max_align else sampled_log
+    logger.info("Calculating fitness via token-based replay on %d traces.", len(input_log))
+    tbr = pm4py.fitness_token_based_replay(input_log, process_model, initial_marking, final_marking)
+    return {
+        'fitness': {
+            'log_fitness': tbr.get('log_fitness', 0.0),
+            'percentage_fit_traces': tbr.get('percentage_of_fitting_traces', 0.0),
+            'note': "Calculated via token-based replay"
+        }
+    }
+
+
+def _fitness_state_equation_alignments(
+    sampled_log, process_model, initial_marking, final_marking, *,
+    max_align, cores, optimize_variants, **_ignored
+):
+    """Exact alignment-based fitness plus per-trace skipped/unsolicited deviations."""
+    input_log = sampled_log[:max_align] if len(sampled_log) > max_align else sampled_log
+
+    # Rebuild a clean log with only string attributes to avoid PM4Py serialisation issues
+    clean_log = EventLog()
+    for trace in input_log:
+        nt = Trace()
+        nt.attributes['concept:name'] = str(trace.attributes.get('concept:name', 'Unknown'))
+        for event in trace:
+            nt.append(Event({'concept:name': str(event['concept:name'])}))
+        clean_log.append(nt)
+
+    # Rebuild markings from net structure
+    rim = Marking()
+    rfm = Marking()
+    for p in process_model.places:
+        if not p.in_arcs:
+            rim[p] = 1
+        if not p.out_arcs:
+            rfm[p] = 1
+    if not rim:
+        rim[list(process_model.places)[0]] = 1
+    if not rfm:
+        rfm[list(process_model.places)[-1]] = 1
+
+    max_cores = max(1, os.cpu_count() - 1) if cores == 0 else cores
+    params = {'cores': max_cores, 'ret_tuple_as_trans_desc': True}
+
+    if optimize_variants:
+        # Group identical traces and align once per unique variant
+        variant_map: Dict[tuple, list] = {}
+        unique_traces: list = []
+
+        for i, trace in enumerate(clean_log):
+            sig = tuple(str(e['concept:name']) for e in trace)
+            if sig not in variant_map:
+                variant_map[sig] = []
+                unique_traces.append(trace)
+            variant_map[sig].append(i)
+
+        logger.info(
+            "Aligning %d unique variants (from %d traces).",
+            len(unique_traces), len(clean_log)
+        )
+        variant_alignments = alignments_algorithm.apply(
+            unique_traces, process_model, rim, rfm, parameters=params
+        )
+
+        final_alignments = [None] * len(clean_log)
+        for k, align_result in enumerate(variant_alignments):
+            sig = tuple(str(e['concept:name']) for e in unique_traces[k])
+            for idx in variant_map[sig]:
+                final_alignments[idx] = align_result
+    else:
+        logger.info("Aligning %d traces (no variant grouping).", len(clean_log))
+        final_alignments = alignments_algorithm.apply(
+            clean_log, process_model, rim, rfm, parameters=params
+        )
+
+    method_results = {}
+    valid = [a for a in final_alignments if isinstance(a, dict) and 'cost' in a]
+    if valid:
+        f_vals = []
+        for i, align in enumerate(final_alignments):
+            if not isinstance(align, dict):
+                continue
+            if 'fitness' in align:
+                f_vals.append(float(align['fitness']))
+            else:
+                t_len = len(clean_log[i])
+                f_vals.append(max(0.0, 1.0 - (align['cost'] / (t_len + 1))))
+
+        method_results['fitness'] = {
+            'log_fitness': float(np.mean(f_vals)) if f_vals else 0.0,
+            'note': "Derived from alignments"
+        }
+        method_results['alignments'] = {
+            'total': len(valid),
+            'average_cost': float(np.mean([a['cost'] for a in valid])),
+            'note': f"Calculated on {len(valid)} traces"
+        }
+        method_results['case_analysis'] = {'cases': parse_alignments(clean_log, final_alignments)}
+
+    return method_results
+
+
+# Single source of truth for available conformance/fitness methods: the engine
+# dispatches on this dict, and the Streamlit UI builds its selectbox options
+# and help text from it, so a new method only needs an entry here.
+CONFORMANCE_METHODS = {
+    'token_replay': {
+        'handler': _fitness_token_replay,
+        'label': 'Token Replay',
+        'help': 'Fast, gives fitness & precision (no per-trace deviations).',
+    },
+    'state_equation_a_star': {
+        'handler': _fitness_state_equation_alignments,
+        'label': 'State Equation A*',
+        'help': 'Slower, gives exact per-trace deviations.',
+    },
+}
+
+
 def run_conformance_checking(
     event_log_df: pd.DataFrame,
     process_model,
@@ -126,9 +247,10 @@ def run_conformance_checking(
     max_align           : Max traces for alignment computation.
     max_prec_cases      : Max traces for precision computation.
     cores               : CPU cores (0 = all available minus one).
-    alignment_variant   : 'token_replay' for fast token-based replay fitness (no per-trace
-                          deviations), or 'state_equation_a_star' for exact alignment-based
-                          fitness with per-trace skipped/unsolicited deviations.
+    alignment_variant   : Key into CONFORMANCE_METHODS - 'token_replay' for fast
+                          token-based replay fitness (no per-trace deviations), or
+                          'state_equation_a_star' for exact alignment-based fitness
+                          with per-trace skipped/unsolicited deviations.
     enable_detailed_analysis : If True, compute precision and per-trace deviations.
     calculate_fitness   : If True, compute standalone batched fitness score.
     optimize_variants   : If True, align once per unique variant (10-100x speedup).
@@ -197,102 +319,20 @@ def run_conformance_checking(
             except Exception as e:
                 results['errors'].append(f"Precision calculation failed: {e}")
 
-        # --- 4. Fitness via alignments (state_equation_a_star) or token replay ---
-        if alignment_variant == 'token_replay':
-            try:
-                input_log = sampled_log[:max_align] if len(sampled_log) > max_align else sampled_log
-                logger.info("Calculating fitness via token-based replay on %d traces.", len(input_log))
-                tbr = pm4py.fitness_token_based_replay(
-                    input_log, process_model, initial_marking, final_marking
-                )
-                results['fitness'] = {
-                    'log_fitness': tbr.get('log_fitness', 0.0),
-                    'percentage_fit_traces': tbr.get('percentage_of_fitting_traces', 0.0),
-                    'note': "Calculated via token-based replay"
-                }
-            except Exception as e:
-                results['errors'].append(f"Token replay fitness calculation failed: {e}")
+        # --- 4. Fitness via the selected conformance method ---
+        entry = CONFORMANCE_METHODS.get(alignment_variant)
+        if entry is None:
+            valid = ', '.join(CONFORMANCE_METHODS)
+            results['errors'].append(f"Unknown conformance method '{alignment_variant}'. Valid options: {valid}.")
         else:
-            input_log = sampled_log[:max_align] if len(sampled_log) > max_align else sampled_log
-
-            # Rebuild a clean log with only string attributes to avoid PM4Py serialisation issues
-            clean_log = EventLog()
-            for trace in input_log:
-                nt = Trace()
-                nt.attributes['concept:name'] = str(trace.attributes.get('concept:name', 'Unknown'))
-                for event in trace:
-                    nt.append(Event({'concept:name': str(event['concept:name'])}))
-                clean_log.append(nt)
-
-            # Rebuild markings from net structure
-            rim = Marking()
-            rfm = Marking()
-            for p in process_model.places:
-                if not p.in_arcs:
-                    rim[p] = 1
-                if not p.out_arcs:
-                    rfm[p] = 1
-            if not rim:
-                rim[list(process_model.places)[0]] = 1
-            if not rfm:
-                rfm[list(process_model.places)[-1]] = 1
-
-            max_cores = max(1, os.cpu_count() - 1) if cores == 0 else cores
-            params = {'cores': max_cores, 'ret_tuple_as_trans_desc': True}
-
-            if optimize_variants:
-                # Group identical traces and align once per unique variant
-                variant_map: Dict[tuple, list] = {}
-                unique_traces: list = []
-
-                for i, trace in enumerate(clean_log):
-                    sig = tuple(str(e['concept:name']) for e in trace)
-                    if sig not in variant_map:
-                        variant_map[sig] = []
-                        unique_traces.append(trace)
-                    variant_map[sig].append(i)
-
-                logger.info(
-                    "Aligning %d unique variants (from %d traces).",
-                    len(unique_traces), len(clean_log)
+            try:
+                method_results = entry['handler'](
+                    sampled_log, process_model, initial_marking, final_marking,
+                    max_align=max_align, cores=cores, optimize_variants=optimize_variants
                 )
-                variant_alignments = alignments_algorithm.apply(
-                    unique_traces, process_model, rim, rfm, parameters=params
-                )
-
-                final_alignments = [None] * len(clean_log)
-                for k, align_result in enumerate(variant_alignments):
-                    sig = tuple(str(e['concept:name']) for e in unique_traces[k])
-                    for idx in variant_map[sig]:
-                        final_alignments[idx] = align_result
-            else:
-                logger.info("Aligning %d traces (no variant grouping).", len(clean_log))
-                final_alignments = alignments_algorithm.apply(
-                    clean_log, process_model, rim, rfm, parameters=params
-                )
-
-            valid = [a for a in final_alignments if isinstance(a, dict) and 'cost' in a]
-            if valid:
-                f_vals = []
-                for i, align in enumerate(final_alignments):
-                    if not isinstance(align, dict):
-                        continue
-                    if 'fitness' in align:
-                        f_vals.append(float(align['fitness']))
-                    else:
-                        t_len = len(clean_log[i])
-                        f_vals.append(max(0.0, 1.0 - (align['cost'] / (t_len + 1))))
-
-                results['fitness'] = {
-                    'log_fitness': float(np.mean(f_vals)) if f_vals else 0.0,
-                    'note': "Derived from alignments"
-                }
-                results['alignments'] = {
-                    'total': len(valid),
-                    'average_cost': float(np.mean([a['cost'] for a in valid])),
-                    'note': f"Calculated on {len(valid)} traces"
-                }
-                results['case_analysis'] = {'cases': parse_alignments(clean_log, final_alignments)}
+                results.update(method_results)
+            except Exception as e:
+                results['errors'].append(f"{entry['label']} fitness calculation failed: {e}")
 
     except Exception as e:
         results['errors'].append(f"Conformance error: {e}")
