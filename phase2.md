@@ -57,6 +57,18 @@ Keep it minimal at first — the goal is a fast, always-green gate, not exhausti
 
 Tests before CI before expansion: without a test suite, a CI workflow only checks that the code imports and lints, not that it's correct. Without CI, a test suite only protects the person who remembers to run it locally. Both need to exist before Phase 3 (extensibility refactors) and Phase 4 (new features) — refactoring the discovery/conformance dispatch or adding new analysis capability is much lower-risk once there's something to catch regressions automatically, especially given how much time can pass between sessions on this project.
 
-## Next: Phase 3 — Harden the extensibility seams
+## Phase 3 — Harden the extensibility seams
 
-Now that there's a safety net, the discovery/conformance algorithm dispatch (currently duplicated `if/elif` chains between `prox/` and `main.py`'s UI) and the `filter_steps` registry are next in line for a lower-risk refactor pass.
+**Status: Complete.**
+
+- **Discovery dispatch**: `prox/discovery.py`'s `if/elif` chain over `discovery_algo` is replaced with a `DISCOVERY_ALGORITHMS` registry (dict of `{'handler', 'label', 'help'}` per algorithm). `perform_process_discovery` now dispatches via lookup instead of branching, and an unknown key produces a clear error listing valid options instead of a bare `'Unknown discovery algorithm'` message.
+- **Conformance dispatch**: same pattern in `prox/conformance.py` — the token-replay-vs-alignments branch is now a `CONFORMANCE_METHODS` registry, with each method's logic extracted into its own function (`_fitness_token_replay`, `_fitness_state_equation_alignments`).
+- **UI now derives from the registries, not a second hardcoded list**: `main.py`'s discovery and conformance `st.selectbox` options and help text are built from `DISCOVERY_ALGORITHMS`/`CONFORMANCE_METHODS` (exported via `prox/__init__.py`) instead of separately maintained lists. Adding a new algorithm or conformance method now means adding one registry entry in `prox/` — the UI picks it up automatically, closing the "edit two files" seam described in the original status report.
+- **`filter_steps` registry**: `prox/data_manager.py`'s big `if/elif` in `filter_event_log` is split into six named handler functions (`_filter_activity`, `_filter_case_duration`, `_filter_crop`, `_filter_endpoints`, `_filter_attribute`, `_filter_top_variants`) registered in `FILTER_HANDLERS`. Unknown filter types now report the valid option list, not just the bad one.
+- **Fail-fast config validation**: `pipeline.py` now validates every `filter_steps` entry's `type` against `FILTER_HANDLERS` *before* running any filter step, instead of discovering a typo mid-run (previously step 3 of 5 failing looked like "produced an empty dataset" rather than "unknown filter type").
+- Verified with 8 new/updated tests (`tests/test_pipeline.py`, plus additions to `test_conformance.py`/`test_data_manager.py` covering the new error-listing behavior) and a live headless Streamlit boot of `main.py` to confirm the registry-driven selectboxes render and behave correctly.
+- All behavior is otherwise unchanged — this was a pure structural refactor verified against the existing Phase 2 test suite before any new tests were added, which is exactly the lower-risk-refactor payoff Phase 2 was meant to unlock.
+
+## Next: Phase 4 — Expand capability
+
+With a safety net and cleaner extensibility seams in place, the next phase is genuinely new capability rather than hardening: candidates from the original status report include full-analysis export/reporting, additional discovery algorithms (e.g. Alpha Miner, now trivial to add via `DISCOVERY_ALGORITHMS`), trace clustering/segment comparison, and incremental analysis for recurring large logs.
