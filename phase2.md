@@ -1,6 +1,15 @@
 # Phase 2 — Establish a Safety Net
 
-Context: PRoX has no automated tests, no CI, no linter enforcement, no `.gitignore`, and dependencies are pinned with bare `>=` floors and no ceilings. Phase 1 is now complete: token-based replay is genuinely implemented (`pm4py.fitness_token_based_replay`, `prox/conformance.py`), `create_analysis_config()` is fully parameterized (no more values hardcoded inside the function body), and `dfg` is exposed in the UI's discovery selectbox alongside Inductive Miner and Heuristics Miner. That pass also caught and fixed a real pm4py API-drift bug in the DFG-to-Petri-net conversion (`dfg_converter.Variants.TO_PETRI_NET` no longer exists in pm4py 2.7.23 — replaced with `VERSION_TO_PETRI_NET_ACTIVITY_DEFINES_PLACE`), which is exactly the kind of breakage the loose `>=`-only pinning below was flagged as risking. Phase 2 makes sure future changes to this codebase can be verified without re-deriving correctness by hand every time, especially given the multi-month gaps between development bursts on this project.
+**Status: Complete.**
+
+- Added `tests/` with 32 pytest tests covering `analytics.py`, `data_manager.py`, `conformance.py`, and `discovery.py` — all passing.
+- While writing the `optimize_dataframe_memory` test, found and fixed a **real, silent bug**: it checked `dtype == 'object'`, but pandas 2.x+/3.x infers plain string columns as a dedicated `str` dtype rather than `object` — so on the currently-installed pandas (3.0.3), memory optimization was a silent no-op for every run, never converting any column to `category`. Fixed with `pd.api.types.is_string_dtype()`, which correctly matches both `object` and `str` while still excluding already-categorical columns. This is a direct, concrete instance of the dependency-drift risk described below — not hypothetical.
+- Added `.github/workflows/ci.yml`: runs `pyflakes` then `pytest` on every PR and push to `main`.
+- Fixed the one pre-existing unused import (`prox/visualizer.py`'s unused `Any`) so the new lint gate starts green instead of red on day one.
+- Added `.gitignore` (`__pycache__/`, `output/`, `.venv/`, `.pytest_cache/`, etc.) and `requirements-dev.txt` (`pytest`, `pyflakes`) for local development.
+- Pinned dependencies with upper bounds one major above the currently-installed, test-verified versions (`pandas<4.0.0`, `numpy<3.0.0`, `matplotlib<4.0.0`, `seaborn<1.0.0`, `pm4py<3.0.0`, `streamlit<2.0.0`) in both `requirements.txt` and `setup.py`. Did not generate a lockfile — the upper-bound step alone was judged sufficient for now; revisit if reproducibility issues actually surface.
+
+Original context: PRoX has no automated tests, no CI, no linter enforcement, no `.gitignore`, and dependencies are pinned with bare `>=` floors and no ceilings. Phase 1 is now complete: token-based replay is genuinely implemented (`pm4py.fitness_token_based_replay`, `prox/conformance.py`), `create_analysis_config()` is fully parameterized (no more values hardcoded inside the function body), and `dfg` is exposed in the UI's discovery selectbox alongside Inductive Miner and Heuristics Miner. That pass also caught and fixed a real pm4py API-drift bug in the DFG-to-Petri-net conversion (`dfg_converter.Variants.TO_PETRI_NET` no longer exists in pm4py 2.7.23 — replaced with `VERSION_TO_PETRI_NET_ACTIVITY_DEFINES_PLACE`), which is exactly the kind of breakage the loose `>=`-only pinning below was flagged as risking. Phase 2 makes sure future changes to this codebase can be verified without re-deriving correctness by hand every time, especially given the multi-month gaps between development bursts on this project.
 
 ## 1. Test suite (`tests/`)
 
@@ -47,3 +56,7 @@ Keep it minimal at first — the goal is a fast, always-green gate, not exhausti
 ## Why this order
 
 Tests before CI before expansion: without a test suite, a CI workflow only checks that the code imports and lints, not that it's correct. Without CI, a test suite only protects the person who remembers to run it locally. Both need to exist before Phase 3 (extensibility refactors) and Phase 4 (new features) — refactoring the discovery/conformance dispatch or adding new analysis capability is much lower-risk once there's something to catch regressions automatically, especially given how much time can pass between sessions on this project.
+
+## Next: Phase 3 — Harden the extensibility seams
+
+Now that there's a safety net, the discovery/conformance algorithm dispatch (currently duplicated `if/elif` chains between `prox/` and `main.py`'s UI) and the `filter_steps` registry are next in line for a lower-risk refactor pass.
