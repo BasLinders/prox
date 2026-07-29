@@ -19,8 +19,8 @@ from .data_manager import (
     check_trace_length,
 )
 from .config import CONFIG, create_analysis_config, get_column_mappings
-from .discovery import perform_process_discovery
-from .conformance import run_conformance_checking
+from .discovery import perform_process_discovery, DISCOVERY_ALGORITHMS
+from .conformance import run_conformance_checking, CONFORMANCE_METHODS
 from .analytics import (
     get_event_log_summary,
     analyze_process_performance,
@@ -41,7 +41,9 @@ __all__ = [
     "create_analysis_config",
     "get_column_mappings",
     "perform_process_discovery",
+    "DISCOVERY_ALGORITHMS",
     "run_conformance_checking",
+    "CONFORMANCE_METHODS",
     "get_event_log_summary",
     "analyze_process_performance",
     "analyze_repeat_purchases",

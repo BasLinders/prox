@@ -89,6 +89,49 @@ def test_filter_event_log_top_variants_keeps_only_most_frequent():
     assert 'odd' not in filtered['case:concept:name'].unique()
 
 
+def test_filter_event_log_case_duration():
+    rows = [
+        ('short', 'a', pd.Timestamp('2024-01-01 00:00')),
+        ('short', 'b', pd.Timestamp('2024-01-01 00:05')),
+        ('long', 'a', pd.Timestamp('2024-01-01 00:00')),
+        ('long', 'b', pd.Timestamp('2024-01-01 05:00')),
+    ]
+    df = make_event_log(rows)
+    filtered, messages = filter_event_log(
+        df, filter_type='case_duration', min_duration=1, time_unit='hours'
+    )
+    assert filtered is not None
+    assert set(filtered['case:concept:name'].unique()) == {'long'}
+
+
+def test_filter_event_log_endpoints_keeps_matching_start():
+    rows = [
+        ('1', 'start_a', pd.Timestamp('2024-01-01 00:00')),
+        ('1', 'end', pd.Timestamp('2024-01-01 00:01')),
+        ('2', 'start_b', pd.Timestamp('2024-01-01 00:00')),
+        ('2', 'end', pd.Timestamp('2024-01-01 00:01')),
+    ]
+    df = make_event_log(rows)
+    filtered, messages = filter_event_log(df, filter_type='endpoints', start_activities=['start_a'])
+    assert filtered is not None
+    assert set(filtered['case:concept:name'].unique()) == {'1'}
+
+
+def test_filter_event_log_attribute_missing_column_returns_error(simple_event_log):
+    filtered, messages = filter_event_log(
+        simple_event_log, filter_type='attribute', attribute_col='does_not_exist', attribute_values=['x']
+    )
+    assert filtered is None
+    assert any('not found' in m.lower() for m in messages)
+
+
+def test_filter_event_log_unknown_type_lists_valid_options(simple_event_log):
+    filtered, messages = filter_event_log(simple_event_log, filter_type='bogus')
+    assert filtered is None
+    joined = ' '.join(messages).lower()
+    assert 'activity' in joined and 'top_variants' in joined
+
+
 def test_filter_event_log_empty_input_returns_error():
     filtered, messages = filter_event_log(pd.DataFrame(), filter_type='top_variants', top_n=1)
     assert filtered is None
