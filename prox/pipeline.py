@@ -106,7 +106,8 @@ def run_full_analysis(event_log_df: pd.DataFrame, config: Dict[str, Any]) -> Dic
         log_df,
         discovery_algo=disc_cfg.get("algorithm", "inductive_miner"),
         noise_threshold=disc_cfg.get("noise_threshold", 0.2),
-        dependency_threshold=disc_cfg.get("dependency_threshold", 0.5)
+        dependency_threshold=disc_cfg.get("dependency_threshold", 0.5),
+        activity_threshold=disc_cfg.get("activity_threshold", 0)
     )
 
     for msg in messages:
