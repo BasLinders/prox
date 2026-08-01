@@ -399,11 +399,22 @@ with tab_segments:
             st.write("")
             compare_btn = st.button("Compare Segments", use_container_width=True)
 
+        run_parallel = st.checkbox(
+            "Run segments in parallel", value=True,
+            help=(
+                "Runs one segment's analysis per CPU core at once instead of one "
+                "after another. Recommended for local runs (this app is not "
+                "intended for shared/hosted deployment). Each parallel segment "
+                "run is pinned to a single core internally to avoid "
+                "oversubscribing the machine."
+            )
+        )
+
         if compare_btn:
             with st.spinner(f"Running analysis per segment of '{segment_col}'..."):
                 segment_result = compare_segments(
                     raw_df, segment_col=segment_col, config=saved_config,
-                    top_n_segments=int(top_n_segments)
+                    top_n_segments=int(top_n_segments), parallel=run_parallel
                 )
             st.session_state["segment_result"] = segment_result
 
