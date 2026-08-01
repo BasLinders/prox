@@ -84,7 +84,10 @@ Tests before CI before expansion: without a test suite, a CI workflow only check
 
 ## Phase 4b — Optimization
 
-**Status: Scoped, not yet implemented.**
+**Status: In progress.** `cores` exposed in the UI (below) plus
+`compare_segments()` parallelization and pipeline profiling are complete —
+see `dev_optimization.md` for measured results and the resulting re-ranked
+next step (Streamlit caching).
 
 Went through vectorization, clustering, batching, multiprocessing, and CUDA against the actual codebase rather than in the abstract:
 
@@ -94,7 +97,7 @@ Went through vectorization, clustering, batching, multiprocessing, and CUDA agai
 - **Multiprocessing**: wired but unexposed. `prox/conformance.py` already passes a `cores` parameter all the way through to PM4Py's alignment computation (`params = {'cores': max_cores, ...}`, conformance.py:145), using PM4Py's own internal multiprocessing pool — this is not GIL-blocked at all, since separate processes each get their own interpreter. It's simply never surfaced in `main.py`'s UI, so every run defaults to single-core.
 - **CUDA: considered and rejected, not revisitable.** PRoX's expensive operations (Petri net discovery, alignment-based conformance, token replay) are combinatorial/graph algorithms, not the dense matrix math GPUs accelerate. The one place with real linear algebra (the alignment heuristic's LP relaxation) runs many small, independent per-trace solves — exactly the pattern where GPU kernel-launch/transfer overhead dominates and erases any benefit, short of research-grade batched-GPU-LP-solver work. Requiring CUDA would also mean requiring an NVIDIA GPU, directly contradicting the README's "designed to run locally on a standard laptop" goal and excluding every Mac user outright.
 
-**Proposed scope**: (1) expose `cores` as a UI control, since the wiring already exists; (2) profile the pipeline against a realistically-large synthetic log to find actual bottlenecks empirically rather than guessing further; (3) check whether precision calculation would benefit from the same variant-dedup trick alignments already use — uncertain, since precision uses a token-based method (ETConformance) that may already be fast enough by design; measure before assuming.
+**Proposed scope**: (1) expose `cores` as a UI control, since the wiring already exists — **done**; (2) profile the pipeline against a realistically-large synthetic log to find actual bottlenecks empirically rather than guessing further — **done, see `dev_optimization.md`**; (3) check whether precision calculation would benefit from the same variant-dedup trick alignments already use — **resolved by (2)'s profiling data: deprioritized, precision/token-replay conformance is not the bottleneck at scale (discovery and visualisation are).**
 
 ## Phase 5 — Incremental analysis (flagged, not scoped)
 
