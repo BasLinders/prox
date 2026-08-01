@@ -13,6 +13,7 @@ from prox import (
     run_full_analysis,
     format_business_report,
     generate_html_report,
+    generate_segment_comparison_report,
     compare_segments,
     DISCOVERY_ALGORITHMS,
     CONFORMANCE_METHODS,
@@ -460,6 +461,13 @@ with tab_segments:
                         "precision_score": "{:.1%}", "repeat_rate": "{:.1f}%"
                     }),
                     use_container_width=True
+                )
+
+                st.download_button(
+                    "Download Segment Comparison Report",
+                    data=generate_segment_comparison_report(segment_result),
+                    file_name="prox_segment_comparison_report.html",
+                    mime="text/html",
                 )
 
                 st.subheader("Happy Path per Segment")
