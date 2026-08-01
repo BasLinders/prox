@@ -40,6 +40,20 @@ def test_generate_html_report_contains_plain_language_executive_summary():
     assert "→" in report
 
 
+def test_generate_html_report_images_are_zoomable():
+    """Process map images (the flow charts) must be clickable to view full-size,
+    since they're unreadable at the embedded thumbnail size."""
+    df = make_simple_variant_log(n_cases=3)
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+    results = run_full_analysis(df, config=config)
+    assert results is not None
+
+    report = generate_html_report(results)
+    assert 'class="zoomable"' in report
+    assert 'id="lightbox-overlay"' in report
+    assert 'id="lightbox-img"' in report
+
+
 def test_generate_html_report_handles_missing_sections_gracefully():
     report = generate_html_report({})
     assert report.startswith("<!doctype html>")
@@ -89,6 +103,7 @@ def test_generate_segment_comparison_report_contains_key_sections(tmp_path):
     assert "Segment Comparison" in report
     assert "mobile" in report
     assert "desktop" in report
+    assert 'class="zoomable"' in report
 
 
 def test_generate_segment_comparison_report_handles_no_data():
