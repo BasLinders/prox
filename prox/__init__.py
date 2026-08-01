@@ -28,7 +28,7 @@ from .analytics import (
     format_business_report,
 )
 from .visualizer import visualize_focused_insights, export_results
-from .report import generate_html_report
+from .report import generate_html_report, generate_segment_comparison_report
 from .segments import compare_segments
 
 __all__ = [
@@ -53,5 +53,6 @@ __all__ = [
     "visualize_focused_insights",
     "export_results",
     "generate_html_report",
+    "generate_segment_comparison_report",
     "compare_segments",
 ]
