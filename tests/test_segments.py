@@ -73,3 +73,45 @@ def test_compare_segments_writes_to_distinct_output_folders(tmp_path):
     written_folders = {p.name for p in tmp_path.iterdir() if p.is_dir()}
     assert any('mobile' in name for name in written_folders)
     assert any('desktop' in name for name in written_folders)
+
+
+def test_compare_segments_sequential_matches_parallel_shape(tmp_path):
+    df = make_segmented_log()
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+
+    result = compare_segments(
+        df, segment_col='device', config=config, parallel=False, output_folder=str(tmp_path)
+    )
+
+    assert result['errors'] == []
+    assert set(result['comparison_table'].keys()) == {'mobile', 'desktop', 'tablet'}
+    assert result['comparison_table']['mobile']['cases'] == 3
+    assert result['comparison_table']['desktop']['cases'] == 2
+    assert result['comparison_table']['tablet']['cases'] == 1
+
+
+def test_compare_segments_parallel_and_sequential_agree_on_comparison_table(tmp_path):
+    df = make_segmented_log()
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+
+    parallel_result = compare_segments(
+        df, segment_col='device', config=config, parallel=True, output_folder=str(tmp_path / 'p')
+    )
+    sequential_result = compare_segments(
+        df, segment_col='device', config=config, parallel=False, output_folder=str(tmp_path / 's')
+    )
+
+    assert parallel_result['comparison_table'] == sequential_result['comparison_table']
+
+
+def test_compare_segments_single_segment_skips_pool(tmp_path):
+    """With only one segment there's nothing to parallelize; should not touch a worker pool."""
+    df = make_segmented_log()
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+
+    result = compare_segments(
+        df, segment_col='device', config=config, top_n_segments=1, parallel=True, output_folder=str(tmp_path)
+    )
+
+    assert result['errors'] == []
+    assert set(result['comparison_table'].keys()) == {'mobile'}

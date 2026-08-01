@@ -11,8 +11,9 @@ A modular process mining tool for analysing website customer journeys. Upload an
 - **Bottleneck Analysis** - Activity and transition durations ranked by impact score; overall process health score.
 - **Variant Analysis** - Top-20 variants with frequency, coverage, and duration statistics.
 - **Business Insights** - Repeat buyer detection, inter-purchase timing, and revenue multiplier (repeat vs. one-time buyers).
+- **Segment Comparison** - Split the log by any low-cardinality column (e.g. device, traffic source) and compare health score, fitness, precision, repeat rate, and happy path side by side, optionally run in parallel across CPU cores for local use.
 - **Memory Efficient** - Chunked CSV loading for files up to 500 MB; categorical downcasting to reduce RAM usage.
-- **Streamlit UI** - All results presented in a five-tab browser interface; no notebook required.
+- **Streamlit UI** - All results presented in a six-tab browser interface; no notebook required.
 
 ---
 
@@ -46,7 +47,7 @@ This opens the app in your browser. From there:
 1. **Upload** a CSV event log using the sidebar file uploader.
 2. **Configure** the discovery algorithm, noise threshold, conformance method, and sample size.
 3. Click **Run Analysis**.
-4. Explore results across five tabs: Process Maps, Variants, Bottlenecks, Conformance, and Business Insights.
+4. Explore results across six tabs: Process Maps, Variants, Bottlenecks, Conformance, Business Insights, and Segment Comparison.
 
 ### Using the engine directly
 
@@ -139,9 +140,12 @@ prox/               Engine package — import this from any Python script
 ├── conformance.py  Fitness, precision, alignment-based trace deviations
 ├── analytics.py    Performance metrics, bottlenecks, repeat purchase analysis
 ├── visualizer.py   BPMN and Petri net diagram generation
+├── report.py       Self-contained HTML report export
+├── segments.py     Segment comparison — runs the pipeline per segment, optionally in parallel
 └── pipeline.py     Orchestrator — runs all stages in sequence
 
 main.py             Streamlit app (UI layer only)
+scripts/            Dev tooling (e.g. pipeline profiling), not part of the installable package
 output/             Generated PNGs and CSVs (created on first run)
 ```
 
