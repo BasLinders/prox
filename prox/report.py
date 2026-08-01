@@ -16,6 +16,7 @@ _STYLE = """
   .metric .label { font-size: 0.8rem; color: #666; }
   .metric .value { font-size: 1.4rem; font-weight: 600; }
   img { max-width: 100%; border: 1px solid #ddd; border-radius: 4px; }
+  img.zoomable { cursor: zoom-in; }
   .images { display: flex; gap: 1rem; flex-wrap: wrap; }
   .images > div { flex: 1; min-width: 300px; }
   pre { background: #f5f5f5; padding: 1rem; border-radius: 6px; white-space: pre-wrap; }
@@ -27,6 +28,38 @@ _STYLE = """
   .badge.good { background: #e6f4ea; color: #1e7e34; }
   .badge.warn { background: #fff8e1; color: #8a6100; }
   .badge.bad { background: #fdecea; color: #b3261e; }
+  #lightbox-overlay {
+    display: none; position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0, 0, 0, 0.85); align-items: center; justify-content: center;
+    padding: 3rem; cursor: zoom-out;
+  }
+  #lightbox-overlay.active { display: flex; }
+  #lightbox-overlay img { max-width: 95vw; max-height: 95vh; border: none; border-radius: 4px; }
+"""
+
+# Vanilla JS lightbox: click any .zoomable image to view it full-size, click
+# again (or press Escape) to close. No external dependencies, since this
+# report is a standalone file with no guaranteed internet access.
+_LIGHTBOX_HTML = """
+<div id="lightbox-overlay">
+  <img id="lightbox-img" src="" alt="Enlarged view">
+</div>
+<script>
+document.addEventListener('click', function (e) {
+  var overlay = document.getElementById('lightbox-overlay');
+  if (e.target.classList.contains('zoomable')) {
+    document.getElementById('lightbox-img').src = e.target.src;
+    overlay.classList.add('active');
+  } else if (e.target === overlay || e.target.id === 'lightbox-img') {
+    overlay.classList.remove('active');
+  }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') {
+    document.getElementById('lightbox-overlay').classList.remove('active');
+  }
+});
+</script>
 """
 
 
@@ -40,6 +73,7 @@ def _html_shell(title: str, body: str) -> str:
 </head>
 <body>
 {body}
+{_LIGHTBOX_HTML}
 </body>
 </html>"""
 
@@ -195,7 +229,7 @@ def generate_html_report(results: Dict[str, Any]) -> str:
             ('revenue', 'Avg. Lifetime Value'),
         ]
         chart_divs = [
-            f'<div><h3>{caption}</h3><img src="{img}"></div>'
+            f'<div><h3>{caption}</h3><img class="zoomable" title="Click to enlarge" src="{img}"></div>'
             for key, caption in chart_captions
             if (img := _embed_image(charts.get(key)))
         ]
@@ -220,8 +254,8 @@ def generate_html_report(results: Dict[str, Any]) -> str:
 
 <h2>Process Maps</h2>
 <div class="images">
-  <div><h3>Happy Path</h3>{f'<img src="{happy_path_img}">' if happy_path_img else '<p>Not available.</p>'}</div>
-  <div><h3>Main Process Flow</h3>{f'<img src="{main_flow_img}">' if main_flow_img else '<p>Not available.</p>'}</div>
+  <div><h3>Happy Path</h3>{f'<img class="zoomable" title="Click to enlarge" src="{happy_path_img}">' if happy_path_img else '<p>Not available.</p>'}</div>
+  <div><h3>Main Process Flow</h3>{f'<img class="zoomable" title="Click to enlarge" src="{main_flow_img}">' if main_flow_img else '<p>Not available.</p>'}</div>
 </div>
 
 <h2>Conformance</h2>
@@ -326,7 +360,7 @@ has the healthiest process (health score <strong>{best_health[1].get('health_sco
 
     image_divs = [
         f'<div><h3>{html.escape(str(value))}</h3>'
-        + (f'<img src="{img}">' if (img := _embed_image(seg_results.get('visualizations', {}).get('happy_path'))) else '<p>Not available.</p>')
+        + (f'<img class="zoomable" title="Click to enlarge" src="{img}">' if (img := _embed_image(seg_results.get('visualizations', {}).get('happy_path'))) else '<p>Not available.</p>')
         + '</div>'
         for value, seg_results in segments.items()
     ]
