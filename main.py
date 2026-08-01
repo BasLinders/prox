@@ -372,6 +372,7 @@ with tab_biz:
     if biz:
         metrics = biz.get("metrics", {})
         rev = metrics.get("revenue_stats", {})
+        cart = metrics.get("cart_abandonment")
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total Buyers", f"{metrics.get('total_buyers', 0):,}")
@@ -383,15 +384,40 @@ with tab_biz:
             help="Average revenue: repeat buyers vs. one-time buyers."
         )
 
+        c5, c6 = st.columns(2)
+        c5.metric("Average Order Value", f"{metrics.get('average_order_value', 0):,.2f}")
+        c6.metric(
+            "Cart Abandonment Rate",
+            f"{cart['abandonment_rate']:.1f}%" if cart else "N/A",
+            help="Share of add-to-cart sessions that didn't go on to purchase."
+        )
+
         charts = {k: v for k, v in biz.get("charts", {}).items() if v and os.path.exists(v)}
         if charts:
-            chart_cols = st.columns(len(charts))
-            for col, (name, path) in zip(chart_cols, charts.items()):
-                with col:
-                    st.image(path, caption=name.replace("_", " ").title(), use_container_width=True)
+            chart_items = list(charts.items())
+            for i in range(0, len(chart_items), 3):
+                row = chart_items[i:i + 3]
+                for col, (name, path) in zip(st.columns(len(row)), row):
+                    with col:
+                        st.image(path, caption=name.replace("_", " ").title(), use_container_width=True)
 
         with st.expander("Full Report"):
             st.text(format_business_report(biz))
+
+        funnel = results.get("funnel_analysis")
+        if funnel and funnel.get("stages"):
+            st.subheader("Conversion Funnel")
+            funnel_df = pd.DataFrame.from_dict(funnel["stages"], orient="index")
+            funnel_df.index.name = "Stage"
+            st.bar_chart(funnel_df["cases_reached"])
+            st.dataframe(
+                funnel_df.style.format({
+                    "pct_of_total": "{:.1f}%", "pct_of_previous_stage": "{:.1f}%", "drop_off_pct": "{:.1f}%"
+                }),
+                use_container_width=True
+            )
+            if funnel.get("biggest_drop_off"):
+                st.caption(f"Biggest drop-off: **{funnel['biggest_drop_off']}**")
     else:
         st.info(
             "No business insight data. "

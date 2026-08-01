@@ -5,7 +5,9 @@ from typing import Dict, Any
 
 from .discovery import perform_process_discovery
 from .conformance import run_conformance_checking
-from .analytics import analyze_process_performance, get_event_log_summary, analyze_repeat_purchases
+from .analytics import (
+    analyze_process_performance, get_event_log_summary, analyze_repeat_purchases, analyze_conversion_funnel
+)
 from .visualizer import visualize_focused_insights, export_results
 from .data_manager import filter_event_log, FILTER_HANDLERS
 
@@ -236,12 +238,20 @@ def run_full_analysis(
         log_df,
         output_folder=output_folder,
         user_col=biz_cfg.get("user_col", "user_id"),
-        purchase_values=biz_cfg.get("purchase_values", ['purchase', 'order']),
+        purchase_values=biz_cfg.get("purchase_values", ['purchase', 'has_purchase']),
+        cart_values=biz_cfg.get("cart_values"),
         revenue_col=biz_cfg.get("revenue_col", "event_value")
     )
 
     if repeat_stats:
         pipeline_results['repeat_purchase_analysis'] = repeat_stats
+
+    funnel_stats = analyze_conversion_funnel(
+        log_df,
+        funnel_steps=biz_cfg.get("funnel_steps"),
+    )
+    if funnel_stats.get('stages'):
+        pipeline_results['funnel_analysis'] = funnel_stats
 
     logger.info("=" * 60)
     logger.info("COMPLETE: Process Mining Pipeline")
