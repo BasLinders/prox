@@ -55,7 +55,7 @@ This opens PRoX in your browser. From there:
 1. **Upload** a CSV event log using the sidebar file uploader.
 2. **Configure** the discovery algorithm, noise threshold, conformance method, and sample size in the sidebar.
 3. Click **Run Analysis**.
-4. Explore results across six tabs: Process Maps, Variants, Bottlenecks, Conformance, Business Insights, and Segment Comparison.
+4. Explore results across seven tabs: Process Maps, Variants, Bottlenecks, Conformance, Funnel, Business Insights, and Segment Comparison.
 
 ### Required Columns
 
@@ -65,7 +65,7 @@ Your CSV must contain at least these three columns (names are auto-detected, see
 * **Activity Name:** (e.g., `event_name`, `activity`, `action`)
 * **Timestamp:** (e.g., `timestamp`, `created_at`, `datetime`)
 
-Optional columns (`price`/`revenue`, `purchase`/`transaction`, `page_type`, `category`) unlock additional analytics — see `README.md` for the full table.
+Optional columns (`price`/`revenue`, `purchase`/`transaction`, `add_to_cart`, `page_type`, `category`) unlock additional analytics — see `README.md` for the full table.
 
 ---
 

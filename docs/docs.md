@@ -54,6 +54,7 @@
 | **Process Discovery** | Active | Inductive Miner or Heuristics Miner generates the process model and "Happy Path" BPMN. |
 | **Conformance Checking** | Active | Token Replay (fast) or State Equation A\* (per-trace deviations). |
 | **Bottleneck Analysis** | Active | Activity/transition durations ranked by impact score, plus an overall process health score. |
-| **Business Insights** | Active | Repeat purchase rate, inter-purchase timing, and revenue multiplier. |
+| **Business Insights** | Active | Repeat purchase rate, inter-purchase timing, revenue multiplier, average order value, cart abandonment rate, category revenue breakdown, and revenue-over-time trend. |
+| **Funnel Analysis** | Active | Conversion/drop-off rate across a user-defined or auto-derived sequence of activities, for any process (not e-commerce-specific). |
 
 PRoX is pure Python — there is no Cython/compiled component to build or maintain.

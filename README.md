@@ -10,10 +10,11 @@ A modular process mining tool for analysing website customer journeys. Upload an
 - **Conformance Checking** - Token Replay for fast fitness and precision scores; State Equation A\* for exact per-trace deviations (skipped and unsolicited activities).
 - **Bottleneck Analysis** - Activity and transition durations ranked by impact score; overall process health score.
 - **Variant Analysis** - Top-20 variants with frequency, coverage, and duration statistics.
-- **Business Insights** - Repeat buyer detection, inter-purchase timing, and revenue multiplier (repeat vs. one-time buyers).
+- **Business Insights** - Repeat buyer detection, inter-purchase timing, revenue multiplier (repeat vs. one-time buyers), average order value, cart abandonment rate, category-level revenue breakdown, and revenue-over-time trend.
+- **Funnel Analysis** - Conversion/drop-off rate across any sequence of activities you define, in any industry (not just e-commerce) — or let PRoX auto-derive a likely order from the data as a starting point.
 - **Segment Comparison** - Split the log by any low-cardinality column (e.g. device, traffic source) and compare health score, fitness, precision, repeat rate, and happy path side by side, optionally run in parallel across CPU cores for local use.
 - **Memory Efficient** - Chunked CSV loading for files up to 500 MB; categorical downcasting to reduce RAM usage.
-- **Streamlit UI** - All results presented in a six-tab browser interface; no notebook required.
+- **Streamlit UI** - All results presented in a seven-tab browser interface; no notebook required.
 
 ---
 
@@ -47,7 +48,7 @@ This opens the app in your browser. From there:
 1. **Upload** a CSV event log using the sidebar file uploader.
 2. **Configure** the discovery algorithm, noise threshold, conformance method, and sample size.
 3. Click **Run Analysis**.
-4. Explore results across six tabs: Process Maps, Variants, Bottlenecks, Conformance, Business Insights, and Segment Comparison.
+4. Explore results across seven tabs: Process Maps, Variants, Bottlenecks, Conformance, Funnel, Business Insights, and Segment Comparison.
 
 ### Using the engine directly
 
@@ -68,7 +69,7 @@ config = create_analysis_config(
 results = run_full_analysis(df, config)
 ```
 
-`results` is a plain dict with keys: `log_summary`, `model`, `conformance`, `performance`, `visualizations`, `repeat_purchase_analysis`.
+`results` is a plain dict with keys: `log_summary`, `model`, `conformance`, `performance`, `visualizations`, `repeat_purchase_analysis`, `funnel_analysis`.
 
 ---
 
@@ -89,10 +90,11 @@ Optional columns that unlock additional analytics:
 
 | Column | Unlocks |
 |---|---|
-| `price` / `revenue` / `event_value` | Revenue metrics in Business Insights |
+| `price` / `revenue` / `event_value` | Revenue metrics in Business Insights (AOV, revenue trend, value multiplier) |
 | `purchase` / `transaction` | Repeat buyer detection, crop filter |
+| `add_to_cart` | Cart abandonment rate |
 | `page_type` / `screen_class` | Automatic `page_view` label refinement |
-| `category` | Category-level filters |
+| `category` | Category-level filters and revenue breakdown |
 
 ---
 
@@ -160,6 +162,9 @@ output/             Generated PNGs and CSVs (created on first run)
 | **Health Score** | Composite score (0-100) penalising high duration variability and a large bottleneck ratio. |
 | **Repeat Rate** | Percentage of identified buyers who made more than one purchase. |
 | **Value Multiplier** | Average lifetime revenue: repeat buyers ÷ one-time buyers. |
+| **Average Order Value** | Mean revenue per completed purchase. |
+| **Cart Abandonment Rate** | Percentage of add-to-cart sessions that didn't go on to purchase. |
+| **Funnel Drop-off** | Percentage of cases that reached a funnel stage but didn't continue to the next one. |
 
 ---
 
