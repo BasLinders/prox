@@ -15,6 +15,7 @@ from prox import (
     generate_html_report,
     generate_segment_comparison_report,
     compare_segments,
+    analyze_conversion_funnel,
     DISCOVERY_ALGORITHMS,
     CONFORMANCE_METHODS,
 )
@@ -123,7 +124,7 @@ with st.sidebar:
     st.divider()
     run_btn = st.button("Run Analysis", type="primary", use_container_width=True)
     if st.button("Clear Results", use_container_width=True):
-        for key in ("results", "df", "load_messages"):
+        for key in ("results", "df", "load_messages", "segment_result", "funnel_result"):
             st.session_state.pop(key, None)
         st.rerun()
 
@@ -215,11 +216,12 @@ if summary:
 
 st.divider()
 
-tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_biz, tab_segments = st.tabs([
+tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_segments = st.tabs([
     "Process Maps",
     "Variants",
     "Bottlenecks",
     "Conformance",
+    "Funnel",
     "Business Insights",
     "Segment Comparison",
 ])
@@ -365,6 +367,81 @@ with tab_conf:
         )
 
 # ---------------------------------------------------------------------------
+# Tab: Funnel
+# ---------------------------------------------------------------------------
+with tab_funnel:
+    st.caption(
+        "Define the funnel that matters for your process, in any industry - not just "
+        "e-commerce. Pick the activities in the order they should occur, and PRoX shows "
+        "how many cases reach each stage and where the biggest drop-off is."
+    )
+
+    raw_df = st.session_state.get("df")
+    if raw_df is None or "concept:name" not in raw_df.columns:
+        st.info("Run an analysis first to enable funnel analysis.")
+    else:
+        if "funnel_result" not in st.session_state:
+            st.session_state["funnel_result"] = results.get("funnel_analysis")
+
+        activities = sorted(raw_df["concept:name"].dropna().astype(str).unique().tolist())
+
+        mode = st.radio(
+            "Funnel definition",
+            ["Define manually", "Auto-detect from data"],
+            horizontal=True,
+            help=(
+                "Manual: pick activities in the order they should occur - full control, "
+                "works for any process. Auto-detect: PRoX infers a likely order from each "
+                "activity's typical position within a case; a rough starting point, not a "
+                "substitute for defining the funnel yourself."
+            )
+        )
+
+        funnel_steps = None
+        if mode == "Define manually":
+            funnel_steps = st.multiselect(
+                "Funnel steps",
+                options=activities,
+                help="Activities are added to the funnel in the order you select them."
+            )
+            if funnel_steps:
+                st.caption("Funnel order: " + " → ".join(funnel_steps))
+
+        run_funnel_btn = st.button("Run Funnel Analysis", use_container_width=True)
+
+        if run_funnel_btn:
+            if mode == "Define manually" and not funnel_steps:
+                st.warning("Select at least one activity to define a funnel.")
+            else:
+                with st.spinner("Computing funnel..."):
+                    st.session_state["funnel_result"] = analyze_conversion_funnel(
+                        raw_df, funnel_steps=funnel_steps
+                    )
+
+        funnel_result = st.session_state.get("funnel_result")
+        if funnel_result:
+            for err in funnel_result.get("errors", []):
+                st.error(err)
+
+            stages = funnel_result.get("stages", {})
+            if stages:
+                funnel_df = pd.DataFrame.from_dict(stages, orient="index")
+                funnel_df.index.name = "Stage"
+                st.bar_chart(funnel_df["cases_reached"])
+                st.dataframe(
+                    funnel_df.style.format({
+                        "pct_of_total": "{:.1f}%", "pct_of_previous_stage": "{:.1f}%", "drop_off_pct": "{:.1f}%"
+                    }),
+                    use_container_width=True
+                )
+                if funnel_result.get("biggest_drop_off"):
+                    st.caption(f"Biggest drop-off: **{funnel_result['biggest_drop_off']}**")
+            else:
+                st.info("No funnel stages could be computed from the selected steps.")
+        else:
+            st.info("Configure the funnel above and click **Run Funnel Analysis**.")
+
+# ---------------------------------------------------------------------------
 # Tab 5: Business Insights
 # ---------------------------------------------------------------------------
 with tab_biz:
@@ -403,21 +480,6 @@ with tab_biz:
 
         with st.expander("Full Report"):
             st.text(format_business_report(biz))
-
-        funnel = results.get("funnel_analysis")
-        if funnel and funnel.get("stages"):
-            st.subheader("Conversion Funnel")
-            funnel_df = pd.DataFrame.from_dict(funnel["stages"], orient="index")
-            funnel_df.index.name = "Stage"
-            st.bar_chart(funnel_df["cases_reached"])
-            st.dataframe(
-                funnel_df.style.format({
-                    "pct_of_total": "{:.1f}%", "pct_of_previous_stage": "{:.1f}%", "drop_off_pct": "{:.1f}%"
-                }),
-                use_container_width=True
-            )
-            if funnel.get("biggest_drop_off"):
-                st.caption(f"Biggest drop-off: **{funnel['biggest_drop_off']}**")
     else:
         st.info(
             "No business insight data. "
@@ -425,7 +487,7 @@ with tab_biz:
         )
 
 # ---------------------------------------------------------------------------
-# Tab 6: Segment Comparison
+# Tab: Segment Comparison
 # ---------------------------------------------------------------------------
 with tab_segments:
     raw_df = st.session_state.get("df")
