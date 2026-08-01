@@ -1,3 +1,4 @@
+import io
 import logging
 import os
 
@@ -25,6 +26,42 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+
+@st.cache_data(show_spinner=False)
+def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, chunk_size):
+    """Loads + validates the CSV and applies label refinement/memory optimization.
+    Cached on file content and loader params so re-running with the same
+    upload (e.g. only sidebar options changed) skips CSV parsing entirely.
+    """
+    df, messages, has_category = load_and_validate_csv(
+        io.BytesIO(file_bytes),
+        max_file_size_mb=max_file_size_mb,
+        chunk_threshold_mb=chunk_threshold_mb,
+        chunk_size=chunk_size,
+    )
+    if df is None:
+        return None, None, messages, has_category
+
+    df_ready = df.copy()
+    for col in df_ready.select_dtypes(include=["category"]).columns:
+        df_ready[col] = df_ready[col].astype("object")
+
+    if "page_type" in df_ready.columns:
+        df_ready = refine_activity_labels(df_ready, target_activity="page_view", context_column="page_type")
+
+    optimize_dataframe_memory(df_ready)
+
+    return df, df_ready, messages, has_category
+
+
+@st.cache_resource(show_spinner=False)
+def _cached_run_full_analysis(df_ready, config, output_folder="output"):
+    """Runs the full pipeline. Cached on the input data + config, so re-running
+    with identical settings (e.g. clicking Run Analysis again) is instant
+    instead of redoing filtering, discovery, conformance, etc. from scratch.
+    """
+    return run_full_analysis(df_ready, config=config, output_folder=output_folder)
 
 # ---------------------------------------------------------------------------
 # Sidebar - configuration
@@ -114,11 +151,11 @@ if run_btn:
     data_loading_cfg = config["data_loading"]
 
     with st.spinner("Loading and validating data..."):
-        df, messages, has_category = load_and_validate_csv(
-            uploaded_file,
-            max_file_size_mb=data_loading_cfg["max_file_size_mb"],
-            chunk_threshold_mb=data_loading_cfg["chunk_threshold_mb"],
-            chunk_size=data_loading_cfg["chunk_size"],
+        df, df_ready, messages, has_category = _cached_load_and_prepare(
+            uploaded_file.getvalue(),
+            data_loading_cfg["max_file_size_mb"],
+            data_loading_cfg["chunk_threshold_mb"],
+            data_loading_cfg["chunk_size"],
         )
 
     st.session_state["load_messages"] = messages
@@ -132,18 +169,8 @@ if run_btn:
                 st.warning(msg)
         st.stop()
 
-    # Pre-processing: convert category columns back to object for label editing
-    df_ready = df.copy()
-    for col in df_ready.select_dtypes(include=["category"]).columns:
-        df_ready[col] = df_ready[col].astype("object")
-
-    if "page_type" in df_ready.columns:
-        df_ready = refine_activity_labels(df_ready, target_activity="page_view", context_column="page_type")
-
-    optimize_dataframe_memory(df_ready)
-
     with st.spinner("Running process mining pipeline... This may take a minute."):
-        results = run_full_analysis(df_ready, config=config)
+        results = _cached_run_full_analysis(df_ready, config)
 
     if results is None:
         st.error("Analysis failed. Check the application logs for details.")
