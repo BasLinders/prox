@@ -169,6 +169,14 @@ def _load_csv_chunked(uploaded_file, chunk_size: int = 50000) -> pd.DataFrame:
     return pd.concat(chunks, ignore_index=True)
 
 
+
+# pm4py.convert_to_event_log() requires case:concept:name and concept:name to be
+# plain string dtype, not category — both are structurally low-cardinality
+# (every case has multiple events, activities repeat by nature), so they'd
+# otherwise get swept up by the category-downcasting below and break discovery.
+_PM4PY_REQUIRED_STRING_COLUMNS = frozenset(['case:concept:name', 'concept:name'])
+
+
 def optimize_dataframe_memory(df: pd.DataFrame) -> pd.DataFrame:
     """Converts low-cardinality string columns to category dtype to reduce RAM usage.
 
@@ -176,6 +184,8 @@ def optimize_dataframe_memory(df: pd.DataFrame) -> pd.DataFrame:
     infers plain string columns as a dedicated 'str' dtype rather than 'object'.
     """
     for col in df.columns:
+        if col in _PM4PY_REQUIRED_STRING_COLUMNS:
+            continue
         if pd.api.types.is_string_dtype(df[col].dtype):
             if len(df[col].unique()) / len(df[col]) < 0.5:
                 df[col] = df[col].astype('category')

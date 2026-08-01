@@ -175,6 +175,19 @@ def test_optimize_dataframe_memory_downcasts_low_cardinality_only():
     assert str(df['high_cardinality'].dtype) != 'category'
 
 
+def test_optimize_dataframe_memory_never_categorizes_pm4py_required_columns():
+    """case:concept:name and concept:name must stay string dtype - pm4py.convert_to_event_log()
+    rejects category dtype, and both columns are structurally low-cardinality (every case has
+    multiple events, activities repeat), so they'd otherwise always get swept into category."""
+    df = pd.DataFrame({
+        'case:concept:name': ['1', '1', '2', '2'],
+        'concept:name': ['a', 'b', 'a', 'b'],
+    })
+    optimize_dataframe_memory(df)
+    assert str(df['case:concept:name'].dtype) != 'category'
+    assert str(df['concept:name'].dtype) != 'category'
+
+
 # --- refine_activity_labels ---
 
 def test_refine_activity_labels_appends_context():
