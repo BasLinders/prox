@@ -420,26 +420,34 @@ def analyze_repeat_purchases(
     timestamp_col: str = "time:timestamp",
     revenue_col: str = "event_value",
     case_col: str = "case:concept:name",
-    purchase_values=None
+    purchase_values=None,
+    cart_values=None,
 ) -> Dict[str, Any]:
     """
     Identifies repeat buyers, computes loyalty metrics, inter-purchase timing,
-    and revenue lift from repeat customers. Saves up to three charts to output_folder.
+    cart abandonment, average order value, category revenue breakdown, and a
+    revenue-over-time trend. Saves charts to output_folder.
 
     Returns dict with 'metrics' and 'charts' keys.
     """
     logger.info("Analyzing repeat purchases.")
 
-    empty = {
-        "metrics": {"total_buyers": 0, "repeat_rate": 0, "avg_days_between": 0,
-                    "median_days_between": 0, "revenue_stats": {}},
-        "charts": {}
+    empty_metrics = {
+        "total_buyers": 0, "repeat_rate": 0, "avg_days_between": 0,
+        "median_days_between": 0, "revenue_stats": {}, "average_order_value": 0.0,
+        "cart_abandonment": None, "category_breakdown": {}, "revenue_trend": {},
     }
+    empty = {"metrics": empty_metrics, "charts": {}}
 
     if purchase_values is None:
-        purchase_values = ['purchase', 'order', 'has_purchase', 'payment', 'transaction']
+        purchase_values = ['purchase', 'has_purchase']
     elif isinstance(purchase_values, str):
         purchase_values = [purchase_values]
+
+    if cart_values is None:
+        cart_values = ['add_to_cart', 'add_to_basket']
+    elif isinstance(cart_values, str):
+        cart_values = [cart_values]
 
     os.makedirs(output_folder, exist_ok=True)
     cols_map = {c.lower(): c for c in df.columns}
@@ -489,7 +497,11 @@ def analyze_repeat_purchases(
     df = df.copy()
     df[real_time_col] = pd.to_datetime(df[real_time_col], utc=True)
 
-    # --- Purchase detection (three strategies, combined) ---
+    # --- Purchase detection (activity name or an explicit flag column) ---
+    # Revenue/price values alone are deliberately NOT treated as purchase evidence:
+    # GA4-style logs commonly attach event_value/price to browsing events too
+    # (view_item, add_to_cart), not just completed transactions, so "revenue > 0
+    # somewhere in this case" previously misclassified cart-abandoners as buyers.
     pattern = '|'.join([p.lower() for p in purchase_values])
     mask_text = df[real_activity_col].astype(str).str.lower().str.contains(pattern, na=False)
 
@@ -504,25 +516,67 @@ def analyze_repeat_purchases(
         except Exception:
             pass
 
-    mask_rev = pd.Series(False, index=df.index)
-    if real_rev_col:
+    purchase_row_mask = mask_text | mask_col
+    purchase_case_ids = df.loc[purchase_row_mask, real_case_col].unique()
+
+    # --- Cart detection (activity name or an explicit flag column) ---
+    # Computed independently of purchase detection so abandonment can still be
+    # reported even when zero purchases exist (100% abandonment).
+    cart_pattern = '|'.join([c.lower() for c in cart_values])
+    mask_cart_text = df[real_activity_col].astype(str).str.lower().str.contains(cart_pattern, na=False)
+
+    mask_cart_col = pd.Series(False, index=df.index)
+    for flag_col in [c for c in df.columns if 'cart' in c.lower() or 'basket' in c.lower()]:
+        if flag_col == real_activity_col:
+            continue
         try:
-            mask_rev = pd.to_numeric(df[real_rev_col], errors='coerce').fillna(0) > 0
+            hits = pd.to_numeric(df[flag_col], errors='coerce').fillna(0) > 0
+            if hits.sum() > 0:
+                mask_cart_col = mask_cart_col | hits
         except Exception:
             pass
 
-    purchase_case_ids = df[mask_text | mask_col | mask_rev][real_case_col].unique()
+    cart_case_ids = set(df.loc[mask_cart_text | mask_cart_col, real_case_col].unique())
+    cart_abandonment = None
+    if cart_case_ids:
+        purchased_cart_cases = cart_case_ids & set(purchase_case_ids)
+        abandoned = len(cart_case_ids) - len(purchased_cart_cases)
+        cart_abandonment = {
+            "cases_added_to_cart": len(cart_case_ids),
+            "cases_purchased_after_cart": len(purchased_cart_cases),
+            "abandonment_rate": (abandoned / len(cart_case_ids)) * 100,
+        }
+
     if len(purchase_case_ids) == 0:
+        if real_rev_col:
+            try:
+                has_untagged_revenue = pd.to_numeric(df[real_rev_col], errors='coerce').fillna(0).gt(0).any()
+            except Exception:
+                has_untagged_revenue = False
+            if has_untagged_revenue:
+                logger.warning(
+                    "No activity matched purchase_values %s and no purchase flag column was found, "
+                    "but '%s' has positive values elsewhere in the log. Revenue alone is not treated "
+                    "as purchase evidence, since it's commonly present on browsing events too - add a "
+                    "'purchase'/'has_purchase' labelled activity or an explicit purchase flag column "
+                    "to enable this analysis.",
+                    purchase_values, real_rev_col
+                )
         logger.info("No purchase cases identified.")
-        return empty
+        empty_result = {**empty, "metrics": {**empty_metrics, "cart_abandonment": cart_abandonment}}
+        return empty_result
 
     logger.info("Found %d unique purchase sessions.", len(purchase_case_ids))
 
-    purchase_traces = df[df[real_case_col].isin(purchase_case_ids)].copy()
+    # Aggregate only the actual purchase-event rows (not every row in the case),
+    # so a browsed-but-not-bought item's price can't be reported as the order
+    # value. Revenue is summed rather than maxed, in case a case has multiple
+    # purchase-line-item rows that together make up the order total.
+    purchase_traces = df[purchase_row_mask].copy()
     agg_rules = {real_time_col: 'min', real_user_col: 'first'}
     if real_rev_col:
         purchase_traces[real_rev_col] = pd.to_numeric(purchase_traces[real_rev_col], errors='coerce').fillna(0)
-        agg_rules[real_rev_col] = 'max'
+        agg_rules[real_rev_col] = 'sum'
 
     purchase_df = purchase_traces.groupby(real_case_col).agg(agg_rules).reset_index()
 
@@ -644,19 +698,206 @@ def analyze_repeat_purchases(
                 logger.warning("Revenue chart failed: %s", e)
                 chart_rev = None
 
+    # --- Average order value ---
+    aov = 0.0
+    if real_rev_col and not purchase_df.empty:
+        aov = float(purchase_df[real_rev_col].mean())
+
+    # --- Category revenue breakdown (per purchase line item, not per case,
+    # since a single case/order can span multiple categories) ---
+    category_breakdown = {}
+    chart_category = None
+    real_category_col = cols_map.get('category')
+    if real_category_col and real_rev_col:
+        cat_df = (
+            purchase_traces.groupby(real_category_col)[real_rev_col]
+            .agg(['sum', 'count'])
+            .rename(columns={'sum': 'revenue', 'count': 'orders'})
+            .sort_values('revenue', ascending=False)
+        )
+        if not cat_df.empty:
+            category_breakdown = {
+                str(idx): {'revenue': float(row['revenue']), 'orders': int(row['orders'])}
+                for idx, row in cat_df.iterrows()
+            }
+
+            chart_category = os.path.join(output_folder, "revenue_by_category.png")
+            try:
+                plt.figure(figsize=(8, 5))
+                top_cats = cat_df.head(10).reset_index()
+                sns.barplot(data=top_cats, x=real_category_col, y='revenue',
+                            hue=real_category_col, legend=False, palette="mako")
+                plt.title("Revenue by Category")
+                plt.ylabel(f"Revenue ({real_rev_col})")
+                plt.xticks(rotation=45, ha='right')
+                plt.tight_layout()
+                plt.savefig(chart_category)
+                plt.close()
+            except Exception as e:
+                logger.warning("Category chart failed: %s", e)
+                chart_category = None
+
+    # --- Revenue over time (daily, or weekly for longer ranges) ---
+    revenue_trend = {}
+    chart_trend = None
+    if real_rev_col and not purchase_df.empty:
+        trend_series = purchase_df.set_index(real_time_col).sort_index()
+        span_days = (trend_series.index.max() - trend_series.index.min()).days if len(trend_series) > 1 else 0
+        freq = 'D' if span_days <= 60 else 'W'
+        resampled = trend_series.resample(freq).agg(
+            orders=(real_case_col, 'count'), revenue=(real_rev_col, 'sum')
+        )
+        revenue_trend = {
+            str(idx.date()): {'orders': int(row['orders']), 'revenue': float(row['revenue'])}
+            for idx, row in resampled.iterrows()
+        }
+
+        if len(resampled) > 1:
+            chart_trend = os.path.join(output_folder, "revenue_over_time.png")
+            try:
+                plt.figure(figsize=(9, 5))
+                plt.plot(resampled.index, resampled['revenue'], marker='o', color='#2a6f97')
+                plt.title(f"Revenue Over Time ({'Daily' if freq == 'D' else 'Weekly'})")
+                plt.ylabel(f"Revenue ({real_rev_col})")
+                plt.xlabel("Date")
+                plt.xticks(rotation=45, ha='right')
+                plt.tight_layout()
+                plt.savefig(chart_trend)
+                plt.close()
+            except Exception as e:
+                logger.warning("Revenue trend chart failed: %s", e)
+                chart_trend = None
+
     return {
         "metrics": {
             "total_buyers": len(user_counts),
             "repeat_rate": repeat_rate,
             "avg_days_between": float(avg_days),
             "median_days_between": float(med_days),
-            "revenue_stats": rev_stats
+            "revenue_stats": rev_stats,
+            "average_order_value": aov,
+            "cart_abandonment": cart_abandonment,
+            "category_breakdown": category_breakdown,
+            "revenue_trend": revenue_trend,
         },
         "charts": {
             "distribution": chart_dist,
             "timing": chart_time,
-            "revenue": chart_rev
+            "revenue": chart_rev,
+            "category": chart_category,
+            "trend": chart_trend,
         }
+    }
+
+
+def analyze_conversion_funnel(
+    df: pd.DataFrame,
+    funnel_steps: list = None,
+    case_col: str = 'case:concept:name',
+    activity_col: str = 'concept:name',
+    min_case_coverage: float = 0.05,
+) -> Dict[str, Any]:
+    """
+    Computes how many cases reach each stage of a funnel, and the conversion/
+    drop-off rate between consecutive stages. A stage's case count is
+    cumulative - a case only counts if it also reached every earlier stage -
+    matching standard funnel-report semantics (e.g. GA4 funnel explorations).
+
+    If funnel_steps isn't given, stages are inferred from the data: activities
+    are ordered by their average relative position within a case (0 = first
+    event, 1 = last event), so earlier-occurring activities become earlier
+    funnel stages. This is a heuristic aimed at typical, roughly-linear
+    conversion funnels (e.g. view -> cart -> checkout -> purchase) - pass
+    funnel_steps explicitly for a guaranteed-correct definition.
+
+    Auto-derivation only considers activities present in at least
+    `min_case_coverage` of cases (default 5%), and the funnel stops at the
+    first stage with zero cases rather than listing further meaningless
+    zero-stages. It still works best on a log with noise events (scroll,
+    session_start, generic engagement pings, etc.) already filtered out -
+    the same noise-removal `filter_steps` recommended before discovery/
+    conformance also helps here, since an unfiltered, effectively-random
+    noise event can end up ordered as an early "gate" stage and truncate an
+    otherwise-meaningful funnel early. Pass funnel_steps explicitly for a
+    guaranteed-correct definition regardless of upstream filtering.
+
+    Returns
+    -------
+    dict with keys: 'funnel_steps', 'total_cases', 'stages', 'biggest_drop_off', 'errors'
+    """
+    errors: List[str] = []
+    empty = {'funnel_steps': [], 'total_cases': 0, 'stages': {}, 'biggest_drop_off': None, 'errors': errors}
+
+    if case_col not in df.columns or activity_col not in df.columns:
+        errors.append("Missing required columns for funnel analysis.")
+        return empty
+
+    if df.empty:
+        errors.append("Cannot compute a funnel from an empty event log.")
+        return empty
+
+    if funnel_steps is None:
+        work = df[[case_col, activity_col]].copy()
+        case_len = work.groupby(case_col)[case_col].transform('size')
+        position = work.groupby(case_col).cumcount()
+        denom = case_len.sub(1).where(case_len > 1, 1)
+        work['_rel_pos'] = position / denom
+
+        total_cases_all = work[case_col].nunique()
+        case_coverage = (
+            work.drop_duplicates([case_col, activity_col]).groupby(activity_col)[case_col].nunique()
+            / total_cases_all
+        )
+        common_activities = case_coverage[case_coverage >= min_case_coverage].index
+
+        avg_pos = work[work[activity_col].isin(common_activities)].groupby(activity_col)['_rel_pos'].mean()
+        funnel_steps = avg_pos.sort_values().index.tolist()
+    elif isinstance(funnel_steps, str):
+        funnel_steps = [funnel_steps]
+
+    if not funnel_steps:
+        errors.append("No funnel steps to analyse.")
+        return empty
+
+    membership = pd.crosstab(df[case_col], df[activity_col]).gt(0)
+    total_cases = len(membership)
+    membership_int = membership.reindex(columns=funnel_steps, fill_value=False).astype(int)
+    cumulative_reached = membership_int.cumprod(axis=1)
+    stage_counts = cumulative_reached.sum(axis=0)
+
+    # Stop at the first stage with zero cases - every stage after it is
+    # trivially zero too (cumulative funnel), and listing several meaningless
+    # zero-stages implies more was measured than actually was. This also caps
+    # the damage from a poorly-ordered auto-derived funnel: a spurious
+    # low-coverage "gate" stage truncates the funnel there instead of
+    # silently zeroing out every later stage, including genuinely important
+    # ones like a late-funnel 'purchase' step.
+    stages = {}
+    prev_count = total_cases
+    for step in funnel_steps:
+        count = int(stage_counts[step])
+        stages[step] = {
+            'cases_reached': count,
+            'pct_of_total': (count / total_cases * 100) if total_cases else 0.0,
+            'pct_of_previous_stage': (count / prev_count * 100) if prev_count else 0.0,
+            'drop_off_pct': (100 - (count / prev_count * 100)) if prev_count else 0.0,
+        }
+        prev_count = count
+        if count == 0:
+            break
+
+    # Biggest drop-off, excluding the first stage (0% drop-off by definition - nothing precedes it).
+    non_first_stages = list(stages.items())[1:]
+    biggest_drop_off = (
+        max(non_first_stages, key=lambda kv: kv[1]['drop_off_pct'])[0] if non_first_stages else None
+    )
+
+    return {
+        'funnel_steps': list(stages.keys()),
+        'total_cases': total_cases,
+        'stages': stages,
+        'biggest_drop_off': biggest_drop_off,
+        'errors': errors,
     }
 
 
