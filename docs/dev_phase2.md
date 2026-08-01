@@ -84,10 +84,11 @@ Tests before CI before expansion: without a test suite, a CI workflow only check
 
 ## Phase 4b — Optimization
 
-**Status: In progress.** `cores` exposed in the UI (below) plus
-`compare_segments()` parallelization and pipeline profiling are complete —
-see `dev_optimization.md` for measured results and the resulting re-ranked
-next step (Streamlit caching).
+**Status: Complete.** `cores` exposed in the UI (below), `compare_segments()`
+parallelization, pipeline profiling, and Streamlit-layer caching are all
+shipped — see `dev_optimization.md` for measured results. The one remaining
+item (pre-discovery downsampling for very large logs) is explicitly
+deprioritized pending a concrete pain report.
 
 Went through vectorization, clustering, batching, multiprocessing, and CUDA against the actual codebase rather than in the abstract:
 

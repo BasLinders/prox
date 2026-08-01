@@ -87,32 +87,39 @@ not the dense matrix math GPUs accelerate.
     it gets a proportionally bigger speedup than alignment-only
     parallelism would, which the 2x measurement above reflects.
 
-## Still available, re-ranked using the profiling data above
+## Shipped — Streamlit caching
 
-1. **Streamlit caching** (`st.cache_data` / `st.cache_resource`) — now the
-   clearer next lever. Every "Run Analysis" click reprocesses everything
-   from scratch even when only one sidebar control changed (e.g. toggling
-   precision on/off re-runs filtering *and* discovery unnecessarily), and
-   discovery is now confirmed to be a real, scaling cost — not a
-   rounding error next to conformance, as the pre-profiling guess assumed.
-   Caching CSV-load and discovery keyed on their inputs targets exactly the
-   two stages the data says are worth targeting.
+`main.py` now caches CSV loading/prep (`st.cache_data`, keyed on file content)
+and the full `run_full_analysis()` call (`st.cache_resource`, keyed on the
+prepared DataFrame + config). Re-running with unchanged inputs is now near-
+instant instead of redoing filtering, discovery, conformance, etc. from
+scratch. Verified end-to-end: identical config on a repeat run went from
+~2.1s to ~0.01s, while a changed config still correctly recomputes.
 
-2. **Precision / discovery variant-dedup or downsampling for visualisation.**
-   Lower priority than caching: visualisation's linear scaling comes from
-   PM4Py/Graphviz rendering a Petri net sized to the full (post-filter) log,
-   not from anything PRoX controls directly. Discovery already runs once per
-   call, not once per trace, so "variant-dedup" doesn't apply the way it did
-   for alignments — the lever here would be pre-discovery downsampling for
-   very large logs, which needs a concrete pain report before it's worth the
-   accuracy trade-off. Precision variant-dedup specifically (the original
-   phrasing of this item) is now deprioritized: precision uses ETConformance
-   token replay, already fast in the profiling data above (not separately
-   broken out, but the token-replay conformance row includes it and stays
-   well under 2s at 100k events sampled).
+This pass also surfaced and fixed a real correctness bug it depended on
+being able to test against: `optimize_dataframe_memory()` was converting
+`case:concept:name`/`concept:name` to `category` dtype, which
+`pm4py.convert_to_event_log()` rejects — silently breaking discovery on
+real event logs. Both columns are now excluded from category downcasting.
+
+## Remaining item — deprioritized, not a ready next step
+
+**Precision / discovery variant-dedup or downsampling for visualisation.**
+Visualisation's linear scaling comes from PM4Py/Graphviz rendering a Petri
+net sized to the full (post-filter) log, not from anything PRoX controls
+directly. Discovery already runs once per call, not once per trace, so
+"variant-dedup" doesn't apply the way it did for alignments — the lever
+here would be pre-discovery downsampling for very large logs, which needs
+a concrete pain report before it's worth the accuracy trade-off. Precision
+variant-dedup specifically (the original phrasing of this item) is
+deprioritized: precision uses ETConformance token replay, already fast in
+the profiling data above.
 
 ## Suggested next step
 
-Streamlit caching (`st.cache_data` on the CSV-load and discovery stages) —
-the one remaining item the profiling data actually justifies, rather than
-guesses further.
+None ready. The cheap, clearly-justified optimization work (vectorization,
+variant-clustering, batching, multi-core alignment, parallel segment
+comparison, Streamlit caching) is done. What's left — pre-discovery
+downsampling, incremental analysis (`dev_phase2.md` Phase 5), a BigQuery
+data source (`dev_roadmap.md`) — each needs a real usage signal to justify
+before it's worth building. Revisit once one of those actually hurts.
