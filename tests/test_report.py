@@ -77,6 +77,41 @@ def test_generate_html_report_handles_missing_sections_gracefully():
     assert "Executive Summary" not in report
 
 
+def _make_ecommerce_funnel_log():
+    """A small e-commerce-shaped log with cart, purchase, and category data,
+    used to exercise the new business-insight sections end to end."""
+    base = pd.Timestamp('2024-01-01')
+    rows = []
+    for i in range(5):
+        case_id = f'c{i}'
+        rows.append({'case:concept:name': case_id, 'concept:name': 'view_item',
+                      'time:timestamp': base + pd.Timedelta(hours=i), 'user_id': f'u{i}',
+                      'event_value': 0, 'category': 'Electronics'})
+        rows.append({'case:concept:name': case_id, 'concept:name': 'add_to_cart',
+                      'time:timestamp': base + pd.Timedelta(hours=i, minutes=1), 'user_id': f'u{i}',
+                      'event_value': 0, 'category': 'Electronics'})
+        if i < 3:
+            rows.append({'case:concept:name': case_id, 'concept:name': 'purchase',
+                          'time:timestamp': base + pd.Timedelta(hours=i, minutes=2), 'user_id': f'u{i}',
+                          'event_value': 50 + i, 'category': 'Electronics'})
+    return pd.DataFrame(rows)
+
+
+def test_generate_html_report_includes_funnel_and_extended_business_sections():
+    df = _make_ecommerce_funnel_log()
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+    results = run_full_analysis(df, config=config)
+    assert results is not None
+
+    report = generate_html_report(results)
+
+    assert "Conversion Funnel" in report
+    assert "Average Order Value" in report
+    assert "Cart Abandonment" in report
+    assert "Revenue by Category" in report
+    assert "Electronics" in report
+
+
 def test_generate_html_report_escapes_activity_names():
     df = make_simple_variant_log(n_cases=3)
     df.loc[df.index[0], 'concept:name'] = '<script>alert(1)</script>'

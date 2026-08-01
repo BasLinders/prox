@@ -25,6 +25,7 @@ from .analytics import (
     get_event_log_summary,
     analyze_process_performance,
     analyze_repeat_purchases,
+    analyze_conversion_funnel,
     format_business_report,
 )
 from .visualizer import visualize_focused_insights, export_results
@@ -49,6 +50,7 @@ __all__ = [
     "get_event_log_summary",
     "analyze_process_performance",
     "analyze_repeat_purchases",
+    "analyze_conversion_funnel",
     "format_business_report",
     "visualize_focused_insights",
     "export_results",

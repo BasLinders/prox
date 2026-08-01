@@ -167,14 +167,37 @@ def _build_narrative_summary(results: Dict[str, Any]) -> str:
         rate = m.get('repeat_rate', 0)
         buyers = m.get('total_buyers', 0)
         mult = m.get('revenue_stats', {}).get('multiplier', 0)
+        aov = m.get('average_order_value', 0)
         sentence = (
             f"<p><strong>{rate:.1f}%</strong> of {buyers:,} identified buyers purchased more than "
             f"once"
         )
         if mult > 0:
             sentence += f", and repeat buyers are worth <strong>{mult:.1f}x</strong> more, on average, than one-time buyers"
+        if aov > 0:
+            sentence += f". The average order is worth <strong>{aov:,.2f}</strong>"
         sentence += ".</p>"
         paragraphs.append(sentence)
+
+        cart = m.get('cart_abandonment')
+        if cart:
+            paragraphs.append(
+                f"<p><strong>{cart['abandonment_rate']:.1f}%</strong> of sessions that added something "
+                f"to their cart didn't go on to buy it — "
+                f"<strong>{cart['cases_added_to_cart'] - cart['cases_purchased_after_cart']:,}</strong> "
+                f"out of <strong>{cart['cases_added_to_cart']:,}</strong> carts were abandoned.</p>"
+            )
+
+    funnel = results.get('funnel_analysis')
+    if funnel and funnel.get('stages'):
+        drop_step = funnel.get('biggest_drop_off')
+        if drop_step:
+            drop_pct = funnel['stages'][drop_step]['drop_off_pct']
+            paragraphs.append(
+                f"<p>Across the customer journey's funnel steps, the biggest single drop-off is at "
+                f"<strong>'{html.escape(str(drop_step))}'</strong>, where <strong>{drop_pct:.0f}%</strong> "
+                f"of customers who reached that point didn't continue.</p>"
+            )
 
     recommendations = stats.get('recommendations', [])
     rec_html = ""
@@ -222,11 +245,17 @@ def generate_html_report(results: Dict[str, Any]) -> str:
 
     business_section = ""
     if biz:
+        biz_metrics = biz.get('metrics', {}) or {}
+        cart = biz_metrics.get('cart_abandonment')
+        category_breakdown = biz_metrics.get('category_breakdown', {}) or {}
+
         charts = biz.get('charts', {}) or {}
         chart_captions = [
             ('distribution', 'Orders per Customer'),
             ('timing', 'Time Between Purchases'),
             ('revenue', 'Avg. Lifetime Value'),
+            ('category', 'Revenue by Category'),
+            ('trend', 'Revenue Over Time'),
         ]
         chart_divs = [
             f'<div><h3>{caption}</h3><img class="zoomable" title="Click to enlarge" src="{img}"></div>'
@@ -234,10 +263,47 @@ def generate_html_report(results: Dict[str, Any]) -> str:
             if (img := _embed_image(charts.get(key)))
         ]
         charts_html = f'<div class="images">{"".join(chart_divs)}</div>' if chart_divs else ""
+
+        extra_metrics_html = f"""
+<div class="metrics">
+  <div class="metric"><div class="label">Average Order Value</div><div class="value">{biz_metrics.get('average_order_value', 0):,.2f}</div></div>
+  <div class="metric"><div class="label">Cart Abandonment</div><div class="value">{f"{cart['abandonment_rate']:.1f}%" if cart else 'N/A'}</div></div>
+</div>
+"""
+
+        category_table_html = ""
+        if category_breakdown:
+            category_table_html = f"""
+<h3>Revenue by Category</h3>
+<table>
+<tr><th>Category</th><th>Revenue</th><th>Orders</th></tr>
+{_table_rows(category_breakdown, ['revenue', 'orders'])}
+</table>
+"""
+
         business_section = f"""
 <h2>Business Insights</h2>
+{extra_metrics_html}
 {charts_html}
+{category_table_html}
 <pre>{html.escape(format_business_report(biz))}</pre>
+"""
+
+    funnel = results.get('funnel_analysis')
+    funnel_section = ""
+    if funnel and funnel.get('stages'):
+        funnel_rows = "".join(
+            f"<tr><td>{html.escape(str(step))}</td><td>{s['cases_reached']:,}</td>"
+            f"<td>{s['pct_of_total']:.1f}%</td><td>{s['pct_of_previous_stage']:.1f}%</td>"
+            f"<td>{s['drop_off_pct']:.1f}%</td></tr>"
+            for step, s in funnel['stages'].items()
+        )
+        funnel_section = f"""
+<h2>Conversion Funnel</h2>
+<table>
+<tr><th>Stage</th><th>Cases Reached</th><th>% of Total</th><th>% of Previous Stage</th><th>Drop-off</th></tr>
+{funnel_rows}
+</table>
 """
 
     body = f"""<h1>PRoX Process Mining Report</h1>
@@ -282,6 +348,7 @@ def generate_html_report(results: Dict[str, Any]) -> str:
 <tr><th>Variant</th><th>Frequency</th><th>Percentage</th></tr>
 {_table_rows(variant_perf.get('top_variants', {}), ['frequency', 'percentage'])}
 </table>
+{funnel_section}
 {business_section}"""
 
     return _html_shell("PRoX Process Mining Report", body)
