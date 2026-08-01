@@ -4,6 +4,54 @@ Longer-horizon feature ideas, distinct from `phase2.md`'s execution plan
 (tests/CI/hardening) and `dev_optimization.md`'s performance work. Entries
 here are scoped for discussion, not committed to a phase number yet.
 
+## Product development suggestions
+
+A working list of where the product could go next, given everything shipped
+so far (discovery, conformance, bottlenecks, variants, business insights,
+funnel analysis, segment comparison, HTML reporting). Roughly ranked by
+effort vs. payoff — none of these are committed, scoped, or sequenced yet.
+
+### Quick wins (small, builds on what already exists)
+
+- **Funnel x Segment cross-analysis.** The Funnel tab and Segment Comparison
+  are currently independent features that were built separately but combine
+  naturally: "show the funnel drop-off for mobile vs. desktop." Wiring the
+  Funnel tab to optionally split by the same segment column would surface
+  exactly the kind of insight non-technical stakeholders actually ask for.
+- **Config presets.** Save/load the sidebar configuration (discovery algo,
+  sample size, filters, funnel definition) as a small JSON file. Removes the
+  "reconfigure everything every session" friction for a repeat analyst —
+  directly serves the "runs on a laptop, used repeatedly" use case.
+- **Data-quality pre-check.** Before running the full pipeline, a lightweight
+  summary of missing values, duplicate case IDs, and timestamp gaps/
+  out-of-order events. Non-technical users currently only find out their
+  data is messy after a confusing downstream result.
+
+### Medium bets (real feature work, clear value)
+
+- **Segment comparison v2 — automated golden-path diffing.** Already scoped
+  and deliberately deferred (`phase2.md`'s Phase 4 segment-comparison entry:
+  "segment A visits checkout, segment B doesn't"). Worth revisiting now that
+  v1 has real usage patterns (parallel execution, its own report export).
+- **Cohort/retention view.** Current loyalty metrics (repeat rate,
+  days-between-purchases) are transaction-level. A cohort retention curve
+  (% of users from cohort week N still active in week N+1, N+2, ...) is a
+  different, complementary lens that product/growth stakeholders
+  specifically look for and PRoX doesn't have yet.
+- **Two-log comparison.** Compare this week's export vs. last week's, or
+  this cohort's export vs. last month's — a temporal/version diff, distinct
+  from segment comparison's categorical split of a single upload.
+
+### Longer-term (bigger, already flagged elsewhere in these docs)
+
+- **Phase 5 — incremental analysis** for recurring large logs
+  (`phase2.md`). Still explicitly "no pain signal yet" — worth doing once
+  someone is actually re-running PRoX on a growing dataset regularly, not
+  before.
+- **BigQuery live data source** (below). Removes the export-clean-upload
+  cycle for GA4-in-BigQuery users. Biggest lift of anything on this list —
+  only worth it if CSV upload is a genuine recurring friction point.
+
 ## BigQuery live data source (via Google OAuth)
 
 **Idea**: instead of requiring the user to export, clean, and upload a CSV,
