@@ -34,3 +34,14 @@ def test_run_full_analysis_rejects_filter_step_missing_type():
     )
     results = run_full_analysis(df, config=config)
     assert results is None
+
+
+def test_run_full_analysis_includes_funnel_analysis():
+    df = make_simple_variant_log(n_cases=3)
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+    results = run_full_analysis(df, config=config)
+
+    assert results is not None
+    assert 'funnel_analysis' in results
+    assert results['funnel_analysis']['total_cases'] == 3
+    assert results['funnel_analysis']['stages']
