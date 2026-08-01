@@ -75,12 +75,12 @@ Tests before CI before expansion: without a test suite, a CI workflow only check
 
 - **4a. Full-analysis HTML report export — Complete.** `prox/report.py`'s `generate_html_report()` builds a single, self-contained HTML report (metrics, embedded base64 process-map images, bottleneck/variant tables, conformance summary, business insights) from a `run_full_analysis()` results dict. Wired into `main.py` as a "Download Full Report" button. All user-derived strings are HTML-escaped (verified with an XSS test). Shipped directly to `main` (e84026f).
 - **Alpha Miner — considered and rejected.** It has no soundness guarantee, poor short-loop handling, and no noise tolerance — strictly weaker than the existing Inductive Miner (sound/robust), Heuristics Miner (noisy logs), and DFG (fast overview) for this domain (noisy website event logs). Not worth adding just because the Phase 3 registry makes it a one-entry change.
-- **Segment comparison — scoped (v1), not yet implemented.**
-  - New `prox/segments.py` with `compare_segments(df, segment_col, config, top_n_segments=5)`: picks the top-N segment values by case count, runs `run_full_analysis()` once per segment, returns `{segment_value: results}` plus a `comparison_table` (cases, health score, fitness, repeat rate, top variant — one row per segment).
-  - UI: an optional "Segment by" selectbox (columns with sane cardinality, ~2-20 unique values) and a new "Segment Comparison" tab showing the table plus per-segment happy-path images side by side.
+- **Segment comparison v1 — Complete.**
+  - `prox/segments.py`'s `compare_segments(df, segment_col, config, top_n_segments=5)`: picks the top-N segment values by case count, runs `run_full_analysis()` once per segment, returns `{segment_value: results}` plus a `comparison_table` (cases, health score, fitness, precision, repeat rate, top variant — one row per segment).
+  - UI: an optional "Segment by" selectbox (columns with sane cardinality, ~2-20 unique values) and a "Segment Comparison" tab showing the table plus per-segment happy-path images side by side. Shipped `dbf0a5f`.
   - Reuses existing building blocks (`filter_event_log(filter_type='attribute', ...)`, `run_full_analysis()`) — mostly orchestration, not new analysis logic.
+  - Runs the full pipeline N times (once per segment) — since Phase 4b, this now runs in parallel across worker processes by default (see below), which was the direct motivation for parallelizing `compare_segments()` rather than just alignment.
   - **Deferred to v2**: automatically diffing golden paths between segments (e.g. "segment A visits checkout, segment B doesn't"). That's genuinely new algorithmic work, not orchestration — worth revisiting once the side-by-side v1 view proves useful in practice.
-  - Cost note: runs the full pipeline N times (once per segment), which is part of why Phase 4b (below) comes before scaling this up to larger segment counts.
 
 ## Phase 4b — Optimization
 

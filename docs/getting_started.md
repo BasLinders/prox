@@ -55,7 +55,7 @@ This opens PRoX in your browser. From there:
 1. **Upload** a CSV event log using the sidebar file uploader.
 2. **Configure** the discovery algorithm, noise threshold, conformance method, and sample size in the sidebar.
 3. Click **Run Analysis**.
-4. Explore results across five tabs: Process Maps, Variants, Bottlenecks, Conformance, and Business Insights.
+4. Explore results across six tabs: Process Maps, Variants, Bottlenecks, Conformance, Business Insights, and Segment Comparison.
 
 ### Required Columns
 
