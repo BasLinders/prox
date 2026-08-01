@@ -22,40 +22,97 @@ not the dense matrix math GPUs accelerate.
   overhead dominates; would also require an NVIDIA GPU, contradicting the
   "runs on a standard laptop" goal).
 
-## Still genuinely available, ranked by expected payoff
+## Shipped this pass — #1 and #2
 
-1. **Parallelize `compare_segments()` itself.**
-   It currently loops over segments sequentially, but each segment's
-   `run_full_analysis()` call is fully independent — no shared state, no
-   ordering dependency. This is an embarrassingly-parallel case for
-   `concurrent.futures.ProcessPoolExecutor` or `multiprocessing.Pool`, using
-   the same GIL-irrelevant argument as `cores`. With N segments this could
-   mean close to an N-fold wall-clock improvement on segment comparison
-   specifically. Ranked highest because it's a concrete, already-identified
-   gap rather than something that needs discovery first.
+- **Parallelize `compare_segments()`.** Each segment's `run_full_analysis()`
+  call is fully independent (no shared state, no ordering dependency), so
+  `prox/segments.py` now runs one segment per worker process via
+  `concurrent.futures.ProcessPoolExecutor` (new `parallel` parameter,
+  defaults `True`). Each parallel segment run is pinned to a single core
+  internally (`speed_params.cores = 1` on a deep-copied per-worker config) —
+  otherwise N parallel segments each requesting M alignment cores could
+  request N*M cores at once and oversubscribe the machine. Sequential mode
+  (`parallel=False`) is kept for cases where nested multiprocessing is
+  undesirable, and the UI exposes both via a "Run segments in parallel"
+  checkbox on the Segment Comparison tab.
 
-2. **Profile against a realistically-large synthetic log.**
-   Everything in Phase 4b so far has been code-reading-based reasoning, not
-   measurement. Generate a large synthetic log (~50k-100k events) and time
-   each pipeline stage to see where time is actually going at scale — it's
-   entirely possible discovery or repeat-purchase chart generation dominates,
-   not alignment, in which case cores/parallelization wouldn't be the next
-   lever to pull. Do this alongside #1 since it's cheap and de-risks #4.
+  Explicitly scoped for **local execution only** — this app is run with
+  `streamlit run main.py` on a user's own machine, not deployed to
+  Streamlit Community Cloud or another shared/hosted environment, so
+  spawning worker processes per segment has no multi-tenant resource
+  contention to worry about. If PRoX is ever deployed to a shared host,
+  this default should be revisited (hosted platforms often cap or forbid
+  process-level parallelism).
 
-3. **Streamlit caching** (`st.cache_data` / `st.cache_resource`).
-   App-layer, not engine-layer. Every "Run Analysis" click currently
-   reprocesses everything from scratch even if only one sidebar control
-   changed (e.g. toggling precision on/off re-runs filtering and discovery
-   unnecessarily). Caching the CSV-load and discovery stages keyed on their
-   inputs would make iterating on settings noticeably snappier without
-   touching the engine.
+  Measured on a 4-core machine, 30k-event synthetic log, 4 segments,
+  default sampling: **4.92s sequential → 2.41s parallel** (~2x; bound by
+  4 cores serving both segment-level and internal alignment parallelism,
+  not a clean 4x since each of the 4 concurrent segments still does
+  non-trivial single-core work). Tests: `tests/test_segments.py` covers
+  both modes and asserts parallel/sequential produce identical
+  `comparison_table` output.
 
-4. **Precision variant-dedup.**
-   Flagged as uncertain in `phase2.md`: precision uses ETConformance
-   token-based replay, which may already be fast enough that variant-deduping
-   wouldn't matter. Needs #2's profiling data to justify before touching.
+- **Profile against a realistically-large synthetic log.** Added
+  `scripts/profile_pipeline.py` — generates a synthetic clickstream log
+  (session funnel with realistic drop-off + noise events) and times each
+  `run_full_analysis()` stage independently at a given size. Results at
+  10k / 50k / 100k events (4-core, 15GB dev machine):
+
+  | Stage | 10k events | 50k events | 100k events |
+  |---|---|---|---|
+  | CSV load + validate | 0.04s | 0.11s | 0.15s |
+  | Filtering | 0.00s | 0.00s | 0.01s |
+  | Discovery (inductive miner) | 0.18s | 1.00s | 2.12s |
+  | Conformance, token replay (sampled) | 0.50s | 0.90s | 1.66s |
+  | Conformance, state equation A* (sampled) | 1.27s | 1.80s | 2.73s |
+  | Performance analysis | 0.17s | 0.46s | 0.87s |
+  | Visualisation (BPMN + bottleneck PNGs) | 0.27s | 0.93s | 1.98s |
+  | Business insights | 0.48s | 0.47s | 0.54s |
+  | **Total** | **2.90s** | **5.68s** | **10.06s** |
+
+  **Finding that changes the picture assumed going into this pass:**
+  conformance checking is capped by stratified sampling
+  (`speed_params.max_align`, default 250 traces) regardless of log size, so
+  it does *not* scale with the full log — it stays roughly flat while
+  **discovery and visualisation scale linearly with total events and
+  dominate at scale** (a combined ~41% of wall-clock at 100k events, vs.
+  conformance's ~44%). This means:
+  - `cores`/multiprocessing (already shipped) genuinely helps only the
+    alignment-based conformance stage, which is exactly the one stage that's
+    *already* bounded by sampling — its ceiling is capped by design, so
+    there's a natural limit to what more cores buy there.
+  - Segment-comparison parallelization (#1, above) is a better win than
+    originally scoped: because it parallelizes the *entire* per-segment
+    pipeline — discovery and visualisation included, not just alignment —
+    it gets a proportionally bigger speedup than alignment-only
+    parallelism would, which the 2x measurement above reflects.
+
+## Still available, re-ranked using the profiling data above
+
+1. **Streamlit caching** (`st.cache_data` / `st.cache_resource`) — now the
+   clearer next lever. Every "Run Analysis" click reprocesses everything
+   from scratch even when only one sidebar control changed (e.g. toggling
+   precision on/off re-runs filtering *and* discovery unnecessarily), and
+   discovery is now confirmed to be a real, scaling cost — not a
+   rounding error next to conformance, as the pre-profiling guess assumed.
+   Caching CSV-load and discovery keyed on their inputs targets exactly the
+   two stages the data says are worth targeting.
+
+2. **Precision / discovery variant-dedup or downsampling for visualisation.**
+   Lower priority than caching: visualisation's linear scaling comes from
+   PM4Py/Graphviz rendering a Petri net sized to the full (post-filter) log,
+   not from anything PRoX controls directly. Discovery already runs once per
+   call, not once per trace, so "variant-dedup" doesn't apply the way it did
+   for alignments — the lever here would be pre-discovery downsampling for
+   very large logs, which needs a concrete pain report before it's worth the
+   accuracy trade-off. Precision variant-dedup specifically (the original
+   phrasing of this item) is now deprioritized: precision uses ETConformance
+   token replay, already fast in the profiling data above (not separately
+   broken out, but the token-replay conformance row includes it and stays
+   well under 2s at 100k events sampled).
 
 ## Suggested next step
 
-#1 and #2 together: #1 has an obvious, low-risk win; #2 tells us whether #3/#4
-are worth pursuing at all rather than guessing further.
+Streamlit caching (`st.cache_data` on the CSV-load and discovery stages) —
+the one remaining item the profiling data actually justifies, rather than
+guesses further.

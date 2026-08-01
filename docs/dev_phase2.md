@@ -75,16 +75,19 @@ Tests before CI before expansion: without a test suite, a CI workflow only check
 
 - **4a. Full-analysis HTML report export — Complete.** `prox/report.py`'s `generate_html_report()` builds a single, self-contained HTML report (metrics, embedded base64 process-map images, bottleneck/variant tables, conformance summary, business insights) from a `run_full_analysis()` results dict. Wired into `main.py` as a "Download Full Report" button. All user-derived strings are HTML-escaped (verified with an XSS test). Shipped directly to `main` (e84026f).
 - **Alpha Miner — considered and rejected.** It has no soundness guarantee, poor short-loop handling, and no noise tolerance — strictly weaker than the existing Inductive Miner (sound/robust), Heuristics Miner (noisy logs), and DFG (fast overview) for this domain (noisy website event logs). Not worth adding just because the Phase 3 registry makes it a one-entry change.
-- **Segment comparison — scoped (v1), not yet implemented.**
-  - New `prox/segments.py` with `compare_segments(df, segment_col, config, top_n_segments=5)`: picks the top-N segment values by case count, runs `run_full_analysis()` once per segment, returns `{segment_value: results}` plus a `comparison_table` (cases, health score, fitness, repeat rate, top variant — one row per segment).
-  - UI: an optional "Segment by" selectbox (columns with sane cardinality, ~2-20 unique values) and a new "Segment Comparison" tab showing the table plus per-segment happy-path images side by side.
+- **Segment comparison v1 — Complete.**
+  - `prox/segments.py`'s `compare_segments(df, segment_col, config, top_n_segments=5)`: picks the top-N segment values by case count, runs `run_full_analysis()` once per segment, returns `{segment_value: results}` plus a `comparison_table` (cases, health score, fitness, precision, repeat rate, top variant — one row per segment).
+  - UI: an optional "Segment by" selectbox (columns with sane cardinality, ~2-20 unique values) and a "Segment Comparison" tab showing the table plus per-segment happy-path images side by side. Shipped `dbf0a5f`.
   - Reuses existing building blocks (`filter_event_log(filter_type='attribute', ...)`, `run_full_analysis()`) — mostly orchestration, not new analysis logic.
+  - Runs the full pipeline N times (once per segment) — since Phase 4b, this now runs in parallel across worker processes by default (see below), which was the direct motivation for parallelizing `compare_segments()` rather than just alignment.
   - **Deferred to v2**: automatically diffing golden paths between segments (e.g. "segment A visits checkout, segment B doesn't"). That's genuinely new algorithmic work, not orchestration — worth revisiting once the side-by-side v1 view proves useful in practice.
-  - Cost note: runs the full pipeline N times (once per segment), which is part of why Phase 4b (below) comes before scaling this up to larger segment counts.
 
 ## Phase 4b — Optimization
 
-**Status: Scoped, not yet implemented.**
+**Status: In progress.** `cores` exposed in the UI (below) plus
+`compare_segments()` parallelization and pipeline profiling are complete —
+see `dev_optimization.md` for measured results and the resulting re-ranked
+next step (Streamlit caching).
 
 Went through vectorization, clustering, batching, multiprocessing, and CUDA against the actual codebase rather than in the abstract:
 
@@ -94,7 +97,7 @@ Went through vectorization, clustering, batching, multiprocessing, and CUDA agai
 - **Multiprocessing**: wired but unexposed. `prox/conformance.py` already passes a `cores` parameter all the way through to PM4Py's alignment computation (`params = {'cores': max_cores, ...}`, conformance.py:145), using PM4Py's own internal multiprocessing pool — this is not GIL-blocked at all, since separate processes each get their own interpreter. It's simply never surfaced in `main.py`'s UI, so every run defaults to single-core.
 - **CUDA: considered and rejected, not revisitable.** PRoX's expensive operations (Petri net discovery, alignment-based conformance, token replay) are combinatorial/graph algorithms, not the dense matrix math GPUs accelerate. The one place with real linear algebra (the alignment heuristic's LP relaxation) runs many small, independent per-trace solves — exactly the pattern where GPU kernel-launch/transfer overhead dominates and erases any benefit, short of research-grade batched-GPU-LP-solver work. Requiring CUDA would also mean requiring an NVIDIA GPU, directly contradicting the README's "designed to run locally on a standard laptop" goal and excluding every Mac user outright.
 
-**Proposed scope**: (1) expose `cores` as a UI control, since the wiring already exists; (2) profile the pipeline against a realistically-large synthetic log to find actual bottlenecks empirically rather than guessing further; (3) check whether precision calculation would benefit from the same variant-dedup trick alignments already use — uncertain, since precision uses a token-based method (ETConformance) that may already be fast enough by design; measure before assuming.
+**Proposed scope**: (1) expose `cores` as a UI control, since the wiring already exists — **done**; (2) profile the pipeline against a realistically-large synthetic log to find actual bottlenecks empirically rather than guessing further — **done, see `dev_optimization.md`**; (3) check whether precision calculation would benefit from the same variant-dedup trick alignments already use — **resolved by (2)'s profiling data: deprioritized, precision/token-replay conformance is not the bottleneck at scale (discovery and visualisation are).**
 
 ## Phase 5 — Incremental analysis (flagged, not scoped)
 
