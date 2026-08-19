@@ -18,9 +18,30 @@ from prox import (
     compare_segments,
     analyze_conversion_funnel,
     generate_mock_csv_bytes,
+    filter_event_log,
     DISCOVERY_ALGORITHMS,
     CONFORMANCE_METHODS,
 )
+
+# Pre-selected as a starting point in the event-filter UI - GA4-style noise
+# events that carry no process-mining signal. Only ones actually present in
+# the uploaded log are pre-checked; the user can add/remove freely.
+KNOWN_NOISE_ACTIVITIES = {
+    "experience_impression", "view_cookie_bar", "javascript_error", "scroll",
+    "view_item_list_empty", "user_engagement", "page_timestamp",
+    "session_start", "first_visit",
+}
+
+# Above this many cases, running conformance checking unsampled (the default -
+# see the Sampling step) risks becoming slow, especially with State Equation
+# A*. 2,000 is well above PRoX's default sample size (250) - comfortably
+# tractable on a laptop for most logs - while still being the point where
+# unsampled exact alignments on a noisy/high-variant clickstream log start
+# to noticeably drag, per profiling in docs/dev_optimization.md (conformance
+# is the single biggest cost share even sampled at 250; discovery/viz already
+# scale linearly with event count, so letting conformance scale too compounds
+# that at real volume).
+LARGE_CASE_COUNT_THRESHOLD = 2000
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 
@@ -98,49 +119,6 @@ with st.sidebar:
     st.caption("Process Excavator")
     st.divider()
 
-    st.header("Data")
-    uploaded_file = st.file_uploader("Upload Event Log (CSV)", type=["csv"])
-
-    with st.expander("No data? Generate a mock event log"):
-        st.caption(
-            "Creates a synthetic e-commerce clickstream (funnel drop-off, "
-            "repeat buyers, categories, revenue, device/traffic segments) "
-            "so you can try PRoX without your own data."
-        )
-        mock_sessions = st.number_input(
-            "Sessions", min_value=50, max_value=5000, value=400, step=50, key="mock_sessions"
-        )
-        mock_seed = st.number_input(
-            "Seed", min_value=0, value=42, step=1, key="mock_seed",
-            help="Same seed + session count always reproduces the same data."
-        )
-        if st.button("Generate Mock Data", use_container_width=True):
-            st.session_state["mock_csv_bytes"] = generate_mock_csv_bytes(
-                n_sessions=int(mock_sessions), seed=int(mock_seed)
-            )
-            st.session_state["mock_csv_label"] = f"mock_event_log_{int(mock_sessions)}s_seed{int(mock_seed)}.csv"
-
-        mock_csv_bytes = st.session_state.get("mock_csv_bytes")
-        if mock_csv_bytes:
-            st.success(f"Mock data ready: {st.session_state['mock_csv_label']}")
-            dl_col, clear_col = st.columns(2)
-            with dl_col:
-                st.download_button(
-                    "Download CSV", data=mock_csv_bytes,
-                    file_name=st.session_state["mock_csv_label"], mime="text/csv",
-                    use_container_width=True,
-                )
-            with clear_col:
-                if st.button("Clear", use_container_width=True):
-                    st.session_state.pop("mock_csv_bytes", None)
-                    st.session_state.pop("mock_csv_label", None)
-                    st.rerun()
-            if uploaded_file is None:
-                st.caption("Will be used for analysis (no file uploaded above).")
-            else:
-                st.caption("Uploaded file takes priority - remove it to use mock data instead.")
-
-    st.divider()
     st.header("Discovery")
     discovery_algo = st.selectbox(
         "Algorithm",
@@ -179,14 +157,6 @@ with st.sidebar:
     )
 
     st.divider()
-    st.header("Sampling")
-    sample_size = st.number_input(
-        "Sample Size (cases)", min_value=50, max_value=1000, value=250, step=50,
-        help="Cases used for conformance. Higher = more accurate but slower."
-    )
-
-    st.divider()
-    run_btn = st.button("Run Analysis", type="primary", use_container_width=True)
     if st.button("Clear Results", use_container_width=True):
         for key in ("results", "df", "load_messages", "segment_result", "funnel_result"):
             st.session_state.pop(key, None)
@@ -215,14 +185,155 @@ with st.sidebar:
 st.title("Process Excavator")
 st.caption("Upload a website event log to discover customer journeys and golden paths.")
 
+st.header("1. Load Data")
+uploaded_file = st.file_uploader("Upload Event Log (CSV)", type=["csv"])
+
+with st.expander("No data? Generate a mock event log"):
+    st.caption(
+        "Creates a synthetic e-commerce clickstream (funnel drop-off, "
+        "repeat buyers, categories, revenue, device/traffic segments) "
+        "so you can try PRoX without your own data."
+    )
+    mock_sessions = st.number_input(
+        "Sessions", min_value=50, max_value=5000, value=400, step=50, key="mock_sessions"
+    )
+    mock_seed = st.number_input(
+        "Seed", min_value=0, value=42, step=1, key="mock_seed",
+        help="Same seed + session count always reproduces the same data."
+    )
+    if st.button("Generate Mock Data", use_container_width=True):
+        st.session_state["mock_csv_bytes"] = generate_mock_csv_bytes(
+            n_sessions=int(mock_sessions), seed=int(mock_seed)
+        )
+        st.session_state["mock_csv_label"] = f"mock_event_log_{int(mock_sessions)}s_seed{int(mock_seed)}.csv"
+
+    mock_csv_bytes = st.session_state.get("mock_csv_bytes")
+    if mock_csv_bytes:
+        st.success(f"Mock data ready: {st.session_state['mock_csv_label']}")
+        dl_col, clear_col = st.columns(2)
+        with dl_col:
+            st.download_button(
+                "Download CSV", data=mock_csv_bytes,
+                file_name=st.session_state["mock_csv_label"], mime="text/csv",
+                use_container_width=True,
+            )
+        with clear_col:
+            if st.button("Clear", use_container_width=True):
+                st.session_state.pop("mock_csv_bytes", None)
+                st.session_state.pop("mock_csv_label", None)
+                st.rerun()
+        if uploaded_file is None:
+            st.caption("Will be used for analysis (no file uploaded above).")
+        else:
+            st.caption("Uploaded file takes priority - remove it to use mock data instead.")
+
 active_file_bytes = uploaded_file.getvalue() if uploaded_file else st.session_state.get("mock_csv_bytes")
 
 if active_file_bytes is None:
-    st.info(
-        "Upload a CSV event log in the sidebar to get started, "
-        "or generate a mock one under **No data? Generate a mock event log**."
-    )
+    st.info("Upload a CSV event log above to get started, or generate a mock one.")
     st.stop()
+
+loader_defaults = create_analysis_config()["data_loading"]
+with st.spinner("Loading and validating data..."):
+    raw_df, df_ready, load_messages, has_category = _cached_load_and_prepare(
+        active_file_bytes,
+        loader_defaults["max_file_size_mb"],
+        loader_defaults["chunk_threshold_mb"],
+        loader_defaults["chunk_size"],
+    )
+
+st.session_state["load_messages"] = load_messages
+
+if raw_df is None:
+    st.error("Failed to load data. See messages below.")
+    for msg in load_messages:
+        if "Critical" in msg or "Error" in msg:
+            st.error(msg)
+        else:
+            st.warning(msg)
+    st.stop()
+
+# ---------------------------------------------------------------------------
+# Filter events before analysis
+# ---------------------------------------------------------------------------
+st.divider()
+st.header("2. Filter Events")
+st.caption(
+    "Remove noisy or irrelevant events before analysis, or narrow it down to "
+    "just the events you care about. Optional - leave the list empty to "
+    "analyse every event."
+)
+
+all_activities = sorted(raw_df["concept:name"].dropna().astype(str).unique().tolist())
+default_noise_selection = [a for a in all_activities if a in KNOWN_NOISE_ACTIVITIES]
+
+filter_col1, filter_col2 = st.columns([1, 2])
+with filter_col1:
+    filter_mode_label = st.radio(
+        "Mode",
+        ["Remove selected events", "Keep only selected events"],
+        help=(
+            "Remove: analyse everything except the events picked on the right. "
+            "Keep: analyse only the events picked on the right."
+        )
+    )
+with filter_col2:
+    selected_events = st.multiselect(
+        "Events",
+        options=all_activities,
+        default=default_noise_selection,
+        help=(
+            "Pre-checked with common non-process noise events (cookie banners, "
+            "scroll, JS errors, etc.) found in this log - add or remove freely."
+        )
+    )
+
+if selected_events:
+    filter_mode = "remove_events" if filter_mode_label == "Remove selected events" else "keep_events"
+    filter_steps = [{"type": "activity", "activities": selected_events, "mode": filter_mode}]
+    preview_df, _ = filter_event_log(raw_df, filter_type="activity", activities=selected_events, mode=filter_mode)
+else:
+    filter_steps = []
+    preview_df = raw_df
+
+post_cases = preview_df["case:concept:name"].nunique() if preview_df is not None and not preview_df.empty else 0
+post_events = len(preview_df) if preview_df is not None else 0
+
+st.caption(
+    f"After filtering: **{post_cases:,} cases**, **{post_events:,} events** "
+    f"(from {raw_df['case:concept:name'].nunique():,} cases, {len(raw_df):,} events)."
+)
+
+# ---------------------------------------------------------------------------
+# Sampling - opt-in, with a warning above a "large" case-count threshold
+# ---------------------------------------------------------------------------
+st.divider()
+st.header("3. Sampling")
+enable_sampling = st.checkbox(
+    "Enable Sampling", value=False,
+    help=(
+        "Off by default: conformance checking runs on every case. Turn this "
+        "on to check only a representative subset instead, which is much "
+        "faster on large logs."
+    )
+)
+if enable_sampling:
+    sample_size = st.number_input(
+        "Sample Size (cases)", min_value=50, max_value=1000, value=250, step=50,
+        help="Cases used for conformance. Higher = more accurate but slower."
+    )
+else:
+    sample_size = max(post_cases, 1)
+    if post_cases > LARGE_CASE_COUNT_THRESHOLD:
+        st.warning(
+            f"{post_cases:,} cases will be analysed without sampling. Conformance "
+            f"checking - especially State Equation A* - can get slow above "
+            f"~{LARGE_CASE_COUNT_THRESHOLD:,} cases. Consider enabling sampling above, "
+            "or switching to Token Replay in the sidebar."
+        )
+
+st.divider()
+run_btn = st.button("Run Analysis", type="primary", use_container_width=True)
 
 # ---------------------------------------------------------------------------
 # Run analysis when button is pressed
@@ -235,27 +346,9 @@ if run_btn:
         calculate_precision=calculate_precision,
         sample_size=int(sample_size),
         cores=int(cores),
+        enable_sampling=enable_sampling,
+        filter_steps=filter_steps,
     )
-    data_loading_cfg = config["data_loading"]
-
-    with st.spinner("Loading and validating data..."):
-        df, df_ready, messages, has_category = _cached_load_and_prepare(
-            active_file_bytes,
-            data_loading_cfg["max_file_size_mb"],
-            data_loading_cfg["chunk_threshold_mb"],
-            data_loading_cfg["chunk_size"],
-        )
-
-    st.session_state["load_messages"] = messages
-
-    if df is None:
-        st.error("Failed to load data. See messages below.")
-        for msg in messages:
-            if "Critical" in msg or "Error" in msg:
-                st.error(msg)
-            else:
-                st.warning(msg)
-        st.stop()
 
     with st.spinner("Running process mining pipeline... This may take a minute."):
         results = _cached_run_full_analysis(df_ready, config)
@@ -265,7 +358,7 @@ if run_btn:
         st.stop()
 
     st.session_state["results"] = results
-    st.session_state["df"] = df
+    st.session_state["df"] = raw_df
     st.session_state["config"] = config
 
 # ---------------------------------------------------------------------------
@@ -273,7 +366,7 @@ if run_btn:
 # ---------------------------------------------------------------------------
 results = st.session_state.get("results")
 if not results:
-    st.info("Configure the options in the sidebar and click **Run Analysis**.")
+    st.info("Configure the filter and sampling options above and click **Run Analysis**.")
     st.stop()
 
 # Load messages expander
