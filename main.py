@@ -422,15 +422,27 @@ if summary:
 
 st.divider()
 
-tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_segments = st.tabs([
-    "Process Maps",
-    "Variants",
-    "Bottlenecks",
-    "Conformance",
-    "Funnel",
-    "Business Insights",
-    "Segment Comparison",
-])
+tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_segments = st.tabs(
+    [
+        "Process Maps",
+        "Variants",
+        "Bottlenecks",
+        "Conformance",
+        "Funnel",
+        "Business Insights",
+        "Segment Comparison",
+    ],
+    # on_change="rerun" makes the tabs a stateful widget: the active tab is
+    # tracked via `key` and survives reruns triggered by other widgets (e.g.
+    # clicking "Run Funnel Analysis" inside the Funnel tab). Without it,
+    # tabs default to on_change="ignore", which doesn't track state at all -
+    # every rerun snaps back to the first tab, regardless of what the user
+    # was looking at. As a side effect, only the currently open tab's block
+    # actually executes each rerun (lazy execution) instead of all seven -
+    # each tab's content still renders correctly once you click into it.
+    key="active_results_tab",
+    on_change="rerun",
+)
 
 # ---------------------------------------------------------------------------
 # Tab 1: Process Maps
