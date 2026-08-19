@@ -1,5 +1,8 @@
 # ML Roadmap
 
+*See `dev_roadmap.md` for the current status of all phases at a glance —
+that file is the leading document; this one is the detail.*
+
 Machine-learning feature ideas for PRoX, kept separate from `dev_roadmap.md`
 (data-source/product ideas) since they carry a different kind of risk: unlike
 every other metric in PRoX, ML output is probabilistic, needs validation, and

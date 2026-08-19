@@ -1,6 +1,9 @@
 # Optimization Methods — Status and Options
 
-Companion to `phase2.md`'s Phase 4b section. Written after exposing `cores` in the
+*See `dev_roadmap.md` for the current status of all phases at a glance —
+that file is the leading document; this one is the detail.*
+
+Companion to `dev_phase2.md`'s Phase 4b section. Written after exposing `cores` in the
 UI and shipping segment comparison v1 (`dbf0a5f`), and after confirming CUDA
 "ran flat" in practice — consistent with the earlier analysis that PRoX's
 workload (Petri net discovery, alignment-based conformance) is combinatorial,
@@ -17,7 +20,7 @@ not the dense matrix math GPUs accelerate.
   to PM4Py's own internal multiprocessing pool for alignment computation.
   Not GIL-blocked (separate processes, separate interpreters).
 - **CUDA** — considered, and empirically confirmed flat. Not revisitable
-  without a fundamentally different algorithm shape (see `phase2.md` for the
+  without a fundamentally different algorithm shape (see `dev_phase2.md` for the
   reasoning: many small independent per-trace LP solves, GPU kernel-launch
   overhead dominates; would also require an NVIDIA GPU, contradicting the
   "runs on a standard laptop" goal).
