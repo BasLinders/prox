@@ -5,12 +5,13 @@ completed, in progress, or roadmapped — is tracked here first. Where a
 phase has enough detail to warrant its own file, this document carries an
 accurate summary and links out to it: `dev_phase2.md` for the phase-by-phase
 execution log (tests/CI/extensibility/capability work), `dev_optimization.md`
-for performance work, `ML_roadmap.md` for machine-learning ideas. Keep the
-summaries here current even when the detail lives elsewhere — this is the
-one page meant to answer "where does PRoX development actually stand?"
-without opening five files.
+for performance work, `ML_roadmap.md` for predictive/statistical ML ideas,
+`AI_summary_roadmap.md` for generative-AI ideas. Keep the summaries here
+current even when the detail lives elsewhere — this is the one page meant
+to answer "where does PRoX development actually stand?" without opening
+five files.
 
-Last assessed 2026-08-01, against `main` @ `b837847` — 74 tests passing,
+Last assessed 2026-08-01, against `main` @ `6fa5e5f` — 74 tests passing,
 `pyflakes` clean.
 
 ---
@@ -26,6 +27,7 @@ Last assessed 2026-08-01, against `main` @ `b837847` — 74 tests passing,
 | Phase 4b — Optimization | Complete | `dev_optimization.md` |
 | Phase 5 — Incremental analysis | Flagged, not scoped | `dev_phase2.md` |
 | ML layer (conversion propensity + drivers) | Roadmapped | `ML_roadmap.md` |
+| AI-assisted recommendations (optional, Gemini) | Roadmapped | `AI_summary_roadmap.md` |
 | BigQuery live data source | Roadmapped | below |
 | Product development suggestions | Roadmapped | below |
 
@@ -130,6 +132,20 @@ approach, and the open questions (minimum data volume, leakage risk,
 overlap with the Funnel tab) to resolve before building it. Kept as its
 own file since ML output is probabilistic and needs a different kind of
 trust framing than PRoX's otherwise-deterministic metrics.
+
+### AI-assisted recommendations (optional, Gemini)
+
+A response to competitive pressure to have some AI-branded capability,
+scoped narrowly on purpose: an opt-in, off-by-default feature that sends
+an already-aggregated summary of the analysis (never the event log or any
+row-level data) to Gemini and displays the generated recommendations in a
+clearly-labeled, separate section — distinct from the deterministic
+recommendations already in the Executive Summary. Full detail, including
+the exact data-allowlist design that keeps case/user IDs from ever leaving
+the machine, in `AI_summary_roadmap.md`. Kept as its own file since sending
+data to a third-party API raises data-handling questions neither
+`ML_roadmap.md`'s locally-trained models nor any of PRoX's other features
+do.
 
 ### Product development suggestions
 
