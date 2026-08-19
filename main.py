@@ -1,6 +1,7 @@
 import io
 import logging
 import os
+import threading
 
 import pandas as pd
 import streamlit as st
@@ -29,6 +30,29 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ---------------------------------------------------------------------------
+# Shut down: stops the local server process for this session. Runs before
+# anything else so the sidebar/results don't render once shutdown starts.
+# ---------------------------------------------------------------------------
+if st.session_state.get("shutdown_requested"):
+    # Renders nothing - the page goes blank immediately, aside from CSS that
+    # hides Streamlit's own "CONNECTING" status widget (it would otherwise
+    # keep showing and retrying forever once the server dies below). Custom
+    # component scripts are sandboxed against touching the top-level window,
+    # but st.markdown renders straight into the main document, so a <style>
+    # tag here isn't blocked the way <script> injection was. Killing the
+    # server process is still what actually matters: once it's dead, this
+    # tab can never reconnect to it - only a manually-restarted app produces
+    # a live session again, which is the intended behaviour.
+    st.markdown(
+        "<style>[data-testid='stStatusWidget'] { display: none !important; }</style>",
+        unsafe_allow_html=True,
+    )
+    if not st.session_state.get("_shutdown_timer_started"):
+        st.session_state["_shutdown_timer_started"] = True
+        threading.Timer(1.5, lambda: os._exit(0)).start()
+    st.stop()
 
 
 @st.cache_data(show_spinner=False)
@@ -167,6 +191,23 @@ with st.sidebar:
         for key in ("results", "df", "load_messages", "segment_result", "funnel_result"):
             st.session_state.pop(key, None)
         st.rerun()
+
+    st.divider()
+    if st.session_state.get("confirm_shutdown"):
+        st.warning("Shut down PRoX? This stops the local server and closes this tab.")
+        cancel_col, confirm_col = st.columns(2)
+        with cancel_col:
+            if st.button("Cancel", use_container_width=True):
+                st.session_state["confirm_shutdown"] = False
+                st.rerun()
+        with confirm_col:
+            if st.button("Confirm", type="primary", use_container_width=True):
+                st.session_state["shutdown_requested"] = True
+                st.rerun()
+    else:
+        if st.button("Shut Down App", use_container_width=True):
+            st.session_state["confirm_shutdown"] = True
+            st.rerun()
 
 # ---------------------------------------------------------------------------
 # Main area
