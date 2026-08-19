@@ -157,7 +157,7 @@ with st.sidebar:
     )
 
     st.divider()
-    if st.button("Clear Results", use_container_width=True):
+    if st.button("Clear Results", width='stretch'):
         for key in ("results", "df", "load_messages", "segment_result", "funnel_result"):
             st.session_state.pop(key, None)
         st.rerun()
@@ -167,15 +167,15 @@ with st.sidebar:
         st.warning("Shut down PRoX? This stops the local server and closes this tab.")
         cancel_col, confirm_col = st.columns(2)
         with cancel_col:
-            if st.button("Cancel", use_container_width=True):
+            if st.button("Cancel", width='stretch'):
                 st.session_state["confirm_shutdown"] = False
                 st.rerun()
         with confirm_col:
-            if st.button("Confirm", type="primary", use_container_width=True):
+            if st.button("Confirm", type="primary", width='stretch'):
                 st.session_state["shutdown_requested"] = True
                 st.rerun()
     else:
-        if st.button("Shut Down App", use_container_width=True):
+        if st.button("Shut Down App", width='stretch'):
             st.session_state["confirm_shutdown"] = True
             st.rerun()
 
@@ -201,7 +201,7 @@ with st.expander("No data? Generate a mock event log"):
         "Seed", min_value=0, value=42, step=1, key="mock_seed",
         help="Same seed + session count always reproduces the same data."
     )
-    if st.button("Generate Mock Data", use_container_width=True):
+    if st.button("Generate Mock Data", width='stretch'):
         st.session_state["mock_csv_bytes"] = generate_mock_csv_bytes(
             n_sessions=int(mock_sessions), seed=int(mock_seed)
         )
@@ -215,10 +215,10 @@ with st.expander("No data? Generate a mock event log"):
             st.download_button(
                 "Download CSV", data=mock_csv_bytes,
                 file_name=st.session_state["mock_csv_label"], mime="text/csv",
-                use_container_width=True,
+                width='stretch',
             )
         with clear_col:
-            if st.button("Clear", use_container_width=True):
+            if st.button("Clear", width='stretch'):
                 st.session_state.pop("mock_csv_bytes", None)
                 st.session_state.pop("mock_csv_label", None)
                 st.rerun()
@@ -333,7 +333,7 @@ else:
         )
 
 st.divider()
-run_btn = st.button("Run Analysis", type="primary", use_container_width=True)
+run_btn = st.button("Run Analysis", type="primary", width='stretch')
 
 # ---------------------------------------------------------------------------
 # Run analysis when button is pressed
@@ -390,7 +390,7 @@ if summary:
             data=generate_html_report(results),
             file_name="prox_report.html",
             mime="text/html",
-            use_container_width=True,
+            width='stretch',
         )
 
 st.divider()
@@ -417,7 +417,7 @@ with tab_map:
         st.caption("Most frequent variant - the intended customer journey.")
         hp = viz.get("happy_path")
         if hp and os.path.exists(hp):
-            st.image(hp, use_container_width=True)
+            st.image(hp, width='stretch')
         else:
             st.info("Happy path image not available. Check that Graphviz is installed.")
 
@@ -426,7 +426,7 @@ with tab_map:
         st.caption("Top-K variants combined, showing common deviations.")
         mf = viz.get("bottlenecks")
         if mf and os.path.exists(mf):
-            st.image(mf, use_container_width=True)
+            st.image(mf, width='stretch')
         else:
             st.info("Main flow image not available.")
 
@@ -449,7 +449,7 @@ with tab_variants:
             var_df = pd.DataFrame.from_dict(top, orient="index")
             var_df.index.name = "Variant"
             show_cols = [c for c in ["frequency", "percentage", "num_activities"] if c in var_df.columns]
-            st.dataframe(var_df[show_cols], use_container_width=True)
+            st.dataframe(var_df[show_cols], width='stretch')
     else:
         st.info("No variant data available.")
 
@@ -476,7 +476,7 @@ with tab_bottlenecks:
         display_cols = [c for c in ["mean_duration", "frequency", "impact_score", "severity"] if c in bn_df.columns]
         st.dataframe(
             bn_df[display_cols].sort_values("impact_score", ascending=False),
-            use_container_width=True
+            width='stretch'
         )
     else:
         st.info("No significant activity bottlenecks found.")
@@ -495,7 +495,7 @@ with tab_bottlenecks:
         tbn_df.index.name = "Transition"
         st.dataframe(
             tbn_df[display_cols].sort_values("impact_score", ascending=False).head(max_bottleneck_edges),
-            use_container_width=True
+            width='stretch'
         )
 
     recs = stats.get("recommendations", [])
@@ -535,7 +535,7 @@ with tab_conf:
                 }
                 for c in imperfect[:100]
             ]
-            st.dataframe(pd.DataFrame(dev_rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(dev_rows), width='stretch')
         else:
             st.success("All sampled cases follow the model perfectly.")
     else:
@@ -586,7 +586,7 @@ with tab_funnel:
             if funnel_steps:
                 st.caption("Funnel order: " + " → ".join(funnel_steps))
 
-        run_funnel_btn = st.button("Run Funnel Analysis", use_container_width=True)
+        run_funnel_btn = st.button("Run Funnel Analysis", width='stretch')
 
         if run_funnel_btn:
             if mode == "Define manually" and not funnel_steps:
@@ -611,7 +611,7 @@ with tab_funnel:
                     funnel_df.style.format({
                         "pct_of_total": "{:.1f}%", "pct_of_previous_stage": "{:.1f}%", "drop_off_pct": "{:.1f}%"
                     }),
-                    use_container_width=True
+                    width='stretch'
                 )
                 if funnel_result.get("biggest_drop_off"):
                     st.caption(f"Biggest drop-off: **{funnel_result['biggest_drop_off']}**")
@@ -655,7 +655,7 @@ with tab_biz:
                 row = chart_items[i:i + 3]
                 for col, (name, path) in zip(st.columns(len(row)), row):
                     with col:
-                        st.image(path, caption=name.replace("_", " ").title(), use_container_width=True)
+                        st.image(path, caption=name.replace("_", " ").title(), width='stretch')
 
         with st.expander("Full Report"):
             st.text(format_business_report(biz))
@@ -692,7 +692,7 @@ with tab_segments:
         with c3:
             st.write("")
             st.write("")
-            compare_btn = st.button("Compare Segments", use_container_width=True)
+            compare_btn = st.button("Compare Segments", width='stretch')
 
         run_parallel = st.checkbox(
             "Run segments in parallel", value=True,
@@ -727,7 +727,7 @@ with tab_segments:
                         "health_score": "{:.0f}", "fitness_score": "{:.1%}",
                         "precision_score": "{:.1%}", "repeat_rate": "{:.1f}%"
                     }),
-                    use_container_width=True
+                    width='stretch'
                 )
 
                 st.download_button(
@@ -745,7 +745,7 @@ with tab_segments:
                         st.caption(str(seg_value))
                         hp = seg_results.get("visualizations", {}).get("happy_path")
                         if hp and os.path.exists(hp):
-                            st.image(hp, use_container_width=True)
+                            st.image(hp, width='stretch')
                         else:
                             st.info("Not available.")
             else:
