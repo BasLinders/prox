@@ -201,6 +201,76 @@ def check_trace_length(df: pd.DataFrame) -> Dict[str, Any]:
     return stats
 
 
+def check_data_quality(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Lightweight, objective diagnostics on an already-loaded event log,
+    meant to be surfaced before analysis runs so messy data is caught early
+    instead of producing a confusing downstream result (a health score or
+    process map that looks wrong for reasons that aren't obvious from the
+    result alone).
+
+    Complements load_and_validate_csv()'s own checks - missing case/user IDs,
+    missing activities, and unparseable timestamps are already dropped
+    there - by looking at what's left in a clean-by-that-definition log:
+    exact duplicate events, cases with no transitions to analyse, and events
+    logged out of chronological order within a case.
+
+    Returns
+    -------
+    dict with keys:
+        'duplicate_events'    : count of exact (case, activity, timestamp)
+                                 duplicates
+        'single_event_cases'  : count of cases with only one event
+        'out_of_order_events' : count of events that occur earlier than the
+                                 previous event in the same case, as logged
+        'issues'              : list of human-readable strings, one per check
+                                 that found something (empty if the log is
+                                 clean by all three checks)
+    """
+    result = {
+        'duplicate_events': 0,
+        'single_event_cases': 0,
+        'out_of_order_events': 0,
+        'issues': [],
+    }
+
+    if df is None or df.empty:
+        return result
+
+    n_cases = df['case:concept:name'].nunique()
+
+    dup_mask = df.duplicated(subset=['case:concept:name', 'concept:name', 'time:timestamp'], keep=False)
+    n_dup = int(dup_mask.sum())
+    result['duplicate_events'] = n_dup
+    if n_dup:
+        result['issues'].append(
+            f"{n_dup} duplicate event(s) - the same case, activity, and timestamp appear more "
+            "than once. This can double-count activity frequencies and transition timings."
+        )
+
+    case_sizes = df.groupby('case:concept:name').size()
+    n_single = int((case_sizes == 1).sum())
+    result['single_event_cases'] = n_single
+    if n_single:
+        pct = n_single / n_cases * 100 if n_cases else 0.0
+        result['issues'].append(
+            f"{n_single} case(s) ({pct:.1f}%) have only one event - there's no transition to "
+            "analyse for process discovery or bottleneck detection in those cases."
+        )
+
+    time_diff = df.groupby('case:concept:name')['time:timestamp'].diff()
+    n_out_of_order = int((time_diff < pd.Timedelta(0)).sum())
+    result['out_of_order_events'] = n_out_of_order
+    if n_out_of_order:
+        result['issues'].append(
+            f"{n_out_of_order} event(s) occur earlier than the previous event in the same case. "
+            "PRoX sorts events by timestamp before analysis, so this won't break the pipeline, "
+            "but out-of-order source data often signals a data export or timezone issue worth checking."
+        )
+
+    return result
+
+
 def get_trace_signature(trace) -> tuple:
     """Returns a hashable tuple of activity names representing a trace variant."""
     return tuple(str(e['concept:name']) for e in trace)

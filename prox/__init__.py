@@ -17,6 +17,7 @@ from .data_manager import (
     filter_event_log,
     sample_log_stratified,
     check_trace_length,
+    check_data_quality,
 )
 from .config import CONFIG, create_analysis_config, get_column_mappings
 from .discovery import perform_process_discovery, DISCOVERY_ALGORITHMS
@@ -26,6 +27,7 @@ from .analytics import (
     analyze_process_performance,
     analyze_repeat_purchases,
     analyze_conversion_funnel,
+    analyze_funnel_by_segment,
     format_business_report,
 )
 from .visualizer import visualize_focused_insights, export_results
@@ -41,6 +43,7 @@ __all__ = [
     "filter_event_log",
     "sample_log_stratified",
     "check_trace_length",
+    "check_data_quality",
     "CONFIG",
     "create_analysis_config",
     "get_column_mappings",
@@ -52,6 +55,7 @@ __all__ = [
     "analyze_process_performance",
     "analyze_repeat_purchases",
     "analyze_conversion_funnel",
+    "analyze_funnel_by_segment",
     "format_business_report",
     "visualize_focused_insights",
     "export_results",

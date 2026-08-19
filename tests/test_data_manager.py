@@ -9,6 +9,7 @@ from prox.data_manager import (
     sample_log_stratified,
     optimize_dataframe_memory,
     refine_activity_labels,
+    check_data_quality,
 )
 
 from conftest import make_event_log
@@ -205,3 +206,51 @@ def test_refine_activity_labels_missing_context_column_is_noop():
     df = pd.DataFrame({'concept:name': ['page_view']})
     result = refine_activity_labels(df.copy(), target_activity='page_view', context_column='does_not_exist')
     assert result.loc[0, 'concept:name'] == 'page_view'
+
+
+# --- check_data_quality ---
+
+def test_check_data_quality_clean_log_has_no_issues(simple_event_log):
+    result = check_data_quality(simple_event_log)
+    assert result['issues'] == []
+    assert result['duplicate_events'] == 0
+    assert result['single_event_cases'] == 0
+    assert result['out_of_order_events'] == 0
+
+
+def test_check_data_quality_detects_duplicate_events():
+    df = make_event_log([
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),  # exact duplicate of the row above
+        ('c1', 'b', pd.Timestamp('2024-01-01 00:01:00')),
+    ])
+    result = check_data_quality(df)
+    assert result['duplicate_events'] == 2  # both rows in the duplicate pair are counted
+    assert any('duplicate event' in issue.lower() for issue in result['issues'])
+
+
+def test_check_data_quality_detects_single_event_cases():
+    df = make_event_log([
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),  # only event in its case
+        ('c2', 'a', pd.Timestamp('2024-01-01 00:00:00')),
+        ('c2', 'b', pd.Timestamp('2024-01-01 00:01:00')),
+    ])
+    result = check_data_quality(df)
+    assert result['single_event_cases'] == 1
+    assert any('one event' in issue.lower() for issue in result['issues'])
+
+
+def test_check_data_quality_detects_out_of_order_events():
+    df = make_event_log([
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:05:00')),
+        ('c1', 'b', pd.Timestamp('2024-01-01 00:00:00')),  # logged after 'a' but timestamped earlier
+    ])
+    result = check_data_quality(df)
+    assert result['out_of_order_events'] == 1
+    assert any('earlier than the previous event' in issue.lower() for issue in result['issues'])
+
+
+def test_check_data_quality_empty_df_returns_no_issues():
+    result = check_data_quality(pd.DataFrame())
+    assert result['issues'] == []
+    assert result['duplicate_events'] == 0

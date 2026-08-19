@@ -11,7 +11,7 @@ current even when the detail lives elsewhere — this is the one page meant
 to answer "where does PRoX development actually stand?" without opening
 five files.
 
-Last assessed 2026-08-01, against `main` @ `6fa5e5f` — 74 tests passing,
+Last assessed 2026-08-19, against `main` @ `a566875` — 90 tests passing,
 `pyflakes` clean.
 
 ---
@@ -157,19 +157,25 @@ sequenced yet.
 
 #### Quick wins (small, builds on what already exists)
 
-- **Funnel x Segment cross-analysis.** The Funnel tab and Segment Comparison
-  are currently independent features that were built separately but combine
-  naturally: "show the funnel drop-off for mobile vs. desktop." Wiring the
-  Funnel tab to optionally split by the same segment column would surface
-  exactly the kind of insight non-technical stakeholders actually ask for.
+**Shipped:**
+- **Funnel x Segment cross-analysis — done.** The Funnel tab has an optional
+  "Split by segment" selector (same 2-20-unique-value column candidates as
+  Segment Comparison). `analyze_funnel_by_segment()` in `prox/analytics.py`
+  reuses the overall funnel's stage order for every segment, so results are
+  directly comparable - "does mobile drop off earlier than desktop?" is now
+  a chart and a table, not a manual cross-reference between two tabs.
+- **Data-quality pre-check — done.** A "2. Data Quality Check" step now runs
+  right after upload, before filtering/analysis. `check_data_quality()` in
+  `prox/data_manager.py` flags exact duplicate events, single-event cases
+  (no transitions to analyse), and events logged out of chronological order
+  within a case - the log-shape problems `load_and_validate_csv()`'s own
+  null/timestamp checks don't catch.
+
+**Still open:**
 - **Config presets.** Save/load the sidebar configuration (discovery algo,
   sample size, filters, funnel definition) as a small JSON file. Removes the
   "reconfigure everything every session" friction for a repeat analyst —
   directly serves the "runs on a laptop, used repeatedly" use case.
-- **Data-quality pre-check.** Before running the full pipeline, a lightweight
-  summary of missing values, duplicate case IDs, and timestamp gaps/
-  out-of-order events. Non-technical users currently only find out their
-  data is messy after a confusing downstream result.
 
 #### Medium bets (real feature work, clear value)
 
