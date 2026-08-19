@@ -31,6 +31,7 @@ from .analytics import (
 from .visualizer import visualize_focused_insights, export_results
 from .report import generate_html_report, generate_segment_comparison_report
 from .segments import compare_segments
+from .mock_data import generate_mock_event_log, generate_mock_csv_bytes
 
 __all__ = [
     "run_full_analysis",
@@ -57,4 +58,6 @@ __all__ = [
     "generate_html_report",
     "generate_segment_comparison_report",
     "compare_segments",
+    "generate_mock_event_log",
+    "generate_mock_csv_bytes",
 ]
