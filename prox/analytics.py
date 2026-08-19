@@ -104,6 +104,10 @@ def analyze_process_performance(
     time_divisor = divisors[time_unit]
 
     try:
+        if event_log_df is None or event_log_df.empty:
+            results['errors'].append("Critical Error: Event log is empty or None.")
+            return results
+
         required = ['case:concept:name', 'concept:name', 'time:timestamp']
         missing = [c for c in required if c not in event_log_df.columns]
         if missing:
@@ -338,11 +342,21 @@ def analyze_process_performance(
 
         # --- Summary / health score ---
         avg_dur = case_durations['duration'].mean()
-        variability = case_durations['duration'].std() / avg_dur if avg_dur > 0 else 1
+        std_dur = case_durations['duration'].std()
+        # std() is NaN for a single case (ddof=1 divides by zero), and mean is 0
+        # when every case has identical (e.g. zero) duration. Either way there's
+        # no measurable inconsistency between cases, so treat variability as
+        # neutral rather than defaulting to "maximum penalty" - the old
+        # `else 1` fallback punished exactly-uniform durations as if they were
+        # the most volatile possible case, and let a NaN std silently coerce
+        # the final score to 100 via how Python's min()/max() compare against
+        # NaN (neither `NaN < 100` nor `100 < NaN` is true, so the clamp calls
+        # were silently keeping their non-NaN argument).
+        variability = std_dur / avg_dur if avg_dur > 0 and pd.notna(std_dur) else 0.0
         bn_ratio = len(activity_bottlenecks) / len(activity_performance) if activity_performance else 0
         health_score = max(0, min(100, 100 * (1 - variability * 0.3) * (1 - bn_ratio * 0.5)))
 
-        recommendations = _generate_performance_recommendations(results)
+        recommendations = _generate_performance_recommendations(results, health_score)
         results['summary_statistics'] = {
             'process_health_score': round(health_score, 2),
             'efficiency_metrics': {
@@ -360,7 +374,15 @@ def analyze_process_performance(
     return results
 
 
-def _generate_performance_recommendations(results: Dict[str, Any]) -> List[str]:
+def _generate_performance_recommendations(results: Dict[str, Any], health_score: float) -> List[str]:
+    """
+    health_score is passed explicitly rather than read from
+    results['summary_statistics'] because this is called before that key is
+    populated (it's what's being assembled into it) - reading it from
+    `results` here previously always saw the placeholder {} set at the top of
+    analyze_process_performance(), so every report claimed "0/100" regardless
+    of the real score.
+    """
     recommendations = []
     try:
         case_stats = results.get('case_performance', {}).get('duration_stats', {})
@@ -397,11 +419,10 @@ def _generate_performance_recommendations(results: Dict[str, Any]) -> List[str]:
                 f"Peak activity hours: {peak_hours}. Consider resource scaling during these periods."
             )
 
-        health = results.get('summary_statistics', {}).get('process_health_score', 0)
-        if health < 50:
-            recommendations.append(f"Low health score ({health:.0f}/100). Process redesign may be needed.")
-        elif health > 80:
-            recommendations.append(f"Good health score ({health:.0f}/100). Focus on continuous monitoring.")
+        if health_score < 50:
+            recommendations.append(f"Low health score ({health_score:.0f}/100). Process redesign may be needed.")
+        elif health_score > 80:
+            recommendations.append(f"Good health score ({health_score:.0f}/100). Focus on continuous monitoring.")
 
         if not recommendations:
             recommendations.append("Process within normal parameters. Continue monitoring.")
