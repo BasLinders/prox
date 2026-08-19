@@ -1,7 +1,7 @@
 import logging
 import pandas as pd
 import pm4py
-from typing import Dict, Any
+from typing import Callable, Dict, Any
 
 from .discovery import perform_process_discovery
 from .conformance import run_conformance_checking
@@ -13,11 +13,25 @@ from .data_manager import filter_event_log, FILTER_HANDLERS
 
 logger = logging.getLogger(__name__)
 
+# User-facing stage count/labels for progress_callback - one tick per
+# meaningfully time-consuming stage. Log summary and the variants CSV export
+# are near-instant, so they're folded into the stage they sit next to rather
+# than getting their own tick.
+_PROGRESS_STAGES = [
+    "Filtering events",
+    "Discovering process model",
+    "Checking conformance",
+    "Analysing performance",
+    "Generating visualisations",
+    "Computing business insights",
+]
+
 
 def run_full_analysis(
     event_log_df: pd.DataFrame,
     config: Dict[str, Any],
-    output_folder: str = "output"
+    output_folder: str = "output",
+    progress_callback: Callable[[int, int, str], None] | None = None
 ) -> Dict[str, Any] | None:
     """
     Executes the full process mining pipeline and returns a structured results dict.
@@ -41,6 +55,10 @@ def run_full_analysis(
         Folder for generated images/CSVs. Give each concurrent or repeated run
         (e.g. one per segment in compare_segments()) a distinct folder, or later
         runs will silently overwrite earlier runs' images.
+    progress_callback : callable, optional
+        Called as progress_callback(stage_num, total_stages, stage_label) as
+        each major stage completes (see _PROGRESS_STAGES), e.g. to drive a UI
+        progress bar. Not called on early-failure returns. No-op if None.
 
     Returns
     -------
@@ -50,6 +68,12 @@ def run_full_analysis(
     logger.info("=" * 60)
     logger.info("START: Process Mining Pipeline")
     logger.info("=" * 60)
+
+    total_stages = len(_PROGRESS_STAGES)
+
+    def _report_progress(stage_num: int) -> None:
+        if progress_callback:
+            progress_callback(stage_num, total_stages, _PROGRESS_STAGES[stage_num - 1])
 
     pipeline_results: Dict[str, Any] = {}
     speed_params = config.get("speed_params", {})
@@ -96,6 +120,8 @@ def run_full_analysis(
     if n_events > 10_000:
         logger.warning("Dataset is large (>10k events). Consider enabling sampling.")
 
+    _report_progress(1)
+
     # -------------------------------------------------------------------------
     # Step 2: Log Summary
     # -------------------------------------------------------------------------
@@ -138,6 +164,8 @@ def run_full_analysis(
     net, im, fm = model_tuple
     pipeline_results['model'] = {'net': net, 'im': im, 'fm': fm}
 
+    _report_progress(2)
+
     # -------------------------------------------------------------------------
     # Step 4: Conformance Checking
     # -------------------------------------------------------------------------
@@ -171,6 +199,8 @@ def run_full_analysis(
         overall.get('quality_assessment', 'N/A')
     )
 
+    _report_progress(3)
+
     # -------------------------------------------------------------------------
     # Step 5: Performance Analysis
     # -------------------------------------------------------------------------
@@ -197,6 +227,8 @@ def run_full_analysis(
         case_perf.get('mean', 0), time_unit, top_bn or 'None'
     )
 
+    _report_progress(4)
+
     # -------------------------------------------------------------------------
     # Step 5b: Visualisation
     # -------------------------------------------------------------------------
@@ -217,6 +249,8 @@ def run_full_analysis(
         'happy_path': happy_img,
         'bottlenecks': main_img
     }
+
+    _report_progress(5)
 
     # -------------------------------------------------------------------------
     # Step 6: Export variants CSV
@@ -252,6 +286,8 @@ def run_full_analysis(
     )
     if funnel_stats.get('stages'):
         pipeline_results['funnel_analysis'] = funnel_stats
+
+    _report_progress(6)
 
     logger.info("=" * 60)
     logger.info("COMPLETE: Process Mining Pipeline")

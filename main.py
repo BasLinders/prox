@@ -104,12 +104,18 @@ def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, c
 
 
 @st.cache_resource(show_spinner=False)
-def _cached_run_full_analysis(df_ready, config, output_folder="output"):
+def _cached_run_full_analysis(df_ready, config, output_folder="output", _progress_callback=None):
     """Runs the full pipeline. Cached on the input data + config, so re-running
     with identical settings (e.g. clicking Run Analysis again) is instant
     instead of redoing filtering, discovery, conformance, etc. from scratch.
+    `_progress_callback` is underscore-prefixed so Streamlit's cache excludes
+    it from hashing - it's a fresh closure every rerun, and not part of what
+    identifies a cached result. Not called at all on a cache hit, since
+    run_full_analysis() itself isn't invoked then.
     """
-    return run_full_analysis(df_ready, config=config, output_folder=output_folder)
+    return run_full_analysis(
+        df_ready, config=config, output_folder=output_folder, progress_callback=_progress_callback
+    )
 
 # ---------------------------------------------------------------------------
 # Sidebar - configuration
@@ -350,8 +356,13 @@ if run_btn:
         filter_steps=filter_steps,
     )
 
-    with st.spinner("Running process mining pipeline... This may take a minute."):
-        results = _cached_run_full_analysis(df_ready, config)
+    progress_bar = st.progress(0, text="Starting analysis...")
+
+    def _update_progress(stage_num, total_stages, stage_label):
+        progress_bar.progress(stage_num / total_stages, text=f"{stage_label} ({stage_num}/{total_stages})")
+
+    results = _cached_run_full_analysis(df_ready, config, _progress_callback=_update_progress)
+    progress_bar.empty()
 
     if results is None:
         st.error("Analysis failed. Check the application logs for details.")
