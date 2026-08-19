@@ -2,6 +2,8 @@ import copy
 import logging
 import os
 import re
+import sys
+import types
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Any, Dict
 
@@ -120,22 +122,45 @@ def compare_segments(
             len(jobs), worker_count
         )
 
-        with ProcessPoolExecutor(max_workers=worker_count) as executor:
-            futures = {
-                executor.submit(_run_segment_job, value, segment_df, segment_config, seg_folder): value
-                for value, _case_ids, segment_df, seg_folder in jobs
-            }
-            for future in as_completed(futures):
-                value = futures[future]
-                try:
-                    _, results = future.result()
-                except Exception as e:
-                    errors.append(f"Analysis failed for segment '{value}': {e}")
-                    continue
-                if results is None:
-                    errors.append(f"Analysis failed for segment '{value}'. Skipped.")
-                    continue
-                raw_results[value] = results
+        # Windows (and macOS) can only spawn worker processes, not fork, and
+        # a spawned worker's bootstrap unconditionally reimports whatever
+        # file sys.modules['__main__'] points to in the parent, to rebuild a
+        # consistent global environment - this is fixed multiprocessing
+        # behaviour, not something a worker-side guard can opt out of
+        # without breaking the pool (exiting mid-bootstrap looks identical
+        # to a crash to ProcessPoolExecutor). Under `streamlit run`,
+        # __main__ is the user's Streamlit script, full of top-level st.*
+        # calls that crash immediately outside a real Streamlit session -
+        # the parent then reports every segment as "terminated abruptly".
+        # Point __main__ at a dedicated no-op stub for the duration of the
+        # spawn so workers reimport that instead. It can't be this file:
+        # runpy re-executes the target with no package context, so the
+        # relative import below would itself raise ImportError.
+        from . import _mp_spawn_stub
+        original_main = sys.modules.get('__main__')
+        safe_main = types.ModuleType('__main__')
+        safe_main.__file__ = _mp_spawn_stub.__file__
+        sys.modules['__main__'] = safe_main
+        try:
+            with ProcessPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(_run_segment_job, value, segment_df, segment_config, seg_folder): value
+                    for value, _case_ids, segment_df, seg_folder in jobs
+                }
+                for future in as_completed(futures):
+                    value = futures[future]
+                    try:
+                        _, results = future.result()
+                    except Exception as e:
+                        errors.append(f"Analysis failed for segment '{value}': {e}")
+                        continue
+                    if results is None:
+                        errors.append(f"Analysis failed for segment '{value}'. Skipped.")
+                        continue
+                    raw_results[value] = results
+        finally:
+            if original_main is not None:
+                sys.modules['__main__'] = original_main
     else:
         for value, case_ids, segment_df, seg_folder in jobs:
             logger.info("--- Segment '%s': %d case(s) ---", value, len(case_ids))

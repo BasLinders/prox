@@ -1,3 +1,6 @@
+import sys
+import types
+
 import pandas as pd
 
 from prox.config import create_analysis_config
@@ -102,6 +105,43 @@ def test_compare_segments_parallel_and_sequential_agree_on_comparison_table(tmp_
     )
 
     assert parallel_result['comparison_table'] == sequential_result['comparison_table']
+
+
+def test_compare_segments_parallel_survives_unsafe_main_module(tmp_path):
+    """Regression test for a real bug: under `streamlit run`, sys.modules['__main__']
+    points at the user's Streamlit script, which is full of top-level st.* calls
+    that raise outside a live session. Windows/macOS spawn workers reimport
+    whatever __main__ points to in the parent to rebuild their environment, so
+    every worker crashed on startup, surfacing to users as "A process in the
+    process pool was terminated abruptly" for every single segment. Simulates
+    that by pointing __main__ at a script that raises if ever reimported, and
+    asserts compare_segments still succeeds and restores __main__ afterward.
+    """
+    unsafe_script = tmp_path / "unsafe_streamlit_app.py"
+    unsafe_script.write_text(
+        "raise RuntimeError('boom: this must never be reimported by a worker')\n"
+    )
+    fake_main = types.ModuleType('__main__')
+    fake_main.__file__ = str(unsafe_script)
+
+    original_main = sys.modules.get('__main__')
+    sys.modules['__main__'] = fake_main
+    try:
+        df = make_segmented_log()
+        config = create_analysis_config(filter_steps=[], sample_size=10)
+
+        result = compare_segments(
+            df, segment_col='device', config=config, parallel=True, output_folder=str(tmp_path / 'out')
+        )
+
+        assert result['errors'] == []
+        assert set(result['comparison_table'].keys()) == {'mobile', 'desktop', 'tablet'}
+        # __main__ must be restored to the caller's module once the pool is done,
+        # not left pointing at the internal spawn-safe stub.
+        assert sys.modules['__main__'] is fake_main
+    finally:
+        if original_main is not None:
+            sys.modules['__main__'] = original_main
 
 
 def test_compare_segments_single_segment_skips_pool(tmp_path):
