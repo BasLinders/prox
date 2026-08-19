@@ -17,6 +17,8 @@ from prox import (
     generate_segment_comparison_report,
     compare_segments,
     analyze_conversion_funnel,
+    analyze_funnel_by_segment,
+    check_data_quality,
     generate_mock_csv_bytes,
     filter_event_log,
     DISCOVERY_ALGORITHMS,
@@ -164,7 +166,7 @@ with st.sidebar:
 
     st.divider()
     if st.button("Clear Results", width='stretch'):
-        for key in ("results", "df", "load_messages", "segment_result", "funnel_result"):
+        for key in ("results", "df", "load_messages", "segment_result", "funnel_result", "funnel_segment_result"):
             st.session_state.pop(key, None)
         st.rerun()
 
@@ -260,10 +262,24 @@ if raw_df is None:
     st.stop()
 
 # ---------------------------------------------------------------------------
+# Data quality check - surfaced before filtering/analysis, so messy data is
+# caught here instead of showing up as a confusing downstream result
+# ---------------------------------------------------------------------------
+st.divider()
+st.header("2. Data Quality Check")
+data_quality = check_data_quality(raw_df)
+if data_quality["issues"]:
+    with st.expander(f"{len(data_quality['issues'])} data quality issue(s) found", expanded=True):
+        for issue in data_quality["issues"]:
+            st.warning(issue)
+else:
+    st.success("No data quality issues detected.")
+
+# ---------------------------------------------------------------------------
 # Filter events before analysis
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("2. Filter Events")
+st.header("3. Filter Events")
 st.caption(
     "Remove noisy or irrelevant events before analysis, or narrow it down to "
     "just the events you care about. Optional - leave the list empty to "
@@ -314,7 +330,7 @@ st.caption(
 # Sampling - opt-in, with a warning above a "large" case-count threshold
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("3. Sampling")
+st.header("4. Sampling")
 enable_sampling = st.checkbox(
     "Enable Sampling", value=False,
     help=(
@@ -597,6 +613,26 @@ with tab_funnel:
             if funnel_steps:
                 st.caption("Funnel order: " + " → ".join(funnel_steps))
 
+        funnel_exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id"}
+        funnel_segment_candidates = [
+            c for c in raw_df.columns
+            if c not in funnel_exclude_cols and 2 <= raw_df[c].nunique(dropna=True) <= 20
+        ]
+        funnel_segment_col = None
+        if funnel_segment_candidates:
+            funnel_segment_choice = st.selectbox(
+                "Split by segment (optional)",
+                options=["None"] + funnel_segment_candidates,
+                help=(
+                    "Compare drop-off across segment values instead of just the "
+                    "overall funnel - e.g. 'does mobile drop off earlier than "
+                    "desktop?' Uses the same stage order as the overall funnel "
+                    "above, so segments are directly comparable."
+                )
+            )
+            if funnel_segment_choice != "None":
+                funnel_segment_col = funnel_segment_choice
+
         run_funnel_btn = st.button("Run Funnel Analysis", width='stretch')
 
         if run_funnel_btn:
@@ -604,9 +640,17 @@ with tab_funnel:
                 st.warning("Select at least one activity to define a funnel.")
             else:
                 with st.spinner("Computing funnel..."):
-                    st.session_state["funnel_result"] = analyze_conversion_funnel(
-                        raw_df, funnel_steps=funnel_steps
-                    )
+                    if funnel_segment_col:
+                        combined = analyze_funnel_by_segment(
+                            raw_df, segment_col=funnel_segment_col, funnel_steps=funnel_steps
+                        )
+                        st.session_state["funnel_result"] = combined["overall"]
+                        st.session_state["funnel_segment_result"] = combined
+                    else:
+                        st.session_state["funnel_result"] = analyze_conversion_funnel(
+                            raw_df, funnel_steps=funnel_steps
+                        )
+                        st.session_state.pop("funnel_segment_result", None)
 
         funnel_result = st.session_state.get("funnel_result")
         if funnel_result:
@@ -628,6 +672,33 @@ with tab_funnel:
                     st.caption(f"Biggest drop-off: **{funnel_result['biggest_drop_off']}**")
             else:
                 st.info("No funnel stages could be computed from the selected steps.")
+
+            funnel_segment_result = st.session_state.get("funnel_segment_result")
+            if funnel_segment_result and funnel_segment_result.get("segments"):
+                st.divider()
+                st.subheader("Drop-off by segment")
+
+                for err in funnel_segment_result.get("errors", []):
+                    st.error(err)
+
+                segments = funnel_segment_result["segments"]
+                pct_table = {
+                    str(seg): {stage: info["pct_of_total"] for stage, info in seg_res["stages"].items()}
+                    for seg, seg_res in segments.items()
+                }
+                pct_df = pd.DataFrame(pct_table)
+                pct_df.index.name = "Stage"
+                st.caption("% of each segment's cases that reached each stage")
+                st.bar_chart(pct_df)
+
+                drop_off_table = {
+                    str(seg): {stage: info["drop_off_pct"] for stage, info in seg_res["stages"].items()}
+                    for seg, seg_res in segments.items()
+                }
+                drop_off_df = pd.DataFrame(drop_off_table)
+                drop_off_df.index.name = "Stage"
+                st.caption("Drop-off % from the previous stage, per segment")
+                st.dataframe(drop_off_df.style.format("{:.1f}%", na_rep="-"), width='stretch')
         else:
             st.info("Configure the funnel above and click **Run Funnel Analysis**.")
 
