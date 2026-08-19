@@ -93,6 +93,74 @@ def test_analyze_process_performance_missing_columns():
     assert results['bottlenecks'] == {}
 
 
+def test_analyze_process_performance_empty_df():
+    """analyze_process_performance() previously had no explicit empty check,
+    unlike its sibling get_event_log_summary(): an empty-but-valid-schema
+    DataFrame silently produced a fabricated health score (avg_dur/std both
+    NaN -> the `else` fallback kicked in as if a real log had been analysed)
+    rather than reporting the log was empty."""
+    empty_df = pd.DataFrame(columns=['case:concept:name', 'concept:name', 'time:timestamp'])
+    results = analyze_process_performance(empty_df)
+    assert any('empty' in e.lower() for e in results['errors'])
+    assert results['summary_statistics'] == {}
+
+
+def test_recommendations_health_score_message_matches_actual_score():
+    """Regression test for a real bug: _generate_performance_recommendations()
+    was called before results['summary_statistics'] existed, so it always read
+    the health score as 0 regardless of the real value - every report claimed
+    'Low health score (0/100)' even when the displayed score was, say, 100."""
+    df = make_bottleneck_log()
+    results = analyze_process_performance(df, time_unit='minutes')
+    stats = results['summary_statistics']
+    score = stats['process_health_score']
+    recommendations = stats['recommendations']
+
+    health_recs = [r for r in recommendations if 'health score' in r.lower()]
+    assert health_recs, "expected a health-score recommendation to be present"
+    # The message must quote the *actual* score, not a stale placeholder.
+    assert f"({score:.0f}/100)" in health_recs[0]
+    if score < 50:
+        assert health_recs[0].startswith("Low health score")
+    elif score > 80:
+        assert health_recs[0].startswith("Good health score")
+
+
+def test_health_score_single_case_has_no_nan_variability():
+    """Regression test: with exactly one case, duration.std() is NaN (ddof=1
+    divides by zero). That NaN used to propagate through the health-score
+    formula and get silently coerced to exactly 100 by how Python's min()/
+    max() compare against NaN, and leaked into efficiency_metrics as a raw
+    NaN. A single case has no measurable duration variability, so it should
+    be treated as neutral (0%), not NaN and not a specific verdict either
+    way by accident."""
+    df = make_event_log([('c1', 'a', pd.Timestamp('2024-01-01')),
+                          ('c1', 'b', pd.Timestamp('2024-01-01 00:05:00'))])
+    results = analyze_process_performance(df, time_unit='minutes')
+    stats = results['summary_statistics']
+
+    assert pd.notna(stats['process_health_score'])
+    assert stats['efficiency_metrics']['duration_variability_pct'] == 0.0
+    assert 0 <= stats['process_health_score'] <= 100
+
+
+def test_health_score_zero_duration_cases_not_penalised_as_high_variability():
+    """Regression test: when every case has identical (here: zero) duration,
+    that's genuinely zero variability - the cases are perfectly consistent.
+    The old `avg_dur > 0 else 1` fallback instead treated "no timing signal"
+    as maximum variability, applying a 30% penalty to a log with literally no
+    evidence of inconsistency."""
+    rows = [(f'c{i}', 'only_event', pd.Timestamp('2024-01-01')) for i in range(5)]
+    df = make_event_log(rows)
+    results = analyze_process_performance(df, time_unit='minutes')
+    stats = results['summary_statistics']
+
+    assert stats['efficiency_metrics']['duration_variability_pct'] == 0.0
+    # No bottlenecks and no measurable variability -> nothing should drag the
+    # score down from a perfect 100.
+    assert stats['process_health_score'] == 100
+
+
 # --- analyze_repeat_purchases ---
 
 def test_analyze_repeat_purchases_detects_repeat_buyer(tmp_path):
