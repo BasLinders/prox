@@ -922,6 +922,68 @@ def analyze_conversion_funnel(
     }
 
 
+def analyze_funnel_by_segment(
+    df: pd.DataFrame,
+    segment_col: str,
+    funnel_steps: list = None,
+    case_col: str = 'case:concept:name',
+    activity_col: str = 'concept:name',
+    top_n_segments: int = 5,
+    min_case_coverage: float = 0.05,
+) -> Dict[str, Any]:
+    """
+    Runs analyze_conversion_funnel() once for the full log and once per top-N
+    segment value (by case count), so drop-off can be compared across
+    segments - e.g. "does mobile drop off earlier than desktop?"
+
+    Segments are assigned per case using the first observed value of
+    segment_col within that case (same rule as segments.compare_segments()),
+    so a case with a mixed/changing segment value isn't split across
+    segments mid-trace.
+
+    The overall log's funnel_steps (explicit, or auto-derived if None) are
+    reused as-is for every segment rather than re-deriving them per segment,
+    so every segment reports the same stages in the same order - directly
+    comparable, instead of each segment potentially settling on a different
+    auto-derived stage order that would make the comparison meaningless.
+
+    Returns
+    -------
+    dict with keys:
+        'overall'  : analyze_conversion_funnel() result for the full log
+        'segments' : {segment_value: analyze_conversion_funnel() result}
+        'errors'   : list of str
+    """
+    errors: List[str] = []
+
+    if segment_col not in df.columns:
+        errors.append(f"Segment column '{segment_col}' not found in event log.")
+        return {'overall': {}, 'segments': {}, 'errors': errors}
+
+    overall = analyze_conversion_funnel(
+        df, funnel_steps=funnel_steps, case_col=case_col, activity_col=activity_col,
+        min_case_coverage=min_case_coverage
+    )
+    errors.extend(overall['errors'])
+    if not overall['funnel_steps']:
+        return {'overall': overall, 'segments': {}, 'errors': errors}
+
+    resolved_steps = overall['funnel_steps']
+
+    case_segment = df.groupby(case_col)[segment_col].first()
+    top_segments = case_segment.value_counts().head(top_n_segments).index.tolist()
+
+    segment_results = {}
+    for value in top_segments:
+        case_ids = case_segment[case_segment == value].index
+        segment_df = df[df[case_col].isin(case_ids)]
+        segment_results[value] = analyze_conversion_funnel(
+            segment_df, funnel_steps=resolved_steps, case_col=case_col, activity_col=activity_col
+        )
+
+    return {'overall': overall, 'segments': segment_results, 'errors': errors}
+
+
 def format_business_report(results: Dict[str, Any]) -> str:
     """Returns a formatted summary string of the repeat purchase analysis."""
     if not results:

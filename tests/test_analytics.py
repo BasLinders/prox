@@ -6,6 +6,7 @@ from prox.analytics import (
     analyze_process_performance,
     analyze_repeat_purchases,
     analyze_conversion_funnel,
+    analyze_funnel_by_segment,
     format_business_report,
 )
 
@@ -383,6 +384,70 @@ def test_analyze_conversion_funnel_empty_log():
     result = analyze_conversion_funnel(pd.DataFrame(columns=['case:concept:name', 'concept:name']))
     assert result['stages'] == {}
     assert any('empty' in e.lower() for e in result['errors'])
+
+
+# --- analyze_funnel_by_segment ---
+
+def make_funnel_log_with_segment():
+    """5 'mobile' cases all reach purchase; 5 'desktop' cases stop at view_item."""
+    rows = []
+    base = pd.Timestamp('2024-01-01')
+
+    def add(case, acts, segment):
+        t = base
+        for a in acts:
+            rows.append({'case:concept:name': case, 'concept:name': a, 'time:timestamp': t, 'device': segment})
+            t += pd.Timedelta(minutes=1)
+
+    for i in range(5):
+        add(f'm{i}', ['view_item', 'add_to_cart', 'begin_checkout', 'purchase'], 'mobile')
+    for i in range(5):
+        add(f'd{i}', ['view_item'], 'desktop')
+
+    return pd.DataFrame(rows)
+
+
+def test_analyze_funnel_by_segment_reflects_different_drop_off_per_segment():
+    df = make_funnel_log_with_segment()
+    result = analyze_funnel_by_segment(
+        df, segment_col='device',
+        funnel_steps=['view_item', 'add_to_cart', 'begin_checkout', 'purchase']
+    )
+
+    assert result['errors'] == []
+    assert result['overall']['stages']['purchase']['cases_reached'] == 5
+    assert result['segments']['mobile']['stages']['purchase']['cases_reached'] == 5
+    assert result['segments']['desktop']['stages']['view_item']['cases_reached'] == 5
+    # Truncates at the first zero stage - it's still reported (0 cases), later stages aren't.
+    assert result['segments']['desktop']['stages']['add_to_cart']['cases_reached'] == 0
+    assert 'begin_checkout' not in result['segments']['desktop']['stages']
+
+
+def test_analyze_funnel_by_segment_reuses_overall_stage_order_for_every_segment():
+    """Segments must share the overall funnel's stage order, not each
+    independently auto-derive a (possibly different) order."""
+    df = make_funnel_log_with_segment()
+    result = analyze_funnel_by_segment(df, segment_col='device')  # auto-derived steps
+    overall_steps = result['overall']['funnel_steps']
+    for seg_result in result['segments'].values():
+        # A segment's funnel can truncate earlier (first zero stage) but must
+        # never deviate in order from the overall funnel's steps.
+        assert overall_steps[:len(seg_result['funnel_steps'])] == seg_result['funnel_steps']
+
+
+def test_analyze_funnel_by_segment_respects_top_n_segments():
+    df = make_funnel_log_with_segment()
+    result = analyze_funnel_by_segment(
+        df, segment_col='device', funnel_steps=['view_item'], top_n_segments=1
+    )
+    assert len(result['segments']) == 1
+
+
+def test_analyze_funnel_by_segment_unknown_column_returns_error():
+    df = make_funnel_log_with_segment()
+    result = analyze_funnel_by_segment(df, segment_col='does_not_exist')
+    assert result['segments'] == {}
+    assert any('not found' in e.lower() for e in result['errors'])
 
 
 # --- format_business_report ---
