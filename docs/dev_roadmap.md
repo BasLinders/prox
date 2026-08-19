@@ -1,17 +1,145 @@
-# Roadmap
+# PRoX Development Roadmap
 
-Longer-horizon feature ideas, distinct from `phase2.md`'s execution plan
-(tests/CI/hardening) and `dev_optimization.md`'s performance work. Entries
-here are scoped for discussion, not committed to a phase number yet.
+**This is the leading document for PRoX development status.** Every phase —
+completed, in progress, or roadmapped — is tracked here first. Where a
+phase has enough detail to warrant its own file, this document carries an
+accurate summary and links out to it: `dev_phase2.md` for the phase-by-phase
+execution log (tests/CI/extensibility/capability work), `dev_optimization.md`
+for performance work, `ML_roadmap.md` for machine-learning ideas. Keep the
+summaries here current even when the detail lives elsewhere — this is the
+one page meant to answer "where does PRoX development actually stand?"
+without opening five files.
 
-## Product development suggestions
+Last assessed 2026-08-01, against `main` @ `b837847` — 74 tests passing,
+`pyflakes` clean.
 
-A working list of where the product could go next, given everything shipped
-so far (discovery, conformance, bottlenecks, variants, business insights,
-funnel analysis, segment comparison, HTML reporting). Roughly ranked by
-effort vs. payoff — none of these are committed, scoped, or sequenced yet.
+---
 
-### Quick wins (small, builds on what already exists)
+## Status at a glance
+
+| Phase | Status | Detail |
+|---|---|---|
+| Phase 1 — Core correctness | Complete | `dev_phase2.md` |
+| Phase 2 — Safety net (tests, CI, housekeeping) | Complete | `dev_phase2.md` |
+| Phase 3 — Extensibility (registries) | Complete | `dev_phase2.md` |
+| Phase 4 — Expand capability | Complete* | `dev_phase2.md` |
+| Phase 4b — Optimization | Complete | `dev_optimization.md` |
+| Phase 5 — Incremental analysis | Flagged, not scoped | `dev_phase2.md` |
+| ML layer (conversion propensity + drivers) | Roadmapped | `ML_roadmap.md` |
+| BigQuery live data source | Roadmapped | below |
+| Product development suggestions | Roadmapped | below |
+
+\* One sub-item — segment comparison v2 (automated golden-path diffing) —
+is deliberately deferred; see "Medium bets" below. Everything else under
+Phase 4 is shipped.
+
+---
+
+## Completed phases (summary)
+
+### Phase 1 — Core correctness
+Token-based replay genuinely implemented (`pm4py.fitness_token_based_replay`),
+`create_analysis_config()` fully parameterized, DFG discovery exposed in the
+UI alongside Inductive and Heuristics Miner. Caught and fixed a real pm4py
+API-drift bug in the DFG-to-Petri-net conversion along the way. Full detail
+in `dev_phase2.md`.
+
+### Phase 2 — Safety net
+Test suite (`tests/`, now 74 tests across the whole engine), CI
+(`.github/workflows/ci.yml` — pyflakes then pytest on every PR/push to
+`main`), `.gitignore`, and pinned dependency upper bounds. Caught and fixed
+a real silent bug in `optimize_dataframe_memory()` while writing its test
+(pandas 2.x+/3.x's `str` dtype wasn't matched by the old `== 'object'`
+check). Full detail in `dev_phase2.md`.
+
+### Phase 3 — Extensibility
+Discovery, conformance, and filter dispatch replaced with registries
+(`DISCOVERY_ALGORITHMS`, `CONFORMANCE_METHODS`, `FILTER_HANDLERS`); the UI
+now derives its selectbox options and help text from the same registries
+instead of a second hardcoded list, so adding a new algorithm or filter type
+means one registry entry, not an "edit two files" seam. Full detail in
+`dev_phase2.md`.
+
+### Phase 4 — Expand capability
+- **HTML report export**, later overhauled with a plain-language Executive
+  Summary (health verdict, translated fitness/precision, most common
+  journey, biggest bottleneck, business/funnel highlights), embedded
+  business-insight charts, and a click-to-zoom lightbox for the
+  process-map diagrams. `generate_segment_comparison_report()` brings the
+  same treatment to segment comparison, with its own download button.
+- **Segment comparison v1** — compare health score, fitness, precision,
+  repeat rate, and happy path across the top-N values of any column.
+  Parallelized in Phase 4b.
+- **Business insights** — fixed three correctness bugs in
+  `analyze_repeat_purchases()` (revenue/price values alone were treated as
+  purchase evidence, causing cart-abandoners to be counted as buyers;
+  order value used `max(price)` across a whole case instead of the actual
+  purchase event; three different, inconsistent `purchase_values` defaults
+  existed across the codebase). Added cart abandonment rate, average
+  order value, category-level revenue breakdown, and a revenue-over-time
+  trend.
+- **Funnel analysis** — `analyze_conversion_funnel()` plus a dedicated
+  **Funnel** tab, letting the user define their own funnel from any
+  activities in the log, in any order (industry-agnostic by design — not
+  just e-commerce), with auto-derivation from the data as a fallback
+  starting point.
+- **Deferred**: segment comparison v2 (automated golden-path diffing) —
+  see "Medium bets" below.
+
+Full detail in `dev_phase2.md`.
+
+### Phase 4b — Optimization
+`compare_segments()` parallelization (~2x wall-clock on a 4-core machine),
+pipeline profiling against realistic synthetic logs (found discovery and
+visualisation dominate at scale, not conformance — conformance is capped by
+sampling), and Streamlit-layer caching (~200x on a repeat run with
+unchanged inputs). Found and fixed a real correctness bug along the way:
+`optimize_dataframe_memory()` was converting `case:concept:name`/
+`concept:name` to `category` dtype, which `pm4py.convert_to_event_log()`
+rejects — silently breaking discovery on real event logs. Full detail in
+`dev_optimization.md`.
+
+---
+
+## In progress
+
+Nothing currently in progress.
+
+---
+
+## Roadmapped (not yet scheduled)
+
+### Phase 5 — Incremental analysis (flagged, not scoped)
+
+Deferred from Phase 4: an incremental/cached analysis mode for recurring
+large logs, so re-running PRoX on a growing dataset doesn't reprocess
+everything from scratch each time. Flagged rather than scoped because
+there's no concrete pain signal yet — no evidence of repeat-large-log usage
+in this project so far — and it's the most architecturally invasive item
+under discussion (would touch caching, log diffing, and pipeline
+re-entry points that don't exist today). Revisit once a real use case
+actually hits this. Full detail in `dev_phase2.md`.
+
+### Machine learning layer
+
+A colleague-suggested direction: layering ML on top of the event log.
+Scoped into a concrete first candidate — conversion propensity prediction
+paired with a plain-language root-cause driver analysis — in
+`ML_roadmap.md`, including feature engineering, model choice, validation
+approach, and the open questions (minimum data volume, leakage risk,
+overlap with the Funnel tab) to resolve before building it. Kept as its
+own file since ML output is probabilistic and needs a different kind of
+trust framing than PRoX's otherwise-deterministic metrics.
+
+### Product development suggestions
+
+A working list of where the product could go next, given everything
+shipped so far (discovery, conformance, bottlenecks, variants, business
+insights, funnel analysis, segment comparison, HTML reporting). Roughly
+ranked by effort vs. payoff — none of these are committed, scoped, or
+sequenced yet.
+
+#### Quick wins (small, builds on what already exists)
 
 - **Funnel x Segment cross-analysis.** The Funnel tab and Segment Comparison
   are currently independent features that were built separately but combine
@@ -27,12 +155,13 @@ effort vs. payoff — none of these are committed, scoped, or sequenced yet.
   out-of-order events. Non-technical users currently only find out their
   data is messy after a confusing downstream result.
 
-### Medium bets (real feature work, clear value)
+#### Medium bets (real feature work, clear value)
 
 - **Segment comparison v2 — automated golden-path diffing.** Already scoped
-  and deliberately deferred (`phase2.md`'s Phase 4 segment-comparison entry:
-  "segment A visits checkout, segment B doesn't"). Worth revisiting now that
-  v1 has real usage patterns (parallel execution, its own report export).
+  and deliberately deferred (`dev_phase2.md`'s Phase 4 segment-comparison
+  entry: "segment A visits checkout, segment B doesn't"). Worth revisiting
+  now that v1 has real usage patterns (parallel execution, its own report
+  export).
 - **Cohort/retention view.** Current loyalty metrics (repeat rate,
   days-between-purchases) are transaction-level. A cohort retention curve
   (% of users from cohort week N still active in week N+1, N+2, ...) is a
@@ -42,24 +171,23 @@ effort vs. payoff — none of these are committed, scoped, or sequenced yet.
   this cohort's export vs. last month's — a temporal/version diff, distinct
   from segment comparison's categorical split of a single upload.
 
-### Longer-term (bigger, already flagged elsewhere in these docs)
+#### Longer-term (bigger, already flagged elsewhere in these docs)
 
-- **Phase 5 — incremental analysis** for recurring large logs
-  (`phase2.md`). Still explicitly "no pain signal yet" — worth doing once
-  someone is actually re-running PRoX on a growing dataset regularly, not
-  before.
+- **Phase 5 — incremental analysis** for recurring large logs (above).
+  Still explicitly "no pain signal yet" — worth doing once someone is
+  actually re-running PRoX on a growing dataset regularly, not before.
 - **BigQuery live data source** (below). Removes the export-clean-upload
   cycle for GA4-in-BigQuery users. Biggest lift of anything on this list —
   only worth it if CSV upload is a genuine recurring friction point.
 
-## BigQuery live data source (via Google OAuth)
+### BigQuery live data source (via Google OAuth)
 
 **Idea**: instead of requiring the user to export, clean, and upload a CSV,
 let PRoX connect directly to BigQuery and query event data live. Positioned
 as a second, separate data-source workflow alongside the existing CSV
 upload — not a replacement.
 
-### Why
+#### Why
 
 Today's flow (`main.py`) gates the entire app behind a single upload widget:
 `uploaded_file = st.file_uploader(...)` in the sidebar, then `if not
@@ -69,7 +197,7 @@ exports), that means an export-clean-upload round trip every time they want
 to look at a different date range or dataset. A live connection removes
 that round trip entirely.
 
-### Proposed shape
+#### Proposed shape
 
 - **A data-source choice, shown first** — before the existing sidebar
   controls become interactive, similar to a landing step: "Upload CSV" or
@@ -98,7 +226,7 @@ that round trip entirely.
   and a new BigQuery path call. Avoids duplicating the column-mapping and
   cleaning logic in two places.
 
-### Dependencies and scope
+#### Dependencies and scope
 
 - New dependency: `google-cloud-bigquery` plus an OAuth flow library
   (e.g. `google-auth-oauthlib`). This should be an **optional extra**
@@ -110,11 +238,11 @@ that round trip entirely.
   persisted to disk.
 - **Out of scope for v1**: writing back to BigQuery (not needed — PRoX is
   read-only by design), scheduled/incremental refresh (this is the same
-  territory as `phase2.md`'s Phase 5 incremental-analysis idea and should
-  stay deferred alongside it), multi-account switching, and query-cost
+  territory as Phase 5's incremental-analysis idea above and should stay
+  deferred alongside it), multi-account switching, and query-cost
   governance beyond the basic dry-run estimate.
 
-### Open questions to resolve before implementation
+#### Open questions to resolve before implementation
 
 - Does the target BigQuery table already look like an event log (one row
   per event, with case/activity/timestamp-ish columns `COLUMN_MAPPINGS` can

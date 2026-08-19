@@ -1,5 +1,9 @@
 # Phase 2 — Establish a Safety Net
 
+*Execution log for Phases 1-5. See `dev_roadmap.md` for the current status
+of all phases at a glance — that file is the leading document; this one is
+the detail.*
+
 **Status: Complete.**
 
 - Added `tests/` with 32 pytest tests covering `analytics.py`, `data_manager.py`, `conformance.py`, and `discovery.py` — all passing.
@@ -71,7 +75,9 @@ Tests before CI before expansion: without a test suite, a CI workflow only check
 
 ## Phase 4 — Expand capability
 
-**Status: In progress.**
+**Status: Complete.** One sub-item (segment comparison v2 — automated
+golden-path diffing) is deliberately deferred; see `dev_roadmap.md`'s
+"Medium bets" section. Everything else below is shipped.
 
 - **4a. Full-analysis HTML report export — Complete.** `prox/report.py`'s `generate_html_report()` builds a single, self-contained HTML report (metrics, embedded base64 process-map images, bottleneck/variant tables, conformance summary, business insights) from a `run_full_analysis()` results dict. Wired into `main.py` as a "Download Full Report" button. All user-derived strings are HTML-escaped (verified with an XSS test). Shipped directly to `main` (e84026f).
 - **Alpha Miner — considered and rejected.** It has no soundness guarantee, poor short-loop handling, and no noise tolerance — strictly weaker than the existing Inductive Miner (sound/robust), Heuristics Miner (noisy logs), and DFG (fast overview) for this domain (noisy website event logs). Not worth adding just because the Phase 3 registry makes it a one-entry change.
