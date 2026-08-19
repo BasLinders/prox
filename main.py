@@ -16,6 +16,7 @@ from prox import (
     generate_segment_comparison_report,
     compare_segments,
     analyze_conversion_funnel,
+    generate_mock_csv_bytes,
     DISCOVERY_ALGORITHMS,
     CONFORMANCE_METHODS,
 )
@@ -76,6 +77,45 @@ with st.sidebar:
     st.header("Data")
     uploaded_file = st.file_uploader("Upload Event Log (CSV)", type=["csv"])
 
+    with st.expander("No data? Generate a mock event log"):
+        st.caption(
+            "Creates a synthetic e-commerce clickstream (funnel drop-off, "
+            "repeat buyers, categories, revenue, device/traffic segments) "
+            "so you can try PRoX without your own data."
+        )
+        mock_sessions = st.number_input(
+            "Sessions", min_value=50, max_value=5000, value=400, step=50, key="mock_sessions"
+        )
+        mock_seed = st.number_input(
+            "Seed", min_value=0, value=42, step=1, key="mock_seed",
+            help="Same seed + session count always reproduces the same data."
+        )
+        if st.button("Generate Mock Data", use_container_width=True):
+            st.session_state["mock_csv_bytes"] = generate_mock_csv_bytes(
+                n_sessions=int(mock_sessions), seed=int(mock_seed)
+            )
+            st.session_state["mock_csv_label"] = f"mock_event_log_{int(mock_sessions)}s_seed{int(mock_seed)}.csv"
+
+        mock_csv_bytes = st.session_state.get("mock_csv_bytes")
+        if mock_csv_bytes:
+            st.success(f"Mock data ready: {st.session_state['mock_csv_label']}")
+            dl_col, clear_col = st.columns(2)
+            with dl_col:
+                st.download_button(
+                    "Download CSV", data=mock_csv_bytes,
+                    file_name=st.session_state["mock_csv_label"], mime="text/csv",
+                    use_container_width=True,
+                )
+            with clear_col:
+                if st.button("Clear", use_container_width=True):
+                    st.session_state.pop("mock_csv_bytes", None)
+                    st.session_state.pop("mock_csv_label", None)
+                    st.rerun()
+            if uploaded_file is None:
+                st.caption("Will be used for analysis (no file uploaded above).")
+            else:
+                st.caption("Uploaded file takes priority - remove it to use mock data instead.")
+
     st.divider()
     st.header("Discovery")
     discovery_algo = st.selectbox(
@@ -134,8 +174,13 @@ with st.sidebar:
 st.title("Process Excavator")
 st.caption("Upload a website event log to discover customer journeys and golden paths.")
 
-if not uploaded_file:
-    st.info("Upload a CSV event log in the sidebar to get started.")
+active_file_bytes = uploaded_file.getvalue() if uploaded_file else st.session_state.get("mock_csv_bytes")
+
+if active_file_bytes is None:
+    st.info(
+        "Upload a CSV event log in the sidebar to get started, "
+        "or generate a mock one under **No data? Generate a mock event log**."
+    )
     st.stop()
 
 # ---------------------------------------------------------------------------
@@ -154,7 +199,7 @@ if run_btn:
 
     with st.spinner("Loading and validating data..."):
         df, df_ready, messages, has_category = _cached_load_and_prepare(
-            uploaded_file.getvalue(),
+            active_file_bytes,
             data_loading_cfg["max_file_size_mb"],
             data_loading_cfg["chunk_threshold_mb"],
             data_loading_cfg["chunk_size"],
