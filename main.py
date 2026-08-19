@@ -35,12 +35,19 @@ st.set_page_config(
 # anything else so the sidebar/results don't render once shutdown starts.
 # ---------------------------------------------------------------------------
 if st.session_state.get("shutdown_requested"):
-    # Renders nothing - the page goes blank immediately. Streamlit sandboxes
-    # custom components against navigating or closing the top-level tab, so
-    # there's no reliable way to close/blank it from JS; killing the server
-    # process is what actually matters; once it's dead, this tab can never
-    # reconnect to it (only a manually-restarted app produces a live session
-    # again, which is the intended behaviour).
+    # Renders nothing - the page goes blank immediately, aside from CSS that
+    # hides Streamlit's own "CONNECTING" status widget (it would otherwise
+    # keep showing and retrying forever once the server dies below). Custom
+    # component scripts are sandboxed against touching the top-level window,
+    # but st.markdown renders straight into the main document, so a <style>
+    # tag here isn't blocked the way <script> injection was. Killing the
+    # server process is still what actually matters: once it's dead, this
+    # tab can never reconnect to it - only a manually-restarted app produces
+    # a live session again, which is the intended behaviour.
+    st.markdown(
+        "<style>[data-testid='stStatusWidget'] { display: none !important; }</style>",
+        unsafe_allow_html=True,
+    )
     if not st.session_state.get("_shutdown_timer_started"):
         st.session_state["_shutdown_timer_started"] = True
         threading.Timer(1.5, lambda: os._exit(0)).start()
