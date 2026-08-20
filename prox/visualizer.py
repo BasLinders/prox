@@ -89,6 +89,28 @@ def visualize_focused_insights(
     return happy_output, main_output
 
 
+def render_petri_net(net, im, fm, output_path: str) -> str | None:
+    """
+    Renders a raw (net, im, fm) Petri net to a PNG, for models that aren't
+    discovered from an event log (e.g. a user-defined reference model) and
+    so have no BPMN conversion path through visualize_focused_insights().
+
+    Returns
+    -------
+    str or None - the output path on success, None on failure.
+    """
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        gviz = pn_visualizer.apply(net, im, fm)
+        gviz.format = 'png'
+        with open(output_path, 'wb') as f:
+            f.write(gviz.pipe())
+        return output_path
+    except Exception as e:
+        logger.error("Failed to render reference model Petri net: %s", e)
+        return None
+
+
 def export_results(
     data: Union[pd.DataFrame, Dict, List[Dict]],
     filename: str,

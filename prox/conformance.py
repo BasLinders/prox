@@ -1,20 +1,189 @@
 import logging
 import gc
 import os
+import tempfile
 import numpy as np
 import pandas as pd
 import traceback
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 
 import pm4py
 from pm4py.objects.log.obj import EventLog, Trace, Event
 from pm4py.objects.petri_net.obj import Marking
+from pm4py.objects.process_tree.obj import ProcessTree, Operator
 from pm4py.algo.evaluation.precision import algorithm as precision_evaluator
 from pm4py.algo.conformance.alignments.petri_net import algorithm as alignments_algorithm
 
 from .data_manager import sample_log_stratified
 
 logger = logging.getLogger(__name__)
+
+# Stage 'type' -> ProcessTree operator, for stage types that combine multiple
+# activities into one node (choice = XOR between activities, parallel = AND).
+# 'required'/'optional'/'repeatable' are single-activity stage types handled
+# directly in _build_stage_node, since they need a synthetic tau leaf rather
+# than combining two labelled activities.
+_MULTI_ACTIVITY_STAGE_OPERATORS = {
+    'choice': Operator.XOR,
+    'parallel': Operator.PARALLEL,
+}
+
+_VALID_STAGE_TYPES = {'required', 'choice', 'optional', 'repeatable', 'parallel'}
+
+
+def _leaf(label: str) -> ProcessTree:
+    return ProcessTree(label=label)
+
+
+def _tau() -> ProcessTree:
+    """PM4Py's silent/unlabelled leaf - a step that consumes no event."""
+    return ProcessTree()
+
+
+def _attach(parent: ProcessTree, children: list) -> ProcessTree:
+    parent.children = children
+    for c in children:
+        c.parent = parent
+    return parent
+
+
+def _build_stage_node(stage: dict) -> Tuple[ProcessTree | None, str | None]:
+    """
+    Builds a single ProcessTree node for one stage dict. Returns (node, None)
+    on success or (None, error_message) on a malformed stage.
+    """
+    stage_type = stage.get('type')
+    activities = stage.get('activities') or []
+
+    if stage_type not in _VALID_STAGE_TYPES:
+        return None, f"Unknown stage type '{stage_type}'. Valid types: {', '.join(sorted(_VALID_STAGE_TYPES))}."
+    if not activities:
+        return None, f"Stage of type '{stage_type}' has no activities."
+
+    if stage_type == 'required':
+        if len(activities) != 1:
+            return None, "A 'required' stage must have exactly one activity."
+        return _leaf(activities[0]), None
+
+    if stage_type == 'optional':
+        if len(activities) != 1:
+            return None, "An 'optional' stage must have exactly one activity."
+        # XOR between the activity and a silent leaf: the step may or may not happen.
+        return _attach(ProcessTree(operator=Operator.XOR), [_leaf(activities[0]), _tau()]), None
+
+    if stage_type == 'repeatable':
+        if len(activities) != 1:
+            return None, "A 'repeatable' stage must have exactly one activity."
+        # LOOP(tau, activity): may happen 0+ times (tau as the "do" branch keeps
+        # zero occurrences valid; activity as the "redo" branch allows more).
+        return _attach(ProcessTree(operator=Operator.LOOP), [_tau(), _leaf(activities[0])]), None
+
+    # 'choice' or 'parallel': combine 2+ activities under XOR/AND.
+    if len(activities) < 2:
+        return None, f"A '{stage_type}' stage needs at least two activities."
+    operator = _MULTI_ACTIVITY_STAGE_OPERATORS[stage_type]
+    return _attach(ProcessTree(operator=operator), [_leaf(a) for a in activities]), None
+
+
+def build_structured_reference_model(stages: list) -> Tuple[tuple | None, list]:
+    """
+    Builds a reference Petri net from an ordered list of "stages" combined in
+    SEQUENCE. Each stage describes what's allowed at that point:
+
+      {'activities': ['a'],      'type': 'required'}   - exactly this step
+      {'activities': ['a','b'],  'type': 'choice'}      - any ONE of these (XOR)
+      {'activities': ['a'],      'type': 'optional'}    - may or may not happen
+      {'activities': ['a'],      'type': 'repeatable'}  - may happen 0+ times (LOOP)
+      {'activities': ['a','b'],  'type': 'parallel'}    - both, any order (AND)
+
+    A stage list of all-'required' single-activity stages is exactly a plain
+    ordered sequence.
+
+    Returns
+    -------
+    (net, im, fm) or None, list of error strings.
+    """
+    errors = []
+
+    if not isinstance(stages, list) or len(stages) < 2:
+        errors.append("A reference model needs at least two stages.")
+        return None, errors
+
+    nodes = []
+    for i, stage in enumerate(stages):
+        node, err = _build_stage_node(stage)
+        if err:
+            errors.append(f"Stage {i + 1}: {err}")
+        else:
+            nodes.append(node)
+
+    if errors:
+        return None, errors
+
+    root = _attach(ProcessTree(operator=Operator.SEQUENCE), nodes)
+
+    try:
+        net, im, fm = pm4py.convert_to_petri_net(root)
+    except Exception as e:
+        errors.append(f"Failed to convert reference model to a Petri net: {e}")
+        return None, errors
+
+    return (net, im, fm), errors
+
+
+def import_reference_model_bpmn(file_bytes: bytes) -> Tuple[tuple | None, list]:
+    """
+    Imports a BPMN 2.0 XML file as a reference process model. Writes the
+    uploaded bytes to a temp file (pm4py.read_bpmn requires a path, unlike
+    load_and_validate_csv's BytesIO support), imports, and converts to a
+    Petri net.
+
+    Returns
+    -------
+    (net, im, fm) or None, list of error strings.
+    """
+    errors = []
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".bpmn", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+
+        bpmn_graph = pm4py.read_bpmn(tmp_path)
+        net, im, fm = pm4py.convert_to_petri_net(bpmn_graph)
+        return (net, im, fm), errors
+    except Exception as e:
+        errors.append(f"Failed to import BPMN file: {e}")
+        return None, errors
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def diff_reference_model_coverage(reference_net, log_df: pd.DataFrame) -> dict:
+    """
+    Two plain set differences between the reference model's transition labels
+    and the raw log's actual activities (not the discovered model's transitions,
+    which are themselves an approximation under noise_threshold - comparing
+    against real observed activity is more direct and honest).
+
+    Returns
+    -------
+    dict with keys:
+        'unexpected_in_data' : sorted list - activities in the log but not in
+                                the reference model (real behaviour the target
+                                process doesn't account for).
+        'never_observed'     : sorted list - activities the reference model
+                                expects that never occur in the log at all
+                                (dead/unused expected steps).
+    """
+    model_activities = {t.label for t in reference_net.transitions if t.label is not None}
+    log_activities = set(log_df['concept:name'].dropna().astype(str).unique()) if 'concept:name' in log_df.columns else set()
+
+    return {
+        'unexpected_in_data': sorted(log_activities - model_activities),
+        'never_observed': sorted(model_activities - log_activities),
+    }
 
 
 def calculate_fitness_in_batches(log, net, im, fm, batch_size: int = 200) -> float:
