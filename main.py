@@ -193,6 +193,155 @@ with st.sidebar:
 st.title("Process Excavator")
 st.caption("Upload a website event log to discover customer journeys and golden paths.")
 
+with st.expander("What is process mining, and when should I use it?"):
+    st.markdown(
+        """
+Process mining reconstructs the process *as it actually happened*, from an
+event log - not the process as it's documented in a flowchart, and not just
+an aggregate count of how often each step occurred. It needs three things
+per event: which **case** it belongs to (an order, a session, a support
+ticket, a claim), which **activity** occurred, and **when**. From that alone
+it can reconstruct every individual path a case took, then aggregate those
+paths into a process model.
+
+That's the difference from two things people often reach for instead:
+
+- **Process mapping** (whiteboard sessions, documented SOPs) describes the
+  *intended* process. Process mining shows the process people and systems
+  *actually execute* - which is very often different, and the gap itself is
+  usually the interesting finding.
+- **BI dashboards** report aggregate metrics (conversion rate, average order
+  value) but throw away the *sequence* - they can tell you 30% of sessions
+  converted, not that half of the drop-off happens at one specific step, or
+  that a specific detour through `search` before `add_to_cart` correlates
+  with a longer, less reliable path to purchase.
+
+Process mining is generally framed as three activities, and PRoX covers all
+three: **discovery** (what's the real process - Process Maps, Variants),
+**conformance** (does reality match the intended process, and where does it
+deviate - Conformance tab), and **enhancement** (how to improve it -
+Bottlenecks, Funnel, Business Insights).
+
+**Good fit:** you have timestamped events with a clear case concept, cases
+typically involve several steps, and you want to see real paths and
+bottlenecks rather than just aggregate counts - customer journeys, order
+fulfillment, support ticket handling, loan/claims processing, CI/CD
+pipelines.
+
+**Poor fit:** single-step "events" with no real sequence, no reliable case
+ID to group events by, too few cases to see a repeatable pattern, or a
+question a simple funnel/BI report already answers just as well.
+        """
+    )
+
+with st.expander("How the algorithms work: Miners, Token Replay, and State Equation A*"):
+    st.markdown(
+        """
+PRoX's two pipeline stages - **discovery** (turning the log into a process
+model) and **conformance** (measuring how well the log fits that model) -
+each offer a choice of algorithm, trading speed against precision.
+
+**Discovery: which "miner" builds the model**
+
+- **Inductive Miner** (default) recursively splits the log into sub-logs by
+  detected control-flow patterns (sequence, choice, parallelism, loop),
+  building a process tree. It's the only one of the three that *guarantees*
+  a sound model - no deadlocks, every case can always reach completion -
+  which it achieves even on noisy data via the **Noise Threshold**: raising
+  it filters out infrequent, non-representative behaviour before mining, at
+  the cost of a simpler model that captures less of the log's real variety.
+- **Heuristics Miner** builds a dependency graph from how often one activity
+  is directly followed by another, using frequency/dependency thresholds to
+  decide which of those direct-follows relationships are real causality
+  versus coincidental noise. More tolerant of very large or very messy logs,
+  but - unlike Inductive Miner - the resulting model isn't guaranteed sound.
+- **DFG** (Directly-Follows Graph) is the simplest option: an edge between
+  two activities whenever one is *ever* directly followed by the other,
+  weighted by frequency. No AND/XOR split semantics, no soundness
+  guarantee - it's a fast first look at the shape of the data, not a model
+  precise enough for real conformance checking.
+
+**Conformance: Token Replay vs. State Equation A\\***
+
+- **Token Replay** simulates each trace by "playing tokens" through the
+  discovered Petri net, consuming and producing tokens as each event
+  occurs. When an event doesn't match a currently-enabled step, a token is
+  borrowed and the gap is counted. Fitness is the fraction of tokens
+  correctly accounted for. It's fast (near-linear in log size), but the
+  diagnostics are approximate - it doesn't necessarily find the
+  cheapest/most-likely explanation for a deviation.
+- **State Equation A\\*** (alignments) frames conformance as a shortest-path
+  search: for each trace, it finds the *provably optimal* alignment against
+  the closest fully-compliant path through the model, using the A* search
+  algorithm guided by a heuristic derived from the net's state equation (an
+  LP relaxation used to estimate remaining cost and prune the search space).
+  This gives exact fitness plus a precise list of skipped (the model
+  expected it, it didn't happen) and unsolicited (it happened, the model
+  didn't expect it) activities per case - the Conformance tab's per-case
+  deviation table only exists in this mode. It's also the expensive one:
+  every trace needs its own search, which is exactly why PRoX groups
+  identical variants before aligning them, and why **Sampling** and
+  **CPU Cores** exist as controls.
+        """
+    )
+
+with st.expander("Data requirements and a SQL template to extract them"):
+    st.markdown(
+        """
+PRoX auto-detects columns by name (English and Dutch aliases both work; see
+`COLUMN_MAPPINGS` in `prox/config.py` for the full list), so exact column
+naming isn't critical - what matters is that these concepts exist somewhere
+in the file:
+
+| Concept | Required? | Common names PRoX recognises |
+|---|---|---|
+| Case ID | Yes | `session_id`, `case_id`, `ga_session_id`, `trace_id` |
+| Activity | Yes | `event_name`, `activity`, `action`, `event` |
+| Timestamp | Yes | `timestamp`, `event_timestamp`, `created_at` |
+| User ID | Yes (forms the composite case key) | `user_id`, `user_pseudo_id`, `customer_id` |
+| Revenue | Optional - unlocks AOV, revenue trend | `price`, `revenue`, `event_value` |
+| Purchase / conversion flag | Optional - unlocks repeat-buyer, cart abandonment | `purchase`, `transaction`, `conversion` |
+| Category | Optional - unlocks category revenue breakdown | `category`, `product_category` |
+
+If both a user ID and a session ID are present, PRoX combines them into a
+composite case key, so the same session ID re-used by two different users
+doesn't get incorrectly merged into one case.
+
+**SQL template (GA4 BigQuery export)** - since PRoX's column aliases and the
+mock-data generator are both modelled on GA4's event shape, this is the
+most direct path from a GA4 property to a PRoX-ready CSV. Adjust the
+project/dataset and date range, export the result, and upload it directly -
+every output column below already matches a recognised alias.
+        """
+    )
+    st.code(
+        """\
+-- PRoX-ready event export from a GA4 BigQuery export dataset.
+-- Adjust `your_project.analytics_XXXXXX` and the date range below, then
+-- export the query result to CSV and upload it directly - every column
+-- here already matches a name PRoX auto-detects.
+
+SELECT
+  user_pseudo_id,
+  (SELECT value.int_value FROM UNNEST(event_params)
+   WHERE key = 'ga_session_id')                      AS ga_session_id,
+  event_name,
+  TIMESTAMP_MICROS(event_timestamp)                   AS event_timestamp,
+  ecommerce.purchase_revenue                          AS price,
+  (SELECT item_category FROM UNNEST(items) LIMIT 1)   AS category,
+  IF(event_name = 'purchase', 1, 0)                   AS purchase,
+  IF(event_name = 'add_to_cart', 1, 0)                AS add_to_cart
+FROM
+  `your_project.analytics_XXXXXX.events_*`
+WHERE
+  _TABLE_SUFFIX BETWEEN '20260101' AND '20260131'
+  AND user_pseudo_id IS NOT NULL
+ORDER BY
+  user_pseudo_id, ga_session_id, event_timestamp
+""",
+        language="sql",
+    )
+
 st.header("1. Load Data")
 uploaded_file = st.file_uploader("Upload Event Log (CSV)", type=["csv"])
 
