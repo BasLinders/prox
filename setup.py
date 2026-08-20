@@ -12,5 +12,13 @@ setup(
         "pm4py>=2.7.0,<3.0.0",
         "streamlit>=1.30.0,<2.0.0",
     ],
+    extras_require={
+        # BigQuery live data source (docs/dev_roadmap.md). Pulls in
+        # first-order-engine's foe.data.DataEngine, gated separately behind
+        # its own [bigquery] extra since it's not on PyPI.
+        "bigquery": [
+            "foe[bigquery] @ git+https://github.com/BasLinders/first-order-engine.git",
+        ],
+    },
     python_requires=">=3.9",
 )

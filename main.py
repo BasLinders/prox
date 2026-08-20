@@ -6,6 +6,7 @@ import threading
 import pandas as pd
 import streamlit as st
 
+from bigquery_source import render_bigquery_source
 from prox import (
     load_and_validate_csv,
     refine_activity_labels,
@@ -399,52 +400,62 @@ ORDER BY
     )
 
 st.header("1. Load Data")
-uploaded_file = st.file_uploader("Upload Event Log (CSV)", type=["csv"])
+data_source = st.radio(
+    "Data source", ["Upload CSV", "Connect to BigQuery"],
+    horizontal=True, key="data_source_choice",
+)
 
-with st.expander("No data? Generate a mock event log"):
-    st.caption(
-        "Creates a synthetic e-commerce clickstream (funnel drop-off, "
-        "repeat buyers, categories, revenue, device/traffic segments) "
-        "so you can try PRoX without your own data."
-    )
-    mock_sessions = st.number_input(
-        "Sessions", min_value=50, max_value=5000, value=400, step=50, key="mock_sessions"
-    )
-    mock_seed = st.number_input(
-        "Seed", min_value=0, value=42, step=1, key="mock_seed",
-        help="Same seed + session count always reproduces the same data."
-    )
-    if st.button("Generate Mock Data", width='stretch'):
-        st.session_state["mock_csv_bytes"] = generate_mock_csv_bytes(
-            n_sessions=int(mock_sessions), seed=int(mock_seed)
+if data_source == "Connect to BigQuery":
+    active_file_bytes = render_bigquery_source()
+    if active_file_bytes is None:
+        st.stop()
+else:
+    uploaded_file = st.file_uploader("Upload Event Log (CSV)", type=["csv"])
+
+    with st.expander("No data? Generate a mock event log"):
+        st.caption(
+            "Creates a synthetic e-commerce clickstream (funnel drop-off, "
+            "repeat buyers, categories, revenue, device/traffic segments) "
+            "so you can try PRoX without your own data."
         )
-        st.session_state["mock_csv_label"] = f"mock_event_log_{int(mock_sessions)}s_seed{int(mock_seed)}.csv"
-
-    mock_csv_bytes = st.session_state.get("mock_csv_bytes")
-    if mock_csv_bytes:
-        st.success(f"Mock data ready: {st.session_state['mock_csv_label']}")
-        dl_col, clear_col = st.columns(2)
-        with dl_col:
-            st.download_button(
-                "Download CSV", data=mock_csv_bytes,
-                file_name=st.session_state["mock_csv_label"], mime="text/csv",
-                width='stretch',
+        mock_sessions = st.number_input(
+            "Sessions", min_value=50, max_value=5000, value=400, step=50, key="mock_sessions"
+        )
+        mock_seed = st.number_input(
+            "Seed", min_value=0, value=42, step=1, key="mock_seed",
+            help="Same seed + session count always reproduces the same data."
+        )
+        if st.button("Generate Mock Data", width='stretch'):
+            st.session_state["mock_csv_bytes"] = generate_mock_csv_bytes(
+                n_sessions=int(mock_sessions), seed=int(mock_seed)
             )
-        with clear_col:
-            if st.button("Clear", width='stretch'):
-                st.session_state.pop("mock_csv_bytes", None)
-                st.session_state.pop("mock_csv_label", None)
-                st.rerun()
-        if uploaded_file is None:
-            st.caption("Will be used for analysis (no file uploaded above).")
-        else:
-            st.caption("Uploaded file takes priority - remove it to use mock data instead.")
+            st.session_state["mock_csv_label"] = f"mock_event_log_{int(mock_sessions)}s_seed{int(mock_seed)}.csv"
 
-active_file_bytes = uploaded_file.getvalue() if uploaded_file else st.session_state.get("mock_csv_bytes")
+        mock_csv_bytes = st.session_state.get("mock_csv_bytes")
+        if mock_csv_bytes:
+            st.success(f"Mock data ready: {st.session_state['mock_csv_label']}")
+            dl_col, clear_col = st.columns(2)
+            with dl_col:
+                st.download_button(
+                    "Download CSV", data=mock_csv_bytes,
+                    file_name=st.session_state["mock_csv_label"], mime="text/csv",
+                    width='stretch',
+                )
+            with clear_col:
+                if st.button("Clear", width='stretch'):
+                    st.session_state.pop("mock_csv_bytes", None)
+                    st.session_state.pop("mock_csv_label", None)
+                    st.rerun()
+            if uploaded_file is None:
+                st.caption("Will be used for analysis (no file uploaded above).")
+            else:
+                st.caption("Uploaded file takes priority - remove it to use mock data instead.")
 
-if active_file_bytes is None:
-    st.info("Upload a CSV event log above to get started, or generate a mock one.")
-    st.stop()
+    active_file_bytes = uploaded_file.getvalue() if uploaded_file else st.session_state.get("mock_csv_bytes")
+
+    if active_file_bytes is None:
+        st.info("Upload a CSV event log above to get started, or generate a mock one.")
+        st.stop()
 
 loader_defaults = create_analysis_config()["data_loading"]
 with st.spinner("Loading and validating data..."):
