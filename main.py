@@ -147,20 +147,30 @@ def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, c
     return df, df_ready, messages, has_category
 
 
-@st.cache_resource(show_spinner="Running analysis...")
+@st.cache_resource(show_spinner=False)
 def _cached_run_full_analysis(df_ready, config, output_folder="output"):
     """Runs the full pipeline. Cached on the input data + config, so re-running
     with identical settings (e.g. clicking Run Analysis again) is instant
     instead of redoing filtering, discovery, conformance, etc. from scratch.
 
-    Does not accept a progress callback: Streamlit's caching machinery records
-    every Streamlit element call made during a cache-missing run so it can
-    replay them on later cache hits, and a callback driving a progress bar
-    created outside this function raises CacheReplayClosureError on replay,
-    since that bar no longer exists by the time the hit happens. `show_spinner`
-    gives the same "something's happening" feedback without that hazard.
+    The progress bar is created *inside* this function - not passed in from
+    the caller - because Streamlit's caching machinery records every element
+    call made during a cache-missing run so it can replay them on later cache
+    hits. A callback driving a bar created outside this function raises
+    CacheReplayClosureError on replay, since that bar no longer exists by the
+    time the hit happens; a bar whose whole lifecycle (create, update, empty)
+    is recorded from inside replays cleanly - just near-instantly on a hit.
     """
-    return run_full_analysis(df_ready, config=config, output_folder=output_folder)
+    progress_bar = st.progress(0, text="Starting analysis...")
+
+    def _update_progress(stage_num, total_stages, stage_label):
+        progress_bar.progress(stage_num / total_stages, text=f"{stage_label} ({stage_num}/{total_stages})")
+
+    results = run_full_analysis(
+        df_ready, config=config, output_folder=output_folder, progress_callback=_update_progress
+    )
+    progress_bar.empty()
+    return results
 
 # ---------------------------------------------------------------------------
 # Sidebar - configuration
