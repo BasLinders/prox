@@ -28,7 +28,7 @@ Last assessed 2026-08-19, against `main` @ `a566875` — 90 tests passing,
 | Phase 5 — Incremental analysis | Flagged, not scoped | `dev_phase2.md` |
 | ML layer (conversion propensity + drivers) | Roadmapped | `ML_roadmap.md` |
 | AI-assisted recommendations (optional, Gemini) | Roadmapped | `AI_summary_roadmap.md` |
-| BigQuery live data source | Roadmapped | below |
+| BigQuery live data source (via `foe.data`) | Roadmapped, secrets scaffolded, utility gaps resolved upstream | below |
 | Product development suggestions | Roadmapped | below |
 
 \* One sub-item — segment comparison v2 (automated golden-path diffing) —
@@ -202,12 +202,20 @@ sequenced yet.
   cycle for GA4-in-BigQuery users. Biggest lift of anything on this list —
   only worth it if CSV upload is a genuine recurring friction point.
 
-### BigQuery live data source (via Google OAuth)
+### BigQuery live data source (via `first-order-engine`'s `foe.data`)
 
 **Idea**: instead of requiring the user to export, clean, and upload a CSV,
-let PRoX connect directly to BigQuery and query event data live. Positioned
-as a second, separate data-source workflow alongside the existing CSV
-upload — not a replacement.
+let PRoX connect directly to BigQuery and query GA4 event data live.
+Positioned as a second, separate data-source workflow alongside the
+existing CSV upload — not a replacement.
+
+**Update 2026-08-20**: most of what this section originally scoped from
+scratch (OAuth flow, BigQuery client/session handling, dry-run cost
+estimation, GA4 SQL builders) already exists, built and tested, in a
+sibling project: [`first-order-engine`](https://github.com/BasLinders/first-order-engine)'s
+`foe.data` package. PRoX should consume it rather than reimplement it —
+this turns the item below from "build a BigQuery integration" into "wire
+an existing engine into the Streamlit UI."
 
 #### Why
 
@@ -219,6 +227,35 @@ exports), that means an export-clean-upload round trip every time they want
 to look at a different date range or dataset. A live connection removes
 that round trip entirely.
 
+#### What `foe.data.DataEngine` already provides
+
+- **Framework-free OAuth** (`build_auth_url` / `exchange_code`) — the PKCE
+  verifier and any caller state are encoded into the OAuth `state` param
+  itself, so no server-side session storage is needed to survive the
+  redirect. This is a good match for Streamlit specifically, whose reruns
+  don't give you a durable server-side session the way a typical web
+  framework does. `refresh_if_expired`, `credentials_to_dict` /
+  `credentials_from_dict` round out token lifecycle handling.
+- **Discovery**: `list_projects()`, `list_datasets(project)` for a
+  project/dataset picker — no free-form SQL editor needed for v1.
+- **Cost safety**: `dry_run(sql)` estimates bytes scanned before executing;
+  `monthly_usage(dataset)` tracks the 1TB/month free tier.
+- **`extract_event_log(EventLogExtractionParams, limit=0)`** — this is the
+  key piece: it already returns exactly the shape PRoX's engine expects,
+  one row per `(case_id, activity, timestamp)`, sourced from a GA4
+  `events_*` export. `case_id_col` defaults to `user_pseudo_id`,
+  `activity_col` to `event_name`; both are overridable to any top-level or
+  dotted struct column. Optional `event_names` restricts which events are
+  pulled, `attribute_params` unnests extra `event_params` keys as columns
+  (e.g. `page_location`), and an optional user-scoping filter
+  (`UserFilterType.CONTAINS` / `REGEX` / `EVENT`) narrows to a subset of
+  users. The returned DataFrame can go straight into PRoX's existing
+  validation path.
+- Gated behind the `foe[bigquery]` extra — importing `foe.data` itself
+  never requires `google-cloud-bigquery`, only instantiating `DataEngine`
+  does. Same "don't force Google auth deps on CSV-only users" property
+  this section originally asked for, already built in.
+
 #### Proposed shape
 
 - **A data-source choice, shown first** — before the existing sidebar
@@ -226,53 +263,115 @@ that round trip entirely.
   "Connect to BigQuery." This matches the existing gating pattern (`st.stop()`
   until data is ready) but adds a fork before it, rather than replacing it.
 - **BigQuery path**:
-  1. "Sign in with Google" — OAuth 2.0, scoped to `bigquery.readonly` only
-     (PRoX is analysis-only; no write access should ever be requested).
-  2. Once authenticated: either (a) a project/dataset/table picker that
-     auto-generates a query, or (b) a free-form SQL editor for full
-     flexibility. Recommend starting with (a) for v1 — safer, no risk of
-     an accidentally-expensive or destructive query — and offering (b) later
-     once there's a real need for arbitrary queries.
-  3. Run a `dry_run` query first to estimate bytes scanned and warn the user
-     before executing anything that could be costly, given BigQuery's
-     pay-per-byte-scanned pricing.
-  4. Execute, get a DataFrame back (via `google-cloud-bigquery`'s
-     `to_dataframe()`), and feed it into the same validation/cleaning path
-     the CSV upload already uses.
+  1. "Sign in with Google" — `DataEngine.build_auth_url(client_id,
+     client_secret, redirect_uri)` using OAuth client credentials read from
+     `st.secrets["bigquery"]` (see `.streamlit/secrets.toml`, prepared
+     below). Store the returned `verifier` in `st.session_state` as a
+     belt-and-suspenders measure (it's also recoverable from `state`
+     alone, per the module's own design). On the callback, call
+     `DataEngine.exchange_code(...)` and stash the resulting `Credentials`
+     via `credentials_to_dict()` in `st.session_state` — never on disk.
+  2. Build a `DataEngine` via `DataEngine.from_credentials(...)`, then
+     `list_projects()` / `list_datasets(project)` for a picker rather than
+     free-form SQL, for the same "no accidentally-expensive or destructive
+     query" reasons the original scoping called for.
+  3. Construct `EventLogExtractionParams` (connection, date range,
+     case/activity column choice, optional event-name/attribute filters),
+     call `dry_run()` on the generated SQL first and show the estimated
+     bytes/free-tier percentage before running anything.
+  4. Call `extract_event_log(params)`, get a DataFrame back, and feed it
+     into the same validation/cleaning path the CSV upload already uses.
 - **Shared validation logic**: `load_and_validate_csv()` currently mixes
   CSV-specific concerns (file-size checks, chunked reading) with genuinely
   reusable logic (column auto-mapping against `COLUMN_MAPPINGS`, composite
   case-ID creation, timestamp parsing, critical-column validation). This is
   a real refactor opportunity: split it into `_load_csv_source(...)` (CSV-only)
   and a shared `validate_and_clean_dataframe(df, ...)` that both the CSV path
-  and a new BigQuery path call. Avoids duplicating the column-mapping and
-  cleaning logic in two places.
+  and the new BigQuery path call. Avoids duplicating the column-mapping and
+  cleaning logic in two places. `extract_event_log`'s output already uses
+  `case_id`/`activity`/`timestamp` as column names, which simplifies the
+  mapping step considerably versus a raw GA4 table.
 
 #### Dependencies and scope
 
-- New dependency: `google-cloud-bigquery` plus an OAuth flow library
-  (e.g. `google-auth-oauthlib`). This should be an **optional extra**
-  (e.g. `pip install prox[bigquery]`), not a hard requirement — most users
-  running the CSV-only workflow shouldn't need to install or configure
-  Google auth libraries at all. Consistent with the "runs on a standard
-  laptop" design goal already documented in the README.
-- Credentials live only in `st.session_state` for the session; never
-  persisted to disk.
+- New dependency: `first-order-engine[bigquery]` (which itself pulls in
+  `google-cloud-bigquery`, `google-auth-oauthlib`, and
+  `google-cloud-resourcemanager`). Kept as an **optional extra** in
+  `requirements.txt`/`setup.py` — most users running the CSV-only workflow
+  shouldn't need to install or configure Google auth libraries at all.
+  Consistent with the "runs on a standard laptop" design goal already
+  documented in the README.
+- OAuth `client_id` / `client_secret` / `redirect_uri` live in
+  `.streamlit/secrets.toml` (gitignored, per-deployment) — see below.
+  Exchanged `Credentials` live only in `st.session_state` for the session;
+  never persisted to disk.
 - **Out of scope for v1**: writing back to BigQuery (not needed — PRoX is
-  read-only by design), scheduled/incremental refresh (this is the same
-  territory as Phase 5's incremental-analysis idea above and should stay
-  deferred alongside it), multi-account switching, and query-cost
-  governance beyond the basic dry-run estimate.
+  read-only by design, and `DataEngine` itself never issues DDL/DML for
+  this recipe), scheduled/incremental refresh (this is the same territory
+  as Phase 5's incremental-analysis idea above and should stay deferred
+  alongside it), multi-account switching, and query-cost governance beyond
+  the basic dry-run estimate.
+
+#### Secrets scaffold (prepared)
+
+`.streamlit/secrets.toml` (gitignored) and a checked-in
+`.streamlit/secrets.toml.example` now exist with the `[bigquery]` keys
+`DataEngine`'s OAuth flow needs (`client_id`, `client_secret`,
+`redirect_uri`) plus the default `BQConnectionConfig` fields (`project`,
+`dataset`, optional `location`) so a picker has sane defaults before the
+user has authenticated. Values are placeholders — fill in from the GCP
+OAuth client used for this deployment.
+
+#### Utility assessment — resolved (2026-08-20)
+
+`foe.data.sql.event_log.build_event_log()` was reassessed against PRoX's
+actual consumption path (`load_and_validate_csv()`'s `CRITICAL_COLS`,
+`COLUMN_MAPPINGS`, and `analytics.py`'s revenue/user-column resolution).
+Three real gaps were found and have since been fixed upstream in
+`first-order-engine`:
+
+- **No separate `user_id` column** (needed for PRoX's composite key) —
+  fixed via `include_user_id` (default `True`), which emits
+  `user_pseudo_id AS user_id` alongside `case_id`.
+- **No session-level case granularity** (only user-for-the-whole-range) —
+  fixed via `session_id_param`: pass `'ga_session_id'` and the query pulls
+  the nested int-valued event_params key via a correlated subquery, cast
+  to STRING, instead of a flat `case_id_col`. Paired with `include_user_id`,
+  this produces exactly the (user_id, session_id) pair PRoX's composite key
+  expects — mutually exclusive with a non-default `case_id_col` (enforced
+  by a model validator).
+- **No numeric revenue** (`attribute_params` only reads `string_value`,
+  numeric params come back NULL) — fixed via `include_purchase_revenue`
+  (adds `ecommerce.purchase_revenue AS revenue`, a flat typed `FLOAT64`
+  column) and the more general `numeric_attribute_params` for other numeric
+  event params.
+
+**Recommended `EventLogExtractionParams` defaults for the PRoX
+integration**: `session_id_param="ga_session_id"`, `include_user_id=True`,
+`include_purchase_revenue=True`, `activity_col="event_name"` (default).
+With these, `extract_event_log()`'s output needs zero PRoX-side column
+mapping changes — `case_id`/`activity`/`timestamp`/`user_id`/`revenue` all
+land on existing `COLUMN_MAPPINGS` entries.
+
+**New consideration surfaced during this check**: `foe`'s `pyproject.toml`
+lists `prophet`, `statsmodels`, `pingouin`, and `patsy` as unconditional
+base dependencies (not gated behind the `bigquery` extra), since
+`foe.data` is a subpackage of the whole `foe` library — installing
+`foe[bigquery]` for just `DataEngine` also pulls in Prophet, which
+typically needs a compiled Stan backend on first install. Worth stating
+plainly in install docs as the known cost of this optional path, since it
+cuts against PRoX's "no compilation step, runs on a standard laptop"
+positioning. Also: `foe` requires Python ≥3.10 vs. PRoX's README-stated
+3.9+ — needs a doc update if/when this ships.
 
 #### Open questions to resolve before implementation
 
-- Does the target BigQuery table already look like an event log (one row
-  per event, with case/activity/timestamp-ish columns `COLUMN_MAPPINGS` can
-  match), or would the query need to reshape data before it reaches PRoX?
-  Likely varies per user/dataset — may need a lightweight "preview + confirm
-  column mapping" step for the BigQuery path specifically, since there's no
-  file to eyeball beforehand the way there is with a CSV.
 - Where does OAuth client registration (GCP project, redirect URI) live —
-  is this a per-deployment config the person running PRoX sets up once, or
-  something each end user configures themselves? Affects how "opt-in" this
-  really is in practice.
+  is this a per-deployment config the person running PRoX sets up once
+  (the `.streamlit/secrets.toml` approach above assumes this), or something
+  each end user configures themselves? The secrets-file approach only
+  covers the former; a multi-tenant deployment would need a different
+  answer.
+- `event_names`/`attribute_params`/`numeric_attribute_params` need a UI
+  decision: expose as advanced/overridable fields, or hardcode sane
+  defaults for v1 and revisit if a real dataset needs otherwise.
