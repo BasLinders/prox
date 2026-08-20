@@ -40,6 +40,23 @@ KNOWN_NOISE_ACTIVITIES = {
     "session_start", "first_visit",
 }
 
+def _analyzed_activities(raw_df: pd.DataFrame, config: dict) -> list:
+    """Activity choices for standalone tabs (Funnel, Reference Model): applies
+    the same event filter used in the main analysis to raw_df first, so
+    activities removed as noise (e.g. session_start) don't reappear as
+    selectable steps just because these tabs otherwise operate on raw_df."""
+    df = raw_df
+    for step_config in (config or {}).get("filter_steps") or []:
+        params = step_config.copy()
+        f_type = params.pop("type", None)
+        if f_type is None:
+            continue
+        filtered_df, _ = filter_event_log(df, filter_type=f_type, **params)
+        if filtered_df is not None and not filtered_df.empty:
+            df = filtered_df
+    return sorted(df["concept:name"].dropna().astype(str).unique().tolist())
+
+
 def _describe_reference_stages(stages: list) -> str:
     """Renders an assembled reference-model stage list as a plain-English
     caption, e.g. 'a → (b or c) → [optional] d → e (repeatable)'."""
@@ -130,19 +147,20 @@ def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, c
     return df, df_ready, messages, has_category
 
 
-@st.cache_resource(show_spinner=False)
-def _cached_run_full_analysis(df_ready, config, output_folder="output", _progress_callback=None):
+@st.cache_resource(show_spinner="Running analysis...")
+def _cached_run_full_analysis(df_ready, config, output_folder="output"):
     """Runs the full pipeline. Cached on the input data + config, so re-running
     with identical settings (e.g. clicking Run Analysis again) is instant
     instead of redoing filtering, discovery, conformance, etc. from scratch.
-    `_progress_callback` is underscore-prefixed so Streamlit's cache excludes
-    it from hashing - it's a fresh closure every rerun, and not part of what
-    identifies a cached result. Not called at all on a cache hit, since
-    run_full_analysis() itself isn't invoked then.
+
+    Does not accept a progress callback: Streamlit's caching machinery records
+    every Streamlit element call made during a cache-missing run so it can
+    replay them on later cache hits, and a callback driving a progress bar
+    created outside this function raises CacheReplayClosureError on replay,
+    since that bar no longer exists by the time the hit happens. `show_spinner`
+    gives the same "something's happening" feedback without that hazard.
     """
-    return run_full_analysis(
-        df_ready, config=config, output_folder=output_folder, progress_callback=_progress_callback
-    )
+    return run_full_analysis(df_ready, config=config, output_folder=output_folder)
 
 # ---------------------------------------------------------------------------
 # Sidebar - configuration
@@ -549,13 +567,7 @@ if run_btn:
         filter_steps=filter_steps,
     )
 
-    progress_bar = st.progress(0, text="Starting analysis...")
-
-    def _update_progress(stage_num, total_stages, stage_label):
-        progress_bar.progress(stage_num / total_stages, text=f"{stage_label} ({stage_num}/{total_stages})")
-
-    results = _cached_run_full_analysis(df_ready, config, _progress_callback=_update_progress)
-    progress_bar.empty()
+    results = _cached_run_full_analysis(df_ready, config)
 
     if results is None:
         st.error("Analysis failed. Check the application logs for details.")
@@ -805,7 +817,7 @@ with tab_conf:
         ref_uploaded_bpmn = None
 
         if ref_mode == "Define expected path":
-            ref_activities = sorted(ref_raw_df["concept:name"].dropna().astype(str).unique().tolist())
+            ref_activities = _analyzed_activities(ref_raw_df, st.session_state.get("config", {}))
             ref_selected_activities = st.multiselect(
                 "Expected activities, in order",
                 options=ref_activities,
@@ -1001,7 +1013,7 @@ with tab_funnel:
         if "funnel_result" not in st.session_state:
             st.session_state["funnel_result"] = results.get("funnel_analysis")
 
-        activities = sorted(raw_df["concept:name"].dropna().astype(str).unique().tolist())
+        activities = _analyzed_activities(raw_df, st.session_state.get("config", {}))
 
         mode = st.radio(
             "Funnel definition",
