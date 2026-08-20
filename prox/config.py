@@ -16,7 +16,7 @@ COLUMN_MAPPINGS = {
     ]),
     'user_id': frozenset([
         'user id', 'user_id', 'gebruikers id', 'user_pseudo_id',
-        'client_ref', 'customer_id', 'resource', 'org:resource', 'client_id'
+        'client_ref', 'customer_id', 'client_id'
     ]),
     'price': frozenset(['prijs', 'price', 'order total', 'value', 'revenue', 'amount']),
     'category': frozenset(['categorie', 'category', 'product_category']),
