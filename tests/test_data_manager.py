@@ -105,6 +105,56 @@ def test_filter_event_log_top_variants_keeps_only_most_frequent():
     assert 'odd' not in filtered['case:concept:name'].unique()
 
 
+def test_filter_event_log_top_variants_ignores_row_order_uses_timestamp():
+    """Regression: variant strings must be built from time:timestamp order,
+    not incoming DataFrame row order. A BigQuery/CSV source that comes back
+    with rows out of chronological order per case must not corrupt which
+    variant is 'most frequent'.
+
+    3 cases share the true chronological variant a -> b -> c (t0, t1, t2)
+    but are inserted into the DataFrame in different row orders; 1 case is
+    a genuinely different, minority variant. Without re-sorting by
+    time:timestamp before joining, the 3 majority cases would produce 3
+    different-looking strings (one per row-order permutation) instead of
+    one shared string, and top_n=1 would keep an arbitrary single case
+    instead of all 3 true majority cases.
+    """
+    t0 = pd.Timestamp('2024-01-01 00:00')
+    t1 = pd.Timestamp('2024-01-01 00:01')
+    t2 = pd.Timestamp('2024-01-01 00:02')
+    rows = [
+        ('m0', 'a', t0), ('m0', 'b', t1), ('m0', 'c', t2),  # in order
+        ('m1', 'b', t1), ('m1', 'a', t0), ('m1', 'c', t2),  # shuffled
+        ('m2', 'c', t2), ('m2', 'b', t1), ('m2', 'a', t0),  # reversed
+        ('odd', 'x', t0), ('odd', 'c', t1),                 # true minority variant
+    ]
+    df = make_event_log(rows)
+
+    filtered, messages = filter_event_log(df, filter_type='top_variants', top_n=1)
+
+    assert filtered is not None
+    assert set(filtered['case:concept:name'].unique()) == {'m0', 'm1', 'm2'}
+
+
+def test_filter_event_log_crop_top_n_ignores_row_order_uses_timestamp():
+    """Same regression as top_variants, for the crop filter's top_n step."""
+    t0 = pd.Timestamp('2024-01-01 00:00')
+    t1 = pd.Timestamp('2024-01-01 00:01')
+    t2 = pd.Timestamp('2024-01-01 00:02')
+    rows = [
+        ('m0', 'a', t0), ('m0', 'b', t1), ('m0', 'checkout', t2),
+        ('m1', 'b', t1), ('m1', 'a', t0), ('m1', 'checkout', t2),
+        ('m2', 'checkout', t2), ('m2', 'b', t1), ('m2', 'a', t0),
+        ('odd', 'x', t0), ('odd', 'checkout', t1),
+    ]
+    df = make_event_log(rows)
+
+    filtered, messages = filter_event_log(df, filter_type='crop', activity='checkout', top_n=1)
+
+    assert filtered is not None
+    assert set(filtered['case:concept:name'].unique()) == {'m0', 'm1', 'm2'}
+
+
 def test_filter_event_log_case_duration():
     rows = [
         ('short', 'a', pd.Timestamp('2024-01-01 00:00')),
