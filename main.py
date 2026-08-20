@@ -686,6 +686,25 @@ with tab_bottlenecks:
             width='stretch'
         )
 
+    res_metrics = perf.get("resource_performance", {}).get("resource_metrics", {})
+    if res_metrics:
+        st.subheader("Resource Performance")
+        st.caption(
+            "Who or what handled each step - detected from a 'resource', "
+            "'org:resource', 'user', or 'operator' column. Processing time is "
+            f"time since the previous event in the case ({time_unit})."
+        )
+        res_df = pd.DataFrame.from_dict(res_metrics, orient="index")
+        res_df.index.name = "Resource"
+        display_cols = [
+            c for c in ["total_events", "unique_cases", "mean_proc_time", "median_proc_time"]
+            if c in res_df.columns
+        ]
+        st.dataframe(
+            res_df[display_cols].sort_values("total_events", ascending=False),
+            width='stretch'
+        )
+
     recs = stats.get("recommendations", [])
     if recs:
         st.subheader("Recommendations")
