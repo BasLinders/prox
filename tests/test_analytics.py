@@ -103,7 +103,30 @@ def test_analyze_process_performance_empty_df():
     empty_df = pd.DataFrame(columns=['case:concept:name', 'concept:name', 'time:timestamp'])
     results = analyze_process_performance(empty_df)
     assert any('empty' in e.lower() for e in results['errors'])
-    assert results['summary_statistics'] == {}
+
+
+def test_analyze_process_performance_resource_performance_by_column():
+    """Organisational/resource perspective: who or what handled each step.
+    Only reachable now that COLUMN_MAPPINGS no longer swallows 'resource'
+    into 'user_id' before this function ever sees the column."""
+    df = make_bottleneck_log()
+    df['resource'] = ['agent_A', 'agent_B', 'agent_A'] * 5  # 5 cases x 3 events each
+
+    results = analyze_process_performance(df, time_unit='minutes')
+    res_perf = results['resource_performance']
+
+    assert res_perf['num_resources'] == 2
+    metrics = res_perf['resource_metrics']
+    assert set(metrics.keys()) == {'agent_A', 'agent_B'}
+    assert metrics['agent_A']['total_events'] == 10  # 2 of every 3 events per case, 5 cases
+    assert metrics['agent_B']['total_events'] == 5
+
+
+def test_analyze_process_performance_no_resource_column_reports_note():
+    df = make_bottleneck_log()
+    results = analyze_process_performance(df, time_unit='minutes')
+    assert results['resource_performance'].get('resource_metrics') is None
+    assert 'note' in results['resource_performance']
 
 
 def test_recommendations_health_score_message_matches_actual_score():

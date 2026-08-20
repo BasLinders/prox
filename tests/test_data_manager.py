@@ -59,6 +59,21 @@ def test_load_and_validate_csv_rejects_oversized_file():
     assert any('too large' in m.lower() for m in messages)
 
 
+def test_load_and_validate_csv_does_not_rename_resource_column_to_user_id():
+    """Regression test: COLUMN_MAPPINGS used to alias 'resource'/'org:resource'
+    (the XES standard name for who performed a step) into 'user_id' (whose
+    case this is) - two different concepts. That made analyze_process_
+    performance()'s own resource-column detection unreachable, since the
+    column it looks for had already been renamed away by the time it ran."""
+    raw = make_raw_log_df()
+    raw['resource'] = ['agent_A', 'agent_A', 'agent_B']
+    df, messages, has_category = load_and_validate_csv(make_csv_bytes(raw))
+
+    assert df is not None
+    assert 'resource' in df.columns
+    assert df['user_id'].tolist() == ['u1', 'u1', 'u2']  # unaffected by the resource column
+
+
 # --- filter_event_log ---
 
 def test_filter_event_log_remove_events(simple_event_log):
