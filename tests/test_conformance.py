@@ -282,7 +282,9 @@ def test_import_reference_model_bpmn_valid_file():
     fd, path = tempfile.mkstemp(suffix='.bpmn')
     os.close(fd)
     try:
-        pm4py.write_bpmn(bpmn_graph, path)
+        # auto_layout=False: skip Graphviz-based diagram layout, which isn't
+        # installed in CI and isn't needed just to round-trip the BPMN XML.
+        pm4py.write_bpmn(bpmn_graph, path, auto_layout=False)
         with open(path, 'rb') as f:
             file_bytes = f.read()
     finally:
