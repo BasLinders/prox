@@ -21,7 +21,13 @@ from .data_manager import (
 )
 from .config import CONFIG, create_analysis_config, get_column_mappings
 from .discovery import perform_process_discovery, DISCOVERY_ALGORITHMS
-from .conformance import run_conformance_checking, CONFORMANCE_METHODS
+from .conformance import (
+    run_conformance_checking,
+    CONFORMANCE_METHODS,
+    build_structured_reference_model,
+    import_reference_model_bpmn,
+    diff_reference_model_coverage,
+)
 from .analytics import (
     get_event_log_summary,
     analyze_process_performance,
@@ -30,8 +36,12 @@ from .analytics import (
     analyze_funnel_by_segment,
     format_business_report,
 )
-from .visualizer import visualize_focused_insights, export_results
-from .report import generate_html_report, generate_segment_comparison_report
+from .visualizer import visualize_focused_insights, export_results, render_petri_net
+from .report import (
+    generate_html_report,
+    generate_segment_comparison_report,
+    generate_reference_conformance_report,
+)
 from .segments import compare_segments
 from .mock_data import generate_mock_event_log, generate_mock_csv_bytes
 
@@ -51,6 +61,9 @@ __all__ = [
     "DISCOVERY_ALGORITHMS",
     "run_conformance_checking",
     "CONFORMANCE_METHODS",
+    "build_structured_reference_model",
+    "import_reference_model_bpmn",
+    "diff_reference_model_coverage",
     "get_event_log_summary",
     "analyze_process_performance",
     "analyze_repeat_purchases",
@@ -59,8 +72,10 @@ __all__ = [
     "format_business_report",
     "visualize_focused_insights",
     "export_results",
+    "render_petri_net",
     "generate_html_report",
     "generate_segment_comparison_report",
+    "generate_reference_conformance_report",
     "compare_segments",
     "generate_mock_event_log",
     "generate_mock_csv_bytes",
