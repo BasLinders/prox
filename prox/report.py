@@ -438,3 +438,124 @@ has the healthiest process (health score <strong>{best_health[1].get('health_sco
 
     body = f"<h1>PRoX Segment Comparison Report</h1>{narrative}{table_html}{images_html}"
     return _html_shell("PRoX Segment Comparison Report", body)
+
+
+def generate_reference_conformance_report(
+    conformance_result: Dict[str, Any],
+    discovered_model_img: str = None,
+    reference_model_img: str = None,
+    coverage_diff: Dict[str, Any] = None,
+) -> str:
+    """
+    Builds a self-contained HTML report from a run_conformance_checking()
+    results dict checked against a user-defined reference model, for sharing
+    outside a live Streamlit session. Opens with a plain-language summary of
+    fitness/precision/quality and the biggest deviation category, followed by
+    the per-case deviation table, both Petri net images side by side, and the
+    reference-model coverage diff.
+    """
+    overall = (conformance_result or {}).get('overall_summary', {}) or {}
+    cases = (conformance_result or {}).get('case_analysis', {}).get('cases', []) or []
+
+    if not overall and not cases:
+        return _html_shell(
+            "PRoX Reference Conformance Report",
+            "<h1>PRoX Reference Conformance Report</h1><p>No conformance data available.</p>",
+        )
+
+    fitness = overall.get('fitness_score', 0)
+    precision = overall.get('precision_score', 0)
+    quality = overall.get('quality_assessment', 'N/A')
+
+    imperfect = sorted(
+        [c for c in cases if c.get('fitness', 1.0) < 1.0],
+        key=lambda x: x['fitness']
+    )
+
+    skipped_counts: Dict[str, int] = {}
+    unsolicited_counts: Dict[str, int] = {}
+    for c in imperfect:
+        for act in c.get('deviations', {}).get('skipped', []):
+            skipped_counts[act] = skipped_counts.get(act, 0) + 1
+        for act in c.get('deviations', {}).get('unsolicited', []):
+            unsolicited_counts[act] = unsolicited_counts.get(act, 0) + 1
+
+    biggest_deviation_sentence = ""
+    all_counts = {**{(a, 'skipped'): n for a, n in skipped_counts.items()},
+                  **{(a, 'unsolicited'): n for a, n in unsolicited_counts.items()}}
+    if all_counts:
+        (top_act, top_kind), top_n = max(all_counts.items(), key=lambda kv: kv[1])
+        kind_phrase = "was skipped" if top_kind == 'skipped' else "occurred unexpectedly"
+        biggest_deviation_sentence = (
+            f"<p>The most common deviation: <strong>'{html.escape(str(top_act))}'</strong> "
+            f"{kind_phrase} in <strong>{top_n}</strong> sampled case(s).</p>"
+        )
+
+    narrative = f"""
+<h2>Executive Summary</h2>
+<div class="summary-box">
+<p>Checked <strong>{len(cases)}</strong> sampled case(s) against the reference model:
+<strong>{fitness:.1%}</strong> fitness, <strong>{precision:.1%}</strong> precision -
+rated <strong>{html.escape(str(quality))}</strong> overall. <strong>{len(imperfect)}</strong>
+case(s) deviated from the reference model.</p>
+{biggest_deviation_sentence}
+</div>
+"""
+
+    metrics_html = f"""
+<div class="metrics">
+  <div class="metric"><div class="label">Fitness</div><div class="value">{fitness:.1%}</div></div>
+  <div class="metric"><div class="label">Precision</div><div class="value">{precision:.1%}</div></div>
+  <div class="metric"><div class="label">Quality</div><div class="value">{html.escape(str(quality))}</div></div>
+</div>
+"""
+
+    table_html = ""
+    if imperfect:
+        dev_rows = "".join(
+            f"<tr><td>{html.escape(str(c['case_id']))}</td><td>{c['fitness']:.2%}</td>"
+            f"<td>{html.escape(', '.join(c.get('deviations', {}).get('skipped', [])) or '-')}</td>"
+            f"<td>{html.escape(', '.join(c.get('deviations', {}).get('unsolicited', [])) or '-')}</td></tr>"
+            for c in imperfect[:100]
+        )
+        table_html = f"""
+<h2>Deviant Cases</h2>
+<table>
+<tr><th>Case ID</th><th>Fitness</th><th>Skipped</th><th>Unsolicited</th></tr>
+{dev_rows}
+</table>
+"""
+
+    discovered_img = _embed_image(discovered_model_img)
+    reference_img = _embed_image(reference_model_img)
+    images_html = ""
+    if discovered_img or reference_img:
+        images_html = f"""
+<h2>Discovered vs. Reference Model</h2>
+<div class="images">
+  <div><h3>Discovered from your data</h3>{f'<img class="zoomable" title="Click to enlarge" src="{discovered_img}">' if discovered_img else '<p>Not available.</p>'}</div>
+  <div><h3>Reference model</h3>{f'<img class="zoomable" title="Click to enlarge" src="{reference_img}">' if reference_img else '<p>Not available.</p>'}</div>
+</div>
+"""
+
+    coverage_html = ""
+    if coverage_diff:
+        unexpected = coverage_diff.get('unexpected_in_data', [])
+        never_observed = coverage_diff.get('never_observed', [])
+        unexpected_html = "".join(f"<li>{html.escape(str(a))}</li>" for a in unexpected) or "<li>None.</li>"
+        never_observed_html = "".join(f"<li>{html.escape(str(a))}</li>" for a in never_observed) or "<li>None.</li>"
+        coverage_html = f"""
+<h2>Reference Model Coverage</h2>
+<div class="summary-box">
+<p><strong>Happening in your data but not in the reference model:</strong></p>
+<ul>{unexpected_html}</ul>
+<p><strong>Expected by the reference model but never observed:</strong></p>
+<ul>{never_observed_html}</ul>
+</div>
+"""
+
+    body = (
+        f"<h1>PRoX Reference Conformance Report</h1>{narrative}{metrics_html}"
+        f"{images_html}{coverage_html}{table_html}"
+    )
+    return _html_shell("PRoX Reference Conformance Report", body)

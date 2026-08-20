@@ -15,12 +15,18 @@ from prox import (
     format_business_report,
     generate_html_report,
     generate_segment_comparison_report,
+    generate_reference_conformance_report,
     compare_segments,
     analyze_conversion_funnel,
     analyze_funnel_by_segment,
     check_data_quality,
     generate_mock_csv_bytes,
     filter_event_log,
+    run_conformance_checking,
+    build_structured_reference_model,
+    import_reference_model_bpmn,
+    diff_reference_model_coverage,
+    render_petri_net,
     DISCOVERY_ALGORITHMS,
     CONFORMANCE_METHODS,
 )
@@ -33,6 +39,25 @@ KNOWN_NOISE_ACTIVITIES = {
     "view_item_list_empty", "user_engagement", "page_timestamp",
     "session_start", "first_visit",
 }
+
+def _describe_reference_stages(stages: list) -> str:
+    """Renders an assembled reference-model stage list as a plain-English
+    caption, e.g. 'a → (b or c) → [optional] d → e (repeatable)'."""
+    def _describe(stage):
+        acts = stage["activities"]
+        t = stage["type"]
+        if t == "optional":
+            return f"[optional] {acts[0]}"
+        if t == "repeatable":
+            return f"{acts[0]} (repeatable)"
+        if t == "choice":
+            return "(" + " or ".join(acts) + ")"
+        if t == "parallel":
+            return "(" + " + ".join(acts) + ", any order)"
+        return acts[0]
+
+    return " → ".join(_describe(s) for s in stages)
+
 
 # Above this many cases, running conformance checking unsampled (the default -
 # see the Sampling step) risks becoming slow, especially with State Equation
@@ -166,7 +191,10 @@ with st.sidebar:
 
     st.divider()
     if st.button("Clear Results", width='stretch'):
-        for key in ("results", "df", "load_messages", "segment_result", "funnel_result", "funnel_segment_result"):
+        for key in (
+            "results", "df", "load_messages", "segment_result", "funnel_result",
+            "funnel_segment_result", "reference_conformance_result",
+        ):
             st.session_state.pop(key, None)
         st.rerun()
 
@@ -751,6 +779,210 @@ with tab_conf:
             "Token Replay mode does not produce trace-level details - "
             "switch to State Equation A* for per-case deviations."
         )
+
+    st.divider()
+    st.subheader("Conformance vs. a Reference Model")
+    st.caption(
+        "The fitness/precision above measure self-consistency: how well a model "
+        "*discovered from this same log* fits the log it came from. This checks "
+        "something different - real behaviour against a model **you** define: "
+        "the process as it's supposed to work, not the pattern PRoX found in "
+        "what already happened."
+    )
+
+    ref_raw_df = st.session_state.get("df")
+    if ref_raw_df is None or "concept:name" not in ref_raw_df.columns:
+        st.info("Run an analysis first to enable reference-model conformance checking.")
+    else:
+        ref_mode = st.radio(
+            "Reference model source",
+            ["Define expected path", "Import a BPMN file"],
+            horizontal=True,
+            key="ref_mode",
+        )
+
+        ref_stages = []
+        ref_uploaded_bpmn = None
+
+        if ref_mode == "Define expected path":
+            ref_activities = sorted(ref_raw_df["concept:name"].dropna().astype(str).unique().tolist())
+            ref_selected_activities = st.multiselect(
+                "Expected activities, in order",
+                options=ref_activities,
+                key="ref_selected_activities",
+                help="Activities are added to the reference path in the order you select them."
+            )
+
+            if ref_selected_activities:
+                st.caption("Configure each step:")
+                skip_next = False
+                for i, act in enumerate(ref_selected_activities):
+                    if skip_next:
+                        skip_next = False
+                        continue
+
+                    has_next = i + 1 < len(ref_selected_activities)
+                    cols = st.columns([2, 2, 2, 2])
+                    with cols[0]:
+                        st.write(f"**{act}**")
+                    with cols[1]:
+                        step_type = st.selectbox(
+                            "Type", ["Required", "Optional", "Repeatable"],
+                            key=f"ref_type_{act}", label_visibility="collapsed"
+                        )
+                    with cols[2]:
+                        combine_choice = st.checkbox(
+                            "Choice with next", key=f"ref_choice_{act}", disabled=not has_next
+                        )
+                    with cols[3]:
+                        combine_parallel = st.checkbox(
+                            "Parallel with next", key=f"ref_parallel_{act}",
+                            disabled=not has_next or combine_choice
+                        )
+
+                    if has_next and (combine_choice or combine_parallel):
+                        next_act = ref_selected_activities[i + 1]
+                        stage_type = "choice" if combine_choice else "parallel"
+                        ref_stages.append({"activities": [act, next_act], "type": stage_type})
+                        skip_next = True
+                    else:
+                        ref_stages.append({"activities": [act], "type": step_type.lower()})
+
+                st.caption("Reference path: " + _describe_reference_stages(ref_stages))
+        else:
+            ref_uploaded_bpmn = st.file_uploader("BPMN file", type=["bpmn", "xml"], key="ref_bpmn_upload")
+
+        run_ref_btn = st.button("Check Conformance Against Reference Model", width='stretch')
+
+        if run_ref_btn:
+            ref_model = None
+            ref_build_errors = []
+
+            if ref_mode == "Define expected path":
+                if len(ref_stages) < 2:
+                    st.warning("Select at least two activities to define a reference path.")
+                else:
+                    with st.spinner("Building reference model..."):
+                        ref_model, ref_build_errors = build_structured_reference_model(ref_stages)
+            else:
+                if not ref_uploaded_bpmn:
+                    st.warning("Upload a BPMN file first.")
+                else:
+                    with st.spinner("Importing BPMN reference model..."):
+                        ref_model, ref_build_errors = import_reference_model_bpmn(ref_uploaded_bpmn.getvalue())
+
+            for err in ref_build_errors:
+                st.error(err)
+
+            if ref_model:
+                ref_net, ref_im, ref_fm = ref_model
+                ref_config = st.session_state.get("config", {})
+                ref_speed = ref_config.get("speed_params", {})
+                ref_conf_cfg = ref_config.get("conformance_params", {})
+                ref_sampling_cfg = ref_config.get("sampling_config", {})
+
+                with st.spinner("Checking conformance against the reference model..."):
+                    ref_conf_result = run_conformance_checking(
+                        ref_raw_df, ref_net, ref_im, ref_fm,
+                        max_align=ref_speed.get("max_align", 250),
+                        max_prec_cases=ref_speed.get("max_prec_traces", 250),
+                        cores=ref_speed.get("cores", 1),
+                        alignment_variant=ref_conf_cfg.get("algorithm", "state_equation_a_star"),
+                        enable_detailed_analysis=ref_conf_cfg.get("calculate_precision", True),
+                        optimize_variants=ref_conf_cfg.get("optimize_variants", True),
+                        perform_sampling=ref_sampling_cfg.get("enabled", True),
+                        strata_col=ref_sampling_cfg.get("strata_col", "purchase"),
+                        max_priority_ratio=ref_sampling_cfg.get("max_priority_ratio", 0.5),
+                    )
+
+                ref_img_path = render_petri_net(
+                    ref_net, ref_im, ref_fm, os.path.join("output", "reference_model.png")
+                )
+                discovered_img_path = results.get("visualizations", {}).get("happy_path")
+                coverage_diff = diff_reference_model_coverage(ref_net, ref_raw_df)
+
+                st.session_state["reference_conformance_result"] = {
+                    "conformance_result": ref_conf_result,
+                    "discovered_img": discovered_img_path,
+                    "reference_img": ref_img_path,
+                    "coverage_diff": coverage_diff,
+                }
+
+        ref_state = st.session_state.get("reference_conformance_result")
+        if ref_state:
+            ref_conf_result = ref_state["conformance_result"]
+            for err in ref_conf_result.get("errors", []):
+                st.error(err)
+
+            ref_overall = ref_conf_result.get("overall_summary", {})
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric("Fitness (vs. Reference)", f"{ref_overall.get('fitness_score', 0):.1%}")
+            rc2.metric("Precision (vs. Reference)", f"{ref_overall.get('precision_score', 0):.1%}")
+            rc3.metric("Quality", ref_overall.get("quality_assessment", "N/A"))
+
+            ref_cases = ref_conf_result.get("case_analysis", {}).get("cases", [])
+            ref_imperfect = sorted(
+                [c for c in ref_cases if c.get("fitness", 1.0) < 1.0],
+                key=lambda x: x["fitness"]
+            )
+            if ref_cases:
+                st.caption(f"{len(ref_imperfect)} deviant case(s) out of {len(ref_cases)} sampled.")
+                if ref_imperfect:
+                    ref_dev_rows = [
+                        {
+                            "Case ID": c["case_id"],
+                            "Fitness": f"{c['fitness']:.2%}",
+                            "Skipped": ", ".join(c.get("deviations", {}).get("skipped", [])) or "-",
+                            "Unsolicited": ", ".join(c.get("deviations", {}).get("unsolicited", [])) or "-"
+                        }
+                        for c in ref_imperfect[:100]
+                    ]
+                    st.dataframe(pd.DataFrame(ref_dev_rows), width='stretch')
+
+            img_c1, img_c2 = st.columns(2)
+            with img_c1:
+                st.caption("Discovered from your data")
+                if ref_state["discovered_img"] and os.path.exists(ref_state["discovered_img"]):
+                    st.image(ref_state["discovered_img"], width='stretch')
+                else:
+                    st.info("Not available.")
+            with img_c2:
+                st.caption("Reference model")
+                if ref_state["reference_img"] and os.path.exists(ref_state["reference_img"]):
+                    st.image(ref_state["reference_img"], width='stretch')
+                else:
+                    st.info("Not available.")
+
+            coverage_diff = ref_state["coverage_diff"]
+            cov_c1, cov_c2 = st.columns(2)
+            with cov_c1:
+                st.markdown("**Happening in your data but not in the reference model**")
+                if coverage_diff["unexpected_in_data"]:
+                    for a in coverage_diff["unexpected_in_data"]:
+                        st.write(f"- {a}")
+                else:
+                    st.write("None.")
+            with cov_c2:
+                st.markdown("**Expected by the reference model but never observed**")
+                if coverage_diff["never_observed"]:
+                    for a in coverage_diff["never_observed"]:
+                        st.write(f"- {a}")
+                else:
+                    st.write("None.")
+
+            st.download_button(
+                "Download Reference Conformance Report",
+                data=generate_reference_conformance_report(
+                    ref_conf_result,
+                    discovered_model_img=ref_state["discovered_img"],
+                    reference_model_img=ref_state["reference_img"],
+                    coverage_diff=coverage_diff,
+                ),
+                file_name="prox_reference_conformance_report.html",
+                mime="text/html",
+            )
+        else:
+            st.info("Configure a reference model above and click **Check Conformance Against Reference Model**.")
 
 # ---------------------------------------------------------------------------
 # Tab: Funnel
