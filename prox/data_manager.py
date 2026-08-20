@@ -400,7 +400,11 @@ def _filter_crop(filtered_df, activity=None, top_n=None, **_ignored):
     messages.append(f"Cropped traces at '{used_target}'. Cases without it were removed.")
 
     if top_n:
-        variants = filtered_df.groupby('case:concept:name')['concept:name'].apply(lambda x: ' -> '.join(x))
+        variants = (
+            filtered_df.sort_values('time:timestamp')
+            .groupby('case:concept:name')['concept:name']
+            .apply(lambda x: ' -> '.join(x))
+        )
         top_seqs = variants.value_counts().nlargest(top_n).index
         keep_cases = variants[variants.isin(top_seqs)].index
         filtered_df = filtered_df[filtered_df['case:concept:name'].isin(keep_cases)]
@@ -446,7 +450,11 @@ def _filter_attribute(filtered_df, attribute_col=None, attribute_values=None, **
 
 def _filter_top_variants(filtered_df, top_n=10, **_ignored):
     messages = []
-    variants = filtered_df.groupby('case:concept:name')['concept:name'].apply(lambda x: ' -> '.join(x))
+    variants = (
+        filtered_df.sort_values('time:timestamp')
+        .groupby('case:concept:name')['concept:name']
+        .apply(lambda x: ' -> '.join(x))
+    )
     top_seqs = variants.value_counts().nlargest(top_n).index
     keep_cases = variants[variants.isin(top_seqs)].index
     filtered_df = filtered_df[filtered_df['case:concept:name'].isin(keep_cases)]
