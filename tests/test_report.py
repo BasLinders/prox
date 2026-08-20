@@ -4,7 +4,11 @@ import pandas as pd
 
 from prox.config import create_analysis_config
 from prox.pipeline import run_full_analysis
-from prox.report import generate_html_report, generate_segment_comparison_report
+from prox.report import (
+    generate_html_report,
+    generate_segment_comparison_report,
+    generate_reference_conformance_report,
+)
 from prox.segments import compare_segments
 
 from conftest import make_event_log, make_simple_variant_log
@@ -197,3 +201,61 @@ def test_generate_segment_comparison_report_escapes_segment_values(tmp_path):
     report = generate_segment_comparison_report(segment_result)
     assert '<script>alert(1)</script>' not in report
     assert '&lt;script&gt;' in report
+
+
+def _make_reference_conformance_result():
+    return {
+        'overall_summary': {
+            'fitness_score': 0.85,
+            'precision_score': 0.9,
+            'quality_assessment': 'Good',
+        },
+        'case_analysis': {
+            'cases': [
+                {'case_id': '1', 'fitness': 1.0, 'deviations': {'skipped': [], 'unsolicited': []}},
+                {'case_id': '2', 'fitness': 0.7, 'deviations': {'skipped': ['confirm'], 'unsolicited': []}},
+            ]
+        },
+        'errors': [],
+    }
+
+
+def test_generate_reference_conformance_report_contains_key_sections(tmp_path):
+    img_path = tmp_path / "ref_model.png"
+    _write_dummy_png(img_path)
+
+    report = generate_reference_conformance_report(
+        _make_reference_conformance_result(),
+        discovered_model_img=str(img_path),
+        reference_model_img=str(img_path),
+        coverage_diff={'unexpected_in_data': ['extra_step'], 'never_observed': ['confirm']},
+    )
+
+    assert report.startswith("<!doctype html>")
+    assert "PRoX Reference Conformance Report" in report
+    assert "Executive Summary" in report
+    assert "Deviant Cases" in report
+    assert "Discovered vs. Reference Model" in report
+    assert "Reference Model Coverage" in report
+    assert "extra_step" in report
+    assert "confirm" in report
+
+
+def test_generate_reference_conformance_report_images_are_zoomable(tmp_path):
+    img_path = tmp_path / "ref_model.png"
+    _write_dummy_png(img_path)
+
+    report = generate_reference_conformance_report(
+        _make_reference_conformance_result(),
+        discovered_model_img=str(img_path),
+        reference_model_img=str(img_path),
+    )
+
+    assert 'class="zoomable"' in report
+    assert 'id="lightbox-overlay"' in report
+
+
+def test_generate_reference_conformance_report_handles_missing_result_gracefully():
+    report = generate_reference_conformance_report({})
+    assert report.startswith("<!doctype html>")
+    assert "No conformance data available." in report
