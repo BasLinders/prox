@@ -617,3 +617,37 @@ def sample_log_stratified(
     sampled_ids = pd.Series(all_ids).sample(n, replace=False).tolist()
     messages.append(f"Random sample: {len(sampled_ids)} cases.")
     return event_log_df[event_log_df['case:concept:name'].isin(sampled_ids)].copy(), messages
+
+
+def winsorize_series(
+    series: pd.Series, method: str = "std", param: float = 3.0
+) -> Tuple[pd.Series, float, float]:
+    """
+    Caps outliers in a numeric Series without dropping rows, so a handful of
+    extreme values (e.g. one enormous order) don't dilute downstream stats
+    like Average Order Value or a revenue trend. Same technique as
+    first-order-engine's ContinuousMetricEngine.winsorize_series, adapted to
+    return a Series (PRoX's DataFrame-in/DataFrame-out convention) instead of
+    a JSON-serializable list.
+
+    method: "std" caps at mean +/- param standard deviations.
+            "percentile" caps at the [param, 100 - param] percentile band
+            (e.g. param=1 -> 1st/99th percentile).
+
+    Returns (clipped_series, lower_bound, upper_bound). An empty or all-NaN
+    series is returned unchanged with bounds of (0.0, 0.0) - nothing to
+    winsorize against.
+    """
+    series_clean = series.dropna()
+    if series_clean.empty:
+        return series.copy(), 0.0, 0.0
+
+    if method == "std":
+        mean_val = series_clean.mean()
+        std_val = series_clean.std()
+        lower = mean_val - (param * std_val)
+        upper = mean_val + (param * std_val)
+    else:  # percentile
+        lower, upper = np.percentile(series_clean, [param, 100.0 - param])
+
+    return series.clip(lower, upper), float(lower), float(upper)
