@@ -22,7 +22,7 @@ jobs:
           pip install pytest pyflakes
 
       - name: Lint (pyflakes)
-        run: python -m pyflakes prox main.py
+        run: python -m pyflakes prox utility main.py
 
       - name: Test (pytest)
         run: python -m pytest tests/ -v

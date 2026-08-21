@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from pdf_builder import (
+from utility.pdf_builder import (
     _available_sections,
     _section_business,
     _section_sessions,
