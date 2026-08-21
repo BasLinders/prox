@@ -660,8 +660,57 @@ if enable_sampling:
         "Sample Size (cases)", min_value=50, max_value=1000, value=250, step=50,
         help="Cases used for conformance. Higher = more accurate but slower."
     )
+
+    # Stratification candidates: binary flag-style columns (e.g. 'purchase',
+    # 'add_to_cart') where sample_log_stratified's priority_value=1 actually
+    # means something - a non-binary or all-zero column would silently just
+    # degrade to a random sample, so those aren't offered.
+    exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id", "session_id"}
+
+    def _has_priority_value(series: pd.Series) -> bool:
+        try:
+            return (series == 1).any() or (series.astype(str).str.strip() == "1").any()
+        except Exception:
+            return False
+
+    strata_candidates = [
+        c for c in raw_df.columns
+        if c not in exclude_cols and raw_df[c].nunique(dropna=True) == 2 and _has_priority_value(raw_df[c])
+    ]
+
+    strata_col1, strata_col2 = st.columns([2, 1])
+    with strata_col1:
+        strata_options = ["(none - plain random sample)"] + strata_candidates
+        default_strata = next((c for c in strata_candidates if c.lower() in {"purchase", "has_purchase"}), strata_options[0])
+        strata_choice = st.selectbox(
+            "Prioritise a column when sampling",
+            strata_options,
+            index=strata_options.index(default_strata),
+            help=(
+                "Stratified sampling: reserves part of the sample for cases where "
+                "this column = 1, so rare-but-important cases (e.g. purchases) "
+                "aren't sampled away, instead of a plain random sample across all "
+                "cases. Only binary (0/1-style) columns are offered here, since "
+                "that's what stratification actually prioritises on."
+            ),
+        )
+    with strata_col2:
+        max_priority_ratio = st.slider(
+            "Max priority share", 0.1, 1.0, 0.5, 0.05,
+            help="Upper bound on how much of the sample can be priority cases.",
+            disabled=(strata_choice == strata_options[0]),
+        )
+    # "(none)" needs an explicit non-purchase sentinel, not None/"" - those
+    # are falsy, and run_conformance_checking's own fallback then re-checks
+    # for a 'purchase' column regardless, silently reintroducing
+    # stratification the user just opted out of. 'case:concept:name' is
+    # unique per case, so priority-matching against it never hits - the same
+    # sentinel that function already falls back to internally.
+    strata_col = "case:concept:name" if strata_choice == strata_options[0] else strata_choice
 else:
     sample_size = max(post_cases, 1)
+    strata_col = "case:concept:name"
+    max_priority_ratio = 0.5
     if post_cases > LARGE_CASE_COUNT_THRESHOLD:
         st.warning(
             f"{post_cases:,} cases will be analysed without sampling. Conformance "
@@ -685,6 +734,8 @@ if run_btn:
         sample_size=int(sample_size),
         cores=int(cores),
         enable_sampling=enable_sampling,
+        strata_col=strata_col,
+        max_priority_ratio=float(max_priority_ratio),
         filter_steps=filter_steps,
     )
 
