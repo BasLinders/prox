@@ -34,13 +34,28 @@ def make_raw_log_df():
 
 # --- load_and_validate_csv ---
 
-def test_load_and_validate_csv_success_maps_columns_and_builds_composite_key():
+def test_load_and_validate_csv_success_maps_columns_and_defaults_case_to_user():
     df, messages, has_category = load_and_validate_csv(make_csv_bytes(make_raw_log_df()))
 
     assert df is not None
     assert has_category is False
-    assert {'case:concept:name', 'concept:name', 'time:timestamp', 'user_id'}.issubset(df.columns)
+    assert {'case:concept:name', 'concept:name', 'time:timestamp', 'user_id', 'session_id'}.issubset(df.columns)
+    # Default case_grouping="user": case:concept:name is the bare user_id, and
+    # both of u1's rows (from session s1) collapse into one case.
+    assert df['case:concept:name'].iloc[0] == 'u1'
+    assert set(df['case:concept:name']) == {'u1', 'u2'}
+    # session_id is always kept, composite-safe, regardless of case_grouping.
+    assert df['session_id'].iloc[0] == 'u1_s1'
+
+
+def test_load_and_validate_csv_case_grouping_session_builds_composite_key():
+    df, messages, has_category = load_and_validate_csv(
+        make_csv_bytes(make_raw_log_df()), case_grouping='session'
+    )
+
+    assert df is not None
     assert df['case:concept:name'].iloc[0] == 'u1_s1'
+    assert df['case:concept:name'].iloc[0] == df['session_id'].iloc[0]
 
 
 def test_load_and_validate_csv_missing_required_column():
