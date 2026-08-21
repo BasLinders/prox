@@ -106,7 +106,7 @@ rejects — silently breaking discovery on real event logs. Full detail in
 
 ### Phase 5 — BigQuery live data source (via `first-order-engine`'s `foe.data`)
 
-**Shipped 2026-08-20** (PR #28, `bigquery_source.py`) — kept in full below
+**Shipped 2026-08-20** (PR #28, `utility/bigquery_source.py`) — kept in full below
 as the design record; see the "Resolved" note under Open Questions at the
 end for how those were actually settled.
 
@@ -309,7 +309,7 @@ has needed otherwise yet.
   the Filter Events step anchors analysis to a chosen activity (defaulting
   to `purchase` when present) via the existing `crop` filter, instead of
   that only being settable in code.
-- **Modular, opt-in PDF report builder** (`pdf_builder.py`) - a separate
+- **Modular, opt-in PDF report builder** (`utility/pdf_builder.py`) - a separate
   tool from `prox/report.py`'s all-in-one `generate_html_report()`: checks
   per available results tab (Process Maps, Variants, Bottlenecks,
   Conformance, Funnel, Business Insights, Session Insights, Segment

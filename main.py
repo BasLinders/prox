@@ -8,8 +8,8 @@ import time
 import pandas as pd
 import streamlit as st
 
-from bigquery_source import render_bigquery_source
-from pdf_builder import render_pdf_builder
+from utility.bigquery_source import render_bigquery_source
+from utility.pdf_builder import render_pdf_builder
 from prox import (
     load_and_validate_csv,
     refine_activity_labels,

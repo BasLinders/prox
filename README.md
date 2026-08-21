@@ -202,6 +202,9 @@ prox/               Engine package — import this from any Python script
 └── pipeline.py     Orchestrator — runs all stages in sequence
 
 main.py             Streamlit app (UI layer only)
+utility/            Standalone UI-layer tools main.py wires in - BigQuery data
+                    source (utility/bigquery_source.py) and the modular PDF
+                    report builder (utility/pdf_builder.py)
 tests/              pytest suite covering the prox/ engine
 scripts/            Dev tooling (e.g. pipeline profiling), not part of the installable package
 docs/               Reference docs (see Documentation below) and development status
