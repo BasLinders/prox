@@ -35,6 +35,8 @@ from .analytics import (
     analyze_conversion_funnel,
     analyze_funnel_by_segment,
     format_business_report,
+    classify_sessions,
+    summarize_user_journeys,
 )
 from .visualizer import visualize_focused_insights, export_results, render_petri_net
 from .report import (
@@ -70,6 +72,8 @@ __all__ = [
     "analyze_conversion_funnel",
     "analyze_funnel_by_segment",
     "format_business_report",
+    "classify_sessions",
+    "summarize_user_journeys",
     "visualize_focused_insights",
     "export_results",
     "render_petri_net",

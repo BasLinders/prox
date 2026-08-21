@@ -8,6 +8,8 @@ from prox.analytics import (
     analyze_conversion_funnel,
     analyze_funnel_by_segment,
     format_business_report,
+    classify_sessions,
+    summarize_user_journeys,
 )
 
 from conftest import make_event_log
@@ -484,3 +486,93 @@ def test_format_business_report_includes_repeat_rate(tmp_path):
     result = analyze_repeat_purchases(df, output_folder=str(tmp_path))
     report = format_business_report(result)
     assert "50.00%" in report
+
+
+# --- classify_sessions / summarize_user_journeys ---
+
+def make_session_intent_log():
+    """Four sessions for one user (u1, chronological order sA..sD) plus one
+    session for a second user (u2), covering all four labels."""
+    base = pd.Timestamp('2024-01-01')
+    rows = []
+
+    def add(user, session, activity, offset_days, offset_min=0):
+        rows.append(dict(
+            user_id=user, session_id=f"{user}_{session}", **{
+                'concept:name': activity,
+                'time:timestamp': base + pd.Timedelta(days=offset_days, minutes=offset_min),
+            }
+        ))
+
+    # sA: only landing/category views -> Browsing
+    add('u1', 'sA', 'home_view', 0, 0)
+    add('u1', 'sA', 'category_view', 0, 1)
+
+    # sB: enough product/search activity -> Researching
+    add('u1', 'sB', 'search', 1, 0)
+    add('u1', 'sB', 'view_item', 1, 1)
+    add('u1', 'sB', 'view_item', 1, 2)
+
+    # sC: added to cart, never purchased -> Cart Abandonment
+    add('u1', 'sC', 'view_item', 2, 0)
+    add('u1', 'sC', 'add_to_cart', 2, 1)
+
+    # sD: purchased -> Buying (beats cart evidence in the same session)
+    add('u1', 'sD', 'add_to_cart', 3, 0)
+    add('u1', 'sD', 'purchase', 3, 1)
+
+    # u2's single session: also Buying
+    add('u2', 'sA', 'purchase', 0, 0)
+
+    return pd.DataFrame(rows)
+
+
+def test_classify_sessions_labels_by_priority_rules():
+    df = make_session_intent_log()
+    labels = classify_sessions(df)
+
+    by_session = labels.set_index('session_id')['label'].to_dict()
+    assert by_session['u1_sA'] == 'Browsing'
+    assert by_session['u1_sB'] == 'Researching'
+    assert by_session['u1_sC'] == 'Cart Abandonment'
+    assert by_session['u1_sD'] == 'Buying'
+    assert by_session['u2_sA'] == 'Buying'
+
+
+def test_classify_sessions_research_threshold_is_configurable():
+    df = make_session_intent_log()
+    # sB only has 2 view_item/search rows below the default threshold of 3 -
+    # raising the threshold should demote it back to Browsing.
+    strict_labels = classify_sessions(df, research_min_events=5)
+    assert strict_labels.set_index('session_id').loc['u1_sB', 'label'] == 'Browsing'
+
+
+def test_classify_sessions_missing_columns_returns_empty():
+    df = pd.DataFrame({'concept:name': ['a'], 'time:timestamp': [pd.Timestamp('2024-01-01')]})
+    result = classify_sessions(df)
+    assert result.empty
+    assert list(result.columns) == ['session_id', 'user_id', 'label', 'event_count', 'first_activity', 'last_activity']
+
+
+def test_classify_sessions_empty_input_returns_empty():
+    assert classify_sessions(pd.DataFrame()).empty
+
+
+def test_summarize_user_journeys_orders_sessions_chronologically():
+    df = make_session_intent_log()
+    labels = classify_sessions(df)
+    journeys = summarize_user_journeys(labels)
+
+    u1_row = journeys.set_index('user_id').loc['u1']
+    assert u1_row['session_count'] == 4
+    assert u1_row['journey'] == 'Browsing -> Researching -> Cart Abandonment -> Buying'
+
+    u2_row = journeys.set_index('user_id').loc['u2']
+    assert u2_row['session_count'] == 1
+    assert u2_row['journey'] == 'Buying'
+
+
+def test_summarize_user_journeys_empty_input_returns_empty():
+    result = summarize_user_journeys(pd.DataFrame())
+    assert result.empty
+    assert list(result.columns) == ['user_id', 'session_count', 'journey']

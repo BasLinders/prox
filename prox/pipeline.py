@@ -6,7 +6,8 @@ from typing import Callable, Dict, Any
 from .discovery import perform_process_discovery
 from .conformance import run_conformance_checking
 from .analytics import (
-    analyze_process_performance, get_event_log_summary, analyze_repeat_purchases, analyze_conversion_funnel
+    analyze_process_performance, get_event_log_summary, analyze_repeat_purchases, analyze_conversion_funnel,
+    classify_sessions, summarize_user_journeys
 )
 from .visualizer import visualize_focused_insights, export_results
 from .data_manager import filter_event_log, FILTER_HANDLERS
@@ -286,6 +287,20 @@ def run_full_analysis(
     )
     if funnel_stats.get('stages'):
         pipeline_results['funnel_analysis'] = funnel_stats
+
+    session_labels = classify_sessions(
+        log_df,
+        user_col=biz_cfg.get("user_col", "user_id"),
+        purchase_values=biz_cfg.get("purchase_values", ['purchase', 'has_purchase']),
+        cart_values=biz_cfg.get("cart_values"),
+        research_keywords=biz_cfg.get("research_keywords"),
+        research_min_events=biz_cfg.get("research_min_events", 3),
+    )
+    if not session_labels.empty:
+        pipeline_results['session_insights'] = {
+            'sessions': session_labels,
+            'journeys': summarize_user_journeys(session_labels),
+        }
 
     _report_progress(6)
 
