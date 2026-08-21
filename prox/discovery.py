@@ -12,7 +12,13 @@ logger = logging.getLogger(__name__)
 
 
 def _discover_inductive_miner(log, *, noise_threshold=0.2, **_ignored):
-    tree = inductive_miner.apply(log, parameters={'noise_threshold': noise_threshold})
+    # noise_threshold only has an effect under the IMf variant - the default
+    # IM variant silently ignores it (verified: IM produces byte-identical
+    # trees regardless of noise_threshold). IMf at noise_threshold=0.0
+    # matches plain IM exactly, so this is safe at the default too.
+    tree = inductive_miner.apply(
+        log, parameters={'noise_threshold': noise_threshold}, variant=inductive_miner.Variants.IMf
+    )
     net, im, fm = pt_converter.apply(tree, variant=pt_converter.Variants.TO_PETRI_NET)
     message = f"Petri net discovered via Inductive Miner (noise={noise_threshold})"
     return net, im, fm, message

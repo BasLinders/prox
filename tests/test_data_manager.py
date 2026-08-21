@@ -387,3 +387,22 @@ def test_winsorize_series_all_nan_returns_zero_bounds():
     assert clipped.isna().all()
     assert lower == 0.0
     assert upper == 0.0
+
+
+# --- refine_activity_labels ---
+
+def test_refine_activity_labels_cleans_urls_per_row_not_by_first_row_only():
+    """Regression test: the URL-cleaning step (strip query string, keep last
+    path segment) used to decide whether to apply at all based only on the
+    first matched row's value, then applied that single decision to the
+    whole column. A column mixing plain and URL-like values had every
+    non-first-style row leak raw slashes/query strings into the activity
+    name."""
+    df = pd.DataFrame({
+        'concept:name': ['page_view', 'page_view'],
+        'page_type': ['product', '/category/product?ref=x'],
+        'time:timestamp': [pd.Timestamp('2024-01-01'), pd.Timestamp('2024-01-01 00:01')],
+        'case:concept:name': ['c1', 'c1'],
+    })
+    out = refine_activity_labels(df, target_activity='page_view', context_column='page_type')
+    assert out['concept:name'].tolist() == ['page_view_PRODUCT', 'page_view_PRODUCT']

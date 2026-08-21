@@ -297,18 +297,29 @@ def _fitness_state_equation_alignments(
             nt.append(Event({'concept:name': str(event['concept:name'])}))
         clean_log.append(nt)
 
-    # Rebuild markings from net structure
-    rim = Marking()
-    rfm = Marking()
-    for p in process_model.places:
-        if not p.in_arcs:
-            rim[p] = 1
-        if not p.out_arcs:
-            rfm[p] = 1
+    # Use the real markings discovery/import already produced (same pattern
+    # as _fitness_token_replay above) rather than guessing from net topology.
+    # A "place with no in-arcs is the initial marking" heuristic happens to
+    # match for most discovered nets, but silently diverges from the actual
+    # im/fm for reference models built via build_structured_reference_model()
+    # or import_reference_model_bpmn() - e.g. any net with loops or multiple
+    # branches, where sourceless/sinkless places don't coincide with the real
+    # start/end. Only fall back to the topology guess if no markings were
+    # actually supplied.
+    rim = initial_marking if initial_marking else Marking()
+    rfm = final_marking if final_marking else Marking()
     if not rim:
-        rim[list(process_model.places)[0]] = 1
+        for p in process_model.places:
+            if not p.in_arcs:
+                rim[p] = 1
+        if not rim:
+            rim[list(process_model.places)[0]] = 1
     if not rfm:
-        rfm[list(process_model.places)[-1]] = 1
+        for p in process_model.places:
+            if not p.out_arcs:
+                rfm[p] = 1
+        if not rfm:
+            rfm[list(process_model.places)[-1]] = 1
 
     max_cores = max(1, os.cpu_count() - 1) if cores == 0 else cores
     params = {'cores': max_cores, 'ret_tuple_as_trans_desc': True}
