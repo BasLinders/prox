@@ -14,6 +14,7 @@ from prox import (
     load_and_validate_csv,
     refine_activity_labels,
     optimize_dataframe_memory,
+    winsorize_series,
     create_analysis_config,
     run_full_analysis,
     format_business_report,
@@ -552,11 +553,68 @@ if raw_df is None:
     st.stop()
 
 # ---------------------------------------------------------------------------
+# Winsorize revenue/price outliers - opt-in, applied right after the data is
+# cached (both raw_df and df_ready) and before anything downstream reads
+# 'price' (business insights' AOV/revenue trend/category breakdown, sampling
+# strata, etc.), so a handful of extreme values don't dilute those reports.
+# Caps values rather than dropping rows - see prox.winsorize_series.
+# ---------------------------------------------------------------------------
+st.divider()
+st.header("2. Handle Outliers")
+if "price" not in raw_df.columns:
+    st.caption("No revenue/price column detected - nothing to winsorize.")
+else:
+    winsorize_enabled = st.checkbox(
+        "Winsorize Revenue/Price Outliers", value=False,
+        help=(
+            "Caps extreme values in the revenue/price column instead of "
+            "removing those rows, so a handful of outlier orders don't "
+            "dilute Average Order Value, revenue trend, or category "
+            "revenue breakdown in Business Insights."
+        )
+    )
+    if winsorize_enabled:
+        w_col1, w_col2 = st.columns(2)
+        with w_col1:
+            winsorize_method_label = st.radio(
+                "Method", ["Standard Deviation", "Percentile"], horizontal=True,
+                help=(
+                    "Standard Deviation: caps at mean +/- N standard deviations. "
+                    "Percentile: caps at the Nth/100-Nth percentile band."
+                )
+            )
+        with w_col2:
+            if winsorize_method_label == "Standard Deviation":
+                winsorize_param = st.slider(
+                    "Std deviations", 1.0, 5.0, 3.0, 0.5,
+                    help="Values beyond mean +/- this many standard deviations are capped.",
+                )
+            else:
+                winsorize_param = st.slider(
+                    "Percentile cutoff", 0.5, 10.0, 1.0, 0.5,
+                    help="Caps at this percentile and its mirror (e.g. 1 = 1st/99th percentile).",
+                )
+
+        winsorize_method = "std" if winsorize_method_label == "Standard Deviation" else "percentile"
+        clipped, lower, upper = winsorize_series(raw_df["price"], method=winsorize_method, param=winsorize_param)
+        n_capped = int(((raw_df["price"] < lower) | (raw_df["price"] > upper)).sum())
+
+        raw_df = raw_df.copy()
+        df_ready = df_ready.copy()
+        raw_df["price"] = clipped
+        df_ready["price"] = df_ready["price"].clip(lower, upper)
+
+        if n_capped > 0:
+            st.info(f"Capped {n_capped:,} value(s) to the range [{lower:,.2f}, {upper:,.2f}].")
+        else:
+            st.caption("No values fell outside the winsorization bounds - nothing was capped.")
+
+# ---------------------------------------------------------------------------
 # Data quality check - surfaced before filtering/analysis, so messy data is
 # caught here instead of showing up as a confusing downstream result
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("2. Data Quality Check")
+st.header("3. Data Quality Check")
 data_quality = check_data_quality(raw_df)
 if data_quality["issues"]:
     with st.expander(f"{len(data_quality['issues'])} data quality issue(s) found", expanded=True):
@@ -569,7 +627,7 @@ else:
 # Filter events before analysis
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("3. Filter Events")
+st.header("4. Filter Events")
 st.caption(
     "Remove noisy or irrelevant events before analysis, or narrow it down to "
     "just the events you care about. Optional - leave the list empty to "
@@ -646,7 +704,7 @@ st.caption(
 # Sampling - opt-in, with a warning above a "large" case-count threshold
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("4. Sampling")
+st.header("5. Sampling")
 enable_sampling = st.checkbox(
     "Enable Sampling", value=False,
     help=(
@@ -1482,5 +1540,5 @@ with tab_segments:
 # Export: Build a Custom PDF Report
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("5. Build a Custom PDF Report")
+st.header("6. Build a Custom PDF Report")
 render_pdf_builder(results, segment_result=st.session_state.get("segment_result"))
