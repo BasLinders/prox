@@ -1024,3 +1024,130 @@ def format_business_report(results: Dict[str, Any]) -> str:
 
     lines.append("=" * 40)
     return "\n".join(lines)
+
+
+def classify_sessions(
+    df: pd.DataFrame,
+    user_col: str = "user_id",
+    activity_col: str = "concept:name",
+    timestamp_col: str = "time:timestamp",
+    session_col: str = "session_id",
+    purchase_values=None,
+    cart_values=None,
+    research_keywords=None,
+    research_min_events: int = 3,
+) -> pd.DataFrame:
+    """
+    Labels each session with a coarse intent using a priority-ordered rule
+    list over its activities (first match wins):
+
+        1. Buying            - a purchase activity/flag is present.
+        2. Cart Abandonment  - an add-to-cart activity/flag is present, no purchase.
+        3. Researching       - at least `research_min_events` activities whose
+                                name matches `research_keywords` (search, filter,
+                                product views, ...), no cart/purchase.
+        4. Browsing          - everything else.
+
+    Deliberately activity-name/flag based rather than revenue-based, for the
+    same reason `analyze_repeat_purchases` avoids revenue as purchase evidence:
+    revenue/price values are commonly attached to browsing events too.
+
+    Grouped by `session_col` rather than `case:concept:name`, so this works
+    unchanged whether the case is set to session-level or user-level grouping
+    (see `load_and_validate_csv`'s `case_grouping`) - one user-case can span
+    several sessions, and each still gets its own label.
+
+    Returns
+    -------
+    pd.DataFrame with one row per session: session_id, user_id, label,
+    event_count, first_activity, last_activity. Empty (with those columns)
+    if required columns are missing or df is empty.
+    """
+    empty_cols = ['session_id', 'user_id', 'label', 'event_count', 'first_activity', 'last_activity']
+    if df is None or df.empty:
+        return pd.DataFrame(columns=empty_cols)
+
+    if purchase_values is None:
+        purchase_values = ['purchase', 'has_purchase']
+    elif isinstance(purchase_values, str):
+        purchase_values = [purchase_values]
+
+    if cart_values is None:
+        cart_values = ['add_to_cart', 'add_to_basket']
+    elif isinstance(cart_values, str):
+        cart_values = [cart_values]
+
+    if research_keywords is None:
+        research_keywords = ['search', 'filter', 'view_item', 'product']
+    elif isinstance(research_keywords, str):
+        research_keywords = [research_keywords]
+
+    cols_map = {c.lower(): c for c in df.columns}
+    real_session_col = cols_map.get(session_col.lower())
+    real_user_col = cols_map.get(user_col.lower())
+    real_time_col = cols_map.get(timestamp_col.lower())
+    real_activity_col = cols_map.get(activity_col.lower(), activity_col if activity_col in df.columns else None)
+
+    required = [real_session_col, real_user_col, real_time_col, real_activity_col]
+    if any(c is None for c in required):
+        logger.warning(
+            "classify_sessions: missing one of session/user/timestamp/activity columns. Skipping."
+        )
+        return pd.DataFrame(columns=empty_cols)
+
+    df = df.copy()
+    activities_lower = df[real_activity_col].astype(str).str.lower()
+
+    purchase_pattern = '|'.join(p.lower() for p in purchase_values)
+    cart_pattern = '|'.join(c.lower() for c in cart_values)
+    research_pattern = '|'.join(r.lower() for r in research_keywords)
+
+    df['_is_purchase'] = activities_lower.str.contains(purchase_pattern, na=False)
+    df['_is_cart'] = activities_lower.str.contains(cart_pattern, na=False)
+    df['_is_research'] = activities_lower.str.contains(research_pattern, na=False)
+
+    grouped = df.groupby(real_session_col).agg(
+        user_id=(real_user_col, 'first'),
+        event_count=(real_activity_col, 'count'),
+        has_purchase=('_is_purchase', 'any'),
+        has_cart=('_is_cart', 'any'),
+        research_events=('_is_research', 'sum'),
+        first_activity=(real_time_col, 'min'),
+        last_activity=(real_time_col, 'max'),
+    ).reset_index().rename(columns={real_session_col: 'session_id'})
+
+    def _label(row):
+        if row['has_purchase']:
+            return 'Buying'
+        if row['has_cart']:
+            return 'Cart Abandonment'
+        if row['research_events'] >= research_min_events:
+            return 'Researching'
+        return 'Browsing'
+
+    grouped['label'] = grouped.apply(_label, axis=1)
+    grouped = grouped.drop(columns=['has_purchase', 'has_cart', 'research_events'])
+    return grouped.sort_values(['user_id', 'first_activity']).reset_index(drop=True)
+
+
+def summarize_user_journeys(session_labels_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Rolls per-session labels (from `classify_sessions`) up into one row per
+    user: their sessions' labels in chronological order, e.g. a user whose
+    first session only browsed and second session bought shows as
+    "Browsing -> Buying".
+
+    Returns
+    -------
+    pd.DataFrame: user_id, session_count, journey (str). Empty if input is empty.
+    """
+    if session_labels_df is None or session_labels_df.empty:
+        return pd.DataFrame(columns=['user_id', 'session_count', 'journey'])
+
+    ordered = session_labels_df.sort_values(['user_id', 'first_activity'])
+    journeys = (
+        ordered.groupby('user_id')
+        .agg(session_count=('label', 'count'), journey=('label', lambda s: ' -> '.join(s)))
+        .reset_index()
+    )
+    return journeys.sort_values('session_count', ascending=False).reset_index(drop=True)

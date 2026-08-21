@@ -104,7 +104,9 @@ CONFIG = {
     "business_params": {
         "user_col": "user_id",
         "revenue_col": "event_value",
-        "purchase_values": ["purchase", "has_purchase"]
+        "purchase_values": ["purchase", "has_purchase"],
+        "research_keywords": ["search", "filter", "view_item", "product"],
+        "research_min_events": 3
     }
 }
 
@@ -193,6 +195,8 @@ def create_analysis_config(
         "business_params": business_params if business_params is not None else {
             "user_col": "user_id",
             "revenue_col": "event_value",
-            "purchase_values": ["purchase", "has_purchase"]
+            "purchase_values": ["purchase", "has_purchase"],
+            "research_keywords": ["search", "filter", "view_item", "product"],
+            "research_min_events": 3
         }
     }
