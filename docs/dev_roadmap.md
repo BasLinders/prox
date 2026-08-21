@@ -11,7 +11,7 @@ current even when the detail lives elsewhere — this is the one page meant
 to answer "where does PRoX development actually stand?" without opening
 five files.
 
-Last assessed 2026-08-19, against `main` @ `a566875` — 90 tests passing,
+Last assessed 2026-08-21, against `main` @ `52b8275` — 140 tests passing,
 `pyflakes` clean.
 
 ---
@@ -25,10 +25,12 @@ Last assessed 2026-08-19, against `main` @ `a566875` — 90 tests passing,
 | Phase 3 — Extensibility (registries) | Complete | `dev_phase2.md` |
 | Phase 4 — Expand capability | Complete* | `dev_phase2.md` |
 | Phase 4b — Optimization | Complete | `dev_optimization.md` |
-| Phase 5 — Incremental analysis | Flagged, not scoped | `dev_phase2.md` |
+| Phase 5 — BigQuery live data source (via `foe.data`) | Complete | below |
+| Phase 6 — Session insight, reporting & data controls | Complete | below |
+| Phase 6b — Full-pipeline correctness pass | Complete | below |
+| Incremental analysis | Flagged, not scoped | `dev_phase2.md` |
 | ML layer (conversion propensity + drivers) | Roadmapped | `ML_roadmap.md` |
 | AI-assisted recommendations (optional, Gemini) | Roadmapped | `AI_summary_roadmap.md` |
-| BigQuery live data source (via `foe.data`) | Roadmapped, secrets scaffolded, utility gaps resolved upstream | below |
 | Product development suggestions | Roadmapped | below |
 
 \* One sub-item — segment comparison v2 (automated golden-path diffing) —
@@ -101,108 +103,11 @@ unchanged inputs). Found and fixed a real correctness bug along the way:
 rejects — silently breaking discovery on real event logs. Full detail in
 `dev_optimization.md`.
 
----
+### Phase 5 — BigQuery live data source (via `first-order-engine`'s `foe.data`)
 
-## In progress
-
-Nothing currently in progress.
-
----
-
-## Roadmapped (not yet scheduled)
-
-### Phase 5 — Incremental analysis (flagged, not scoped)
-
-Deferred from Phase 4: an incremental/cached analysis mode for recurring
-large logs, so re-running PRoX on a growing dataset doesn't reprocess
-everything from scratch each time. Flagged rather than scoped because
-there's no concrete pain signal yet — no evidence of repeat-large-log usage
-in this project so far — and it's the most architecturally invasive item
-under discussion (would touch caching, log diffing, and pipeline
-re-entry points that don't exist today). Revisit once a real use case
-actually hits this. Full detail in `dev_phase2.md`.
-
-### Machine learning layer
-
-A colleague-suggested direction: layering ML on top of the event log.
-Scoped into a concrete first candidate — conversion propensity prediction
-paired with a plain-language root-cause driver analysis — in
-`ML_roadmap.md`, including feature engineering, model choice, validation
-approach, and the open questions (minimum data volume, leakage risk,
-overlap with the Funnel tab) to resolve before building it. Kept as its
-own file since ML output is probabilistic and needs a different kind of
-trust framing than PRoX's otherwise-deterministic metrics.
-
-### AI-assisted recommendations (optional, Gemini)
-
-A response to competitive pressure to have some AI-branded capability,
-scoped narrowly on purpose: an opt-in, off-by-default feature that sends
-an already-aggregated summary of the analysis (never the event log or any
-row-level data) to Gemini and displays the generated recommendations in a
-clearly-labeled, separate section — distinct from the deterministic
-recommendations already in the Executive Summary. Full detail, including
-the exact data-allowlist design that keeps case/user IDs from ever leaving
-the machine, in `AI_summary_roadmap.md`. Kept as its own file since sending
-data to a third-party API raises data-handling questions neither
-`ML_roadmap.md`'s locally-trained models nor any of PRoX's other features
-do.
-
-### Product development suggestions
-
-A working list of where the product could go next, given everything
-shipped so far (discovery, conformance, bottlenecks, variants, business
-insights, funnel analysis, segment comparison, HTML reporting). Roughly
-ranked by effort vs. payoff — none of these are committed, scoped, or
-sequenced yet.
-
-#### Quick wins (small, builds on what already exists)
-
-**Shipped:**
-- **Funnel x Segment cross-analysis — done.** The Funnel tab has an optional
-  "Split by segment" selector (same 2-20-unique-value column candidates as
-  Segment Comparison). `analyze_funnel_by_segment()` in `prox/analytics.py`
-  reuses the overall funnel's stage order for every segment, so results are
-  directly comparable - "does mobile drop off earlier than desktop?" is now
-  a chart and a table, not a manual cross-reference between two tabs.
-- **Data-quality pre-check — done.** A "2. Data Quality Check" step now runs
-  right after upload, before filtering/analysis. `check_data_quality()` in
-  `prox/data_manager.py` flags exact duplicate events, single-event cases
-  (no transitions to analyse), and events logged out of chronological order
-  within a case - the log-shape problems `load_and_validate_csv()`'s own
-  null/timestamp checks don't catch.
-
-**Still open:**
-- **Config presets.** Save/load the sidebar configuration (discovery algo,
-  sample size, filters, funnel definition) as a small JSON file. Removes the
-  "reconfigure everything every session" friction for a repeat analyst —
-  directly serves the "runs on a laptop, used repeatedly" use case.
-
-#### Medium bets (real feature work, clear value)
-
-- **Segment comparison v2 — automated golden-path diffing.** Already scoped
-  and deliberately deferred (`dev_phase2.md`'s Phase 4 segment-comparison
-  entry: "segment A visits checkout, segment B doesn't"). Worth revisiting
-  now that v1 has real usage patterns (parallel execution, its own report
-  export).
-- **Cohort/retention view.** Current loyalty metrics (repeat rate,
-  days-between-purchases) are transaction-level. A cohort retention curve
-  (% of users from cohort week N still active in week N+1, N+2, ...) is a
-  different, complementary lens that product/growth stakeholders
-  specifically look for and PRoX doesn't have yet.
-- **Two-log comparison.** Compare this week's export vs. last week's, or
-  this cohort's export vs. last month's — a temporal/version diff, distinct
-  from segment comparison's categorical split of a single upload.
-
-#### Longer-term (bigger, already flagged elsewhere in these docs)
-
-- **Phase 5 — incremental analysis** for recurring large logs (above).
-  Still explicitly "no pain signal yet" — worth doing once someone is
-  actually re-running PRoX on a growing dataset regularly, not before.
-- **BigQuery live data source** (below). Removes the export-clean-upload
-  cycle for GA4-in-BigQuery users. Biggest lift of anything on this list —
-  only worth it if CSV upload is a genuine recurring friction point.
-
-### BigQuery live data source (via `first-order-engine`'s `foe.data`)
+**Shipped 2026-08-20** (PR #28, `bigquery_source.py`) — kept in full below
+as the design record; see the "Resolved" note under Open Questions at the
+end for how those were actually settled.
 
 **Idea**: instead of requiring the user to export, clean, and upload a CSV,
 let PRoX connect directly to BigQuery and query GA4 event data live.
@@ -362,7 +267,8 @@ typically needs a compiled Stan backend on first install. Worth stating
 plainly in install docs as the known cost of this optional path, since it
 cuts against PRoX's "no compilation step, runs on a standard laptop"
 positioning. Also: `foe` requires Python ≥3.10 vs. PRoX's README-stated
-3.9+ — needs a doc update if/when this ships.
+3.9+ base requirement — noted directly in `requirements.txt`'s `[bigquery]`
+comment as shipped, so this doesn't need a separate doc update.
 
 #### Open questions to resolve before implementation
 
@@ -375,3 +281,188 @@ positioning. Also: `foe` requires Python ≥3.10 vs. PRoX's README-stated
 - `event_names`/`attribute_params`/`numeric_attribute_params` need a UI
   decision: expose as advanced/overridable fields, or hardcode sane
   defaults for v1 and revisit if a real dataset needs otherwise.
+
+**Resolved (2026-08-20, as shipped):** OAuth client registration is a
+per-deployment `.streamlit/secrets.toml` config the person running PRoX
+sets up once - the multi-tenant case was out of scope. `event_names` is
+exposed as an advanced, comma-separated text field ("restrict to specific
+events"); `attribute_params`/`numeric_attribute_params` were left
+hardcoded to sane v1 defaults rather than exposed, since no real dataset
+has needed otherwise yet.
+
+### Phase 6 — Session insight, reporting & data controls
+
+- **Case grouping default switched to user-level** - `case:concept:name`
+  now defaults to `user_id` (previously always a `user_id + session_id`
+  composite), so a case can span a user's whole session history instead of
+  just one session. A per-user-scoped `session_id` column is always kept
+  regardless, and a UI toggle switches back to the previous per-session
+  grouping.
+- **Session-level intent classification** - `classify_sessions()` /
+  `summarize_user_journeys()` in `prox/analytics.py`: a transparent,
+  priority-ordered rule set (Buying > Cart Abandonment > Researching >
+  Browsing) labels every session from its activities, then rolls a user's
+  session labels into a chronological journey string (e.g. "Browsing ->
+  Researching -> Buying"). Surfaced in a new **Session Insights** tab.
+- **Configurable process end point** - a "Process end point" selector in
+  the Filter Events step anchors analysis to a chosen activity (defaulting
+  to `purchase` when present) via the existing `crop` filter, instead of
+  that only being settable in code.
+- **Modular, opt-in PDF report builder** (`pdf_builder.py`) - a separate
+  tool from `prox/report.py`'s all-in-one `generate_html_report()`: checks
+  per available results tab (Process Maps, Variants, Bottlenecks,
+  Conformance, Funnel, Business Insights, Session Insights, Segment
+  Comparison), builds a PDF containing only what's checked, via `reportlab`
+  (pure Python, no system rendering dependency - no wkhtmltopdf binary, no
+  Cairo/Pango).
+- **Smoothly ticking progress percentage** - the analysis progress bar
+  previously only updated at 6 coarse pipeline-stage boundaries, sitting
+  frozen for long stretches (especially during State Equation A*
+  conformance). `run_full_analysis` now executes on a background thread
+  while the main thread drives the bar from elapsed time via an asymptotic
+  curve (capped at 95% until actually done), independent of the real
+  per-stage callback, which still supplies the stage label text.
+- **Sampling stratification exposed in the UI** - `strata_col` /
+  `max_priority_ratio` (stratified sampling that reserves part of the
+  conformance sample for cases where a chosen column = 1, e.g. purchases,
+  so they aren't sampled away) existed in the pipeline but were hardcoded
+  to `'purchase'` and never surfaced. Now a "Prioritise a column when
+  sampling" selector (binary 0/1-style columns only) plus a max-priority-
+  share slider in the Sampling step.
+- **Opt-in revenue/price winsorization** - `prox.winsorize_series()` (same
+  technique as first-order-engine's
+  `ContinuousMetricEngine.winsorize_series`: cap at mean +/- N std devs, or
+  a percentile band) applied to the revenue/price column right after data
+  is loaded/cached, before any filtering/sampling/analysis reads it - caps
+  outlier values instead of dropping the rows, so Average Order
+  Value/revenue trend/category breakdown aren't diluted by a handful of
+  extreme orders.
+
+### Phase 6b — Full-pipeline correctness pass
+
+A deliberate line-by-line review across `prox/discovery.py`,
+`conformance.py`, `analytics.py`, and `data_manager.py`, prompted by the
+Phase 6 work above. Each finding was verified empirically or by direct
+reproduction before fixing, with a regression test added per fix:
+
+- Inductive Miner discovery called `inductive_miner.apply()` without
+  `variant=Variants.IMf`, so the Noise Threshold slider had been a
+  complete no-op - noise filtering only exists under `IMf`, not the
+  default `IM` variant.
+- `_fitness_state_equation_alignments()` accepted `initial_marking`/
+  `final_marking` but never used them, instead guessing markings from net
+  topology - usually harmless for a discovered net, but capable of
+  silently corrupting fitness/alignments for reference-model topologies
+  where the real start/end doesn't coincide with sourceless/sinkless
+  places. Now uses the real markings, matching the sibling
+  `_fitness_token_replay()`.
+- Purchase/cart/research-keyword matching built a regex via
+  `'|'.join(values)` with no guard for an empty list - `'|'.join([])` is
+  `''`, and `str.contains('')` matches every row, silently misclassifying
+  everything as a match instead of nothing. Fixed at all 5 call sites via
+  a shared `_contains_any()` helper.
+- `refine_activity_labels()` decided whether to apply URL-cleaning based
+  only on the first matched row's value, applying that one decision to the
+  whole column - a column mixing plain and URL-like values leaked raw
+  query strings/slashes into activity names for every row that didn't
+  match the first row's style. Cleaning is now applied per row.
+
+---
+
+## In progress
+
+Nothing currently in progress.
+
+---
+
+## Roadmapped (not yet scheduled)
+
+### Incremental analysis (flagged, not scoped)
+
+Deferred from Phase 4: an incremental/cached analysis mode for recurring
+large logs, so re-running PRoX on a growing dataset doesn't reprocess
+everything from scratch each time. Flagged rather than scoped because
+there's no concrete pain signal yet — no evidence of repeat-large-log usage
+in this project so far — and it's the most architecturally invasive item
+under discussion (would touch caching, log diffing, and pipeline
+re-entry points that don't exist today). Revisit once a real use case
+actually hits this. Full detail in `dev_phase2.md`.
+
+### Machine learning layer
+
+A colleague-suggested direction: layering ML on top of the event log.
+Scoped into a concrete first candidate — conversion propensity prediction
+paired with a plain-language root-cause driver analysis — in
+`ML_roadmap.md`, including feature engineering, model choice, validation
+approach, and the open questions (minimum data volume, leakage risk,
+overlap with the Funnel tab) to resolve before building it. Kept as its
+own file since ML output is probabilistic and needs a different kind of
+trust framing than PRoX's otherwise-deterministic metrics.
+
+### AI-assisted recommendations (optional, Gemini)
+
+A response to competitive pressure to have some AI-branded capability,
+scoped narrowly on purpose: an opt-in, off-by-default feature that sends
+an already-aggregated summary of the analysis (never the event log or any
+row-level data) to Gemini and displays the generated recommendations in a
+clearly-labeled, separate section — distinct from the deterministic
+recommendations already in the Executive Summary. Full detail, including
+the exact data-allowlist design that keeps case/user IDs from ever leaving
+the machine, in `AI_summary_roadmap.md`. Kept as its own file since sending
+data to a third-party API raises data-handling questions neither
+`ML_roadmap.md`'s locally-trained models nor any of PRoX's other features
+do.
+
+### Product development suggestions
+
+A working list of where the product could go next, given everything
+shipped so far (discovery, conformance, bottlenecks, variants, business
+insights, funnel analysis, segment comparison, HTML reporting). Roughly
+ranked by effort vs. payoff — none of these are committed, scoped, or
+sequenced yet.
+
+#### Quick wins (small, builds on what already exists)
+
+**Shipped:**
+- **Funnel x Segment cross-analysis — done.** The Funnel tab has an optional
+  "Split by segment" selector (same 2-20-unique-value column candidates as
+  Segment Comparison). `analyze_funnel_by_segment()` in `prox/analytics.py`
+  reuses the overall funnel's stage order for every segment, so results are
+  directly comparable - "does mobile drop off earlier than desktop?" is now
+  a chart and a table, not a manual cross-reference between two tabs.
+- **Data-quality pre-check — done.** A "2. Data Quality Check" step now runs
+  right after upload, before filtering/analysis. `check_data_quality()` in
+  `prox/data_manager.py` flags exact duplicate events, single-event cases
+  (no transitions to analyse), and events logged out of chronological order
+  within a case - the log-shape problems `load_and_validate_csv()`'s own
+  null/timestamp checks don't catch.
+
+**Still open:**
+- **Config presets.** Save/load the sidebar configuration (discovery algo,
+  sample size, filters, funnel definition) as a small JSON file. Removes the
+  "reconfigure everything every session" friction for a repeat analyst —
+  directly serves the "runs on a laptop, used repeatedly" use case.
+
+#### Medium bets (real feature work, clear value)
+
+- **Segment comparison v2 — automated golden-path diffing.** Already scoped
+  and deliberately deferred (`dev_phase2.md`'s Phase 4 segment-comparison
+  entry: "segment A visits checkout, segment B doesn't"). Worth revisiting
+  now that v1 has real usage patterns (parallel execution, its own report
+  export).
+- **Cohort/retention view.** Current loyalty metrics (repeat rate,
+  days-between-purchases) are transaction-level. A cohort retention curve
+  (% of users from cohort week N still active in week N+1, N+2, ...) is a
+  different, complementary lens that product/growth stakeholders
+  specifically look for and PRoX doesn't have yet.
+- **Two-log comparison.** Compare this week's export vs. last week's, or
+  this cohort's export vs. last month's — a temporal/version diff, distinct
+  from segment comparison's categorical split of a single upload.
+
+#### Longer-term (bigger, already flagged elsewhere in these docs)
+
+- **Incremental analysis** for recurring large logs (above). Still
+  explicitly "no pain signal yet" — worth doing once someone is actually
+  re-running PRoX on a growing dataset regularly, not before.
+- ~~BigQuery live data source~~ — shipped as Phase 5 (above).
+
