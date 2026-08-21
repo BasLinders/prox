@@ -1,6 +1,11 @@
+import io
+
+import pm4py
 import pytest
 
-from prox.discovery import perform_process_discovery
+from prox.discovery import perform_process_discovery, _discover_inductive_miner
+from prox.data_manager import load_and_validate_csv
+from prox.mock_data import generate_mock_event_log
 
 from conftest import make_simple_variant_log
 
@@ -38,3 +43,20 @@ def test_perform_process_discovery_missing_columns():
     model, errors, messages = perform_process_discovery(pd.DataFrame({'foo': [1]}))
     assert model is None
     assert any('missing' in e.lower() for e in errors)
+
+
+def test_inductive_miner_noise_threshold_actually_affects_the_model():
+    """Regression test: inductive_miner.apply() defaults to the plain IM
+    variant, which silently ignores noise_threshold entirely - only the IMf
+    variant applies it. Without variant=Variants.IMf, a noisy log discovered
+    at noise_threshold=0.0 and noise_threshold=0.9 produced byte-identical
+    models despite the UI's Noise Threshold slider suggesting otherwise."""
+    raw = generate_mock_event_log(n_sessions=60, seed=1)
+    csv_bytes = raw.to_csv(index=False).encode()
+    log_df, messages, has_category = load_and_validate_csv(io.BytesIO(csv_bytes), case_grouping='user')
+    log = pm4py.convert_to_event_log(log_df)
+
+    net_low, im_low, fm_low, _ = _discover_inductive_miner(log, noise_threshold=0.0)
+    net_high, im_high, fm_high, _ = _discover_inductive_miner(log, noise_threshold=0.9)
+
+    assert (len(net_low.places), len(net_low.transitions)) != (len(net_high.places), len(net_high.transitions))

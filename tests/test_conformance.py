@@ -8,6 +8,7 @@ from prox.conformance import (
     build_structured_reference_model,
     import_reference_model_bpmn,
     diff_reference_model_coverage,
+    _fitness_state_equation_alignments,
 )
 
 from conftest import make_event_log, make_simple_variant_log
@@ -341,3 +342,51 @@ def test_diff_reference_model_coverage_empty_diff_when_log_and_reference_match()
     diff = diff_reference_model_coverage(net, df)
     assert diff['unexpected_in_data'] == []
     assert diff['never_observed'] == []
+
+
+# --- _fitness_state_equation_alignments uses the real markings, not a guess ---
+
+def test_state_equation_alignments_uses_supplied_markings_not_topology_guess():
+    """Regression test: the function used to ignore its initial_marking/
+    final_marking arguments and rebuild markings by guessing from net
+    topology ('no in-arcs' = initial, 'no out-arcs' = final). A place with
+    no arcs at all satisfies both conditions, so it used to get folded into
+    both the guessed initial and final marking even though it's neither -
+    corrupting the marking used for alignment. With the real markings
+    passed through, that decoy place is correctly ignored and a perfectly
+    matching trace gets fitness 1.0."""
+    from pm4py.objects.petri_net.obj import PetriNet, Marking
+    from pm4py.objects.petri_net.utils import petri_utils
+    from pm4py.objects.log.obj import EventLog, Trace, Event
+
+    net = PetriNet('test')
+    real_start = PetriNet.Place('real_start')
+    mid = PetriNet.Place('mid')
+    real_end = PetriNet.Place('real_end')
+    decoy = PetriNet.Place('decoy')  # no arcs at all: "no in-arcs" AND "no out-arcs"
+    for p in (real_start, mid, real_end, decoy):
+        net.places.add(p)
+
+    t_a = PetriNet.Transition('t_a', 'a')
+    t_b = PetriNet.Transition('t_b', 'b')
+    net.transitions.add(t_a)
+    net.transitions.add(t_b)
+    petri_utils.add_arc_from_to(real_start, t_a, net)
+    petri_utils.add_arc_from_to(t_a, mid, net)
+    petri_utils.add_arc_from_to(mid, t_b, net)
+    petri_utils.add_arc_from_to(t_b, real_end, net)
+
+    im = Marking({real_start: 1})
+    fm = Marking({real_end: 1})
+
+    log = EventLog()
+    tr = Trace()
+    tr.attributes['concept:name'] = 'case1'
+    tr.append(Event({'concept:name': 'a'}))
+    tr.append(Event({'concept:name': 'b'}))
+    log.append(tr)
+
+    result = _fitness_state_equation_alignments(
+        log, net, im, fm, max_align=10, cores=1, optimize_variants=True
+    )
+    assert result['fitness']['log_fitness'] == pytest.approx(1.0)
