@@ -31,6 +31,7 @@ Last assessed 2026-08-21, against `main` @ `52b8275` — 140 tests passing,
 | Incremental analysis | Flagged, not scoped | `dev_phase2.md` |
 | ML layer (conversion propensity + drivers) | Roadmapped | `ML_roadmap.md` |
 | AI-assisted recommendations (optional, Gemini) | Roadmapped | `AI_summary_roadmap.md` |
+| Process mining capability gaps (5 items, by effort) | Roadmapped, not scoped | below |
 | Product development suggestions | Roadmapped | below |
 
 \* One sub-item — segment comparison v2 (automated golden-path diffing) —
@@ -412,6 +413,60 @@ the machine, in `AI_summary_roadmap.md`. Kept as its own file since sending
 data to a third-party API raises data-handling questions neither
 `ML_roadmap.md`'s locally-trained models nor any of PRoX's other features
 do.
+
+### Process mining capability gaps
+
+Surfaced from an honest sophistication assessment (2026-08-21): PRoX is a
+real discovery/conformance engine (Inductive Miner, Heuristics Miner, DFG,
+Token Replay, State Equation A\* alignments, reference-model conformance)
+with a genuine e-commerce/CRO-specific analytical layer on top - ahead of
+a hobby pm4py script, behind an enterprise platform like Celonis or Disco.
+The gap is concentrated in five capabilities those platforms have that
+PRoX doesn't yet. Listed in order of engineering effort, smallest first -
+none of these are scoped or scheduled.
+
+1. **Organizational/resource-perspective mining.** `analyze_process_
+   performance()` already reports basic per-resource event counts when a
+   resource column exists, but stops there. A handover-of-work network
+   (who hands cases to whom, and how often) and per-resource workload/
+   throughput metrics are a natural, contained extension of that existing
+   code path - no new data requirements, no new UI paradigm, just deeper
+   aggregation on a dimension PRoX already partially reads.
+
+2. **Interactive process explorer.** Process Maps and Segment Comparison
+   render static matplotlib/Graphviz images today, not a clickable,
+   filterable, animated flow view. Real lift, but bounded: an existing
+   interactive graph component (or a custom vis.js/d3 embed) replacing the
+   current image-based rendering, with click-to-filter wired back into the
+   existing filter/config state Streamlit already manages.
+
+3. **Decision-point (data-aware) mining.** Explaining *why* a case took
+   one branch over another at a choice point - e.g. "cases with
+   `device=mobile` skip the comparison step 80% of the time" - needs new
+   machinery: identifying XOR choice points in the discovered process
+   tree/Petri net, then correlating case/event attribute values observed
+   before each choice with which branch was actually taken (a decision
+   tree per choice point is the standard approach). No equivalent code
+   exists yet to build on.
+
+4. **Time-perspective prediction (remaining-time/SLA forecasting).**
+   Today's timing analysis is descriptive (bottleneck durations, lead
+   time) - not "given a case is currently at step X, when will it
+   finish, and is it at risk of breaching an SLA?" That needs a
+   trained-per-process-state predictor and a validation methodology, put
+   this in the same effort class as the already-roadmapped ML layer
+   (`ML_roadmap.md`) - plausibly an extension of it rather than a fully
+   separate build.
+
+5. **Multi-tenant / hosted deployment layer.** Authentication, session
+   isolation, persisted (not just `st.session_state`) analysis storage,
+   and audit logging - the architecture change from "single local
+   Streamlit process on one analyst's laptop" (today's explicit design
+   goal, per the README) to a shared, hosted, multi-user service. By far
+   the largest lift here: it's not a new analytical capability but a
+   different deployment model for the whole application, touching
+   caching, storage, and access control throughout. Deliberately out of
+   scope unless that positioning itself changes.
 
 ### Product development suggestions
 
