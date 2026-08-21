@@ -122,7 +122,7 @@ if st.session_state.get("shutdown_requested"):
 
 
 @st.cache_data(show_spinner=False)
-def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, chunk_size):
+def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, chunk_size, case_grouping):
     """Loads + validates the CSV and applies label refinement/memory optimization.
     Cached on file content and loader params so re-running with the same
     upload (e.g. only sidebar options changed) skips CSV parsing entirely.
@@ -132,6 +132,7 @@ def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, c
         max_file_size_mb=max_file_size_mb,
         chunk_threshold_mb=chunk_threshold_mb,
         chunk_size=chunk_size,
+        case_grouping=case_grouping,
     )
     if df is None:
         return None, None, messages, has_category
@@ -360,9 +361,13 @@ in the file:
 | Purchase / conversion flag | Optional - unlocks repeat-buyer, cart abandonment | `purchase`, `transaction`, `conversion` |
 | Category | Optional - unlocks category revenue breakdown | `category`, `product_category` |
 
-If both a user ID and a session ID are present, PRoX combines them into a
-composite case key, so the same session ID re-used by two different users
-doesn't get incorrectly merged into one case.
+If both a user ID and a session ID are present, PRoX groups cases by user by
+default, so the same user's several sessions form one case - letting you see
+their journey across sessions (e.g. a browsing session followed by a buying
+session) in the Session Insights tab. Switch to per-session grouping below
+if you want process discovery/conformance scoped to a single session
+instead. Either way, session IDs are internally kept unique per user (so the
+same session ID re-used by two different users never merges into one case).
 
 **SQL template (GA4 BigQuery export)** - since PRoX's column aliases and the
 mock-data generator are both modelled on GA4's event shape, this is the
@@ -457,6 +462,21 @@ else:
         st.info("Upload a CSV event log above to get started, or generate a mock one.")
         st.stop()
 
+case_grouping_label = st.radio(
+    "Case grouping",
+    ["By user (recommended)", "By session"],
+    horizontal=True,
+    help=(
+        "By user: one case spans everything a user did across all their "
+        "sessions - needed to see a user's sequence of sessions (e.g. a "
+        "browsing session followed by a buying session) in the Session "
+        "Insights tab. By session: one case per session, as before - use "
+        "this if you want process discovery/conformance scoped to a single "
+        "session instead of a user's full history."
+    ),
+)
+case_grouping = "user" if case_grouping_label.startswith("By user") else "session"
+
 loader_defaults = create_analysis_config()["data_loading"]
 with st.spinner("Loading and validating data..."):
     raw_df, df_ready, load_messages, has_category = _cached_load_and_prepare(
@@ -464,6 +484,7 @@ with st.spinner("Loading and validating data..."):
         loader_defaults["max_file_size_mb"],
         loader_defaults["chunk_threshold_mb"],
         loader_defaults["chunk_size"],
+        case_grouping,
     )
 
 st.session_state["load_messages"] = load_messages
@@ -526,13 +547,39 @@ with filter_col2:
         )
     )
 
+filter_steps = []
 if selected_events:
     filter_mode = "remove_events" if filter_mode_label == "Remove selected events" else "keep_events"
-    filter_steps = [{"type": "activity", "activities": selected_events, "mode": filter_mode}]
-    preview_df, _ = filter_event_log(raw_df, filter_type="activity", activities=selected_events, mode=filter_mode)
-else:
-    filter_steps = []
-    preview_df = raw_df
+    filter_steps.append({"type": "activity", "activities": selected_events, "mode": filter_mode})
+
+default_purchase_activities = {"purchase", "has_purchase"}
+endpoint_options = ["(no cropping - use full traces)"] + all_activities
+default_endpoint = next(
+    (a for a in all_activities if a.lower() in default_purchase_activities),
+    endpoint_options[0],
+)
+endpoint_choice = st.selectbox(
+    "Process end point",
+    endpoint_options,
+    index=endpoint_options.index(default_endpoint),
+    help=(
+        "Crops every case's trace at the first occurrence of this activity - "
+        "later events in the same case are dropped, and cases that never "
+        "reach it are removed entirely. Anchors the analysis to a specific "
+        "outcome (e.g. purchase) instead of wherever the log happens to end. "
+        "Pick '(no cropping)' to analyse full traces."
+    ),
+)
+if endpoint_choice != endpoint_options[0]:
+    filter_steps.append({"type": "crop", "activity": [endpoint_choice]})
+
+preview_df = raw_df
+for _step in filter_steps:
+    _params = _step.copy()
+    _f_type = _params.pop("type")
+    _filtered, _ = filter_event_log(preview_df, filter_type=_f_type, **_params)
+    if _filtered is not None and not _filtered.empty:
+        preview_df = _filtered
 
 post_cases = preview_df["case:concept:name"].nunique() if preview_df is not None and not preview_df.empty else 0
 post_events = len(preview_df) if preview_df is not None else 0
@@ -632,7 +679,7 @@ if summary:
 
 st.divider()
 
-tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_segments = st.tabs(
+tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_sessions, tab_segments = st.tabs(
     [
         "Process Maps",
         "Variants",
@@ -640,6 +687,7 @@ tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_segme
         "Conformance",
         "Funnel",
         "Business Insights",
+        "Session Insights",
         "Segment Comparison",
     ],
     # on_change="rerun" makes the tabs a stateful widget: the active tab is
@@ -1193,13 +1241,59 @@ with tab_biz:
         )
 
 # ---------------------------------------------------------------------------
+# Tab: Session Insights
+# ---------------------------------------------------------------------------
+with tab_sessions:
+    session_insights = results.get("session_insights")
+    if session_insights:
+        sessions_df = session_insights.get("sessions")
+        journeys_df = session_insights.get("journeys")
+
+        st.caption(
+            "Each session is labelled Browsing, Researching, Cart Abandonment, "
+            "or Buying from a priority-ordered rule over its activities "
+            "(purchase evidence beats cart evidence beats research-activity "
+            "count) - not a machine-learning model, so the label for any "
+            "session is always traceable back to what happened in it."
+        )
+
+        label_counts = sessions_df["label"].value_counts()
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            for label, count in label_counts.items():
+                st.metric(label, f"{count:,}")
+        with c2:
+            st.bar_chart(label_counts)
+
+        st.subheader("Per-user session journeys")
+        st.caption(
+            "One row per user, sessions in chronological order - e.g. a user "
+            "whose first session only browsed and second session bought "
+            "shows as 'Browsing -> Buying'. Most useful with Case grouping "
+            "set to 'By user' above, so each row's sessions all belong to "
+            "one case."
+        )
+        if journeys_df is not None and not journeys_df.empty:
+            st.dataframe(journeys_df, width='stretch', hide_index=True)
+        else:
+            st.info("No multi-session user journeys to show.")
+
+        with st.expander("All session labels"):
+            st.dataframe(sessions_df, width='stretch', hide_index=True)
+    else:
+        st.info(
+            "No session insight data. Ensure the log has a session ID and a "
+            "user ID (both required columns already used elsewhere in PRoX)."
+        )
+
+# ---------------------------------------------------------------------------
 # Tab: Segment Comparison
 # ---------------------------------------------------------------------------
 with tab_segments:
     raw_df = st.session_state.get("df")
     saved_config = st.session_state.get("config", {})
 
-    exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id"}
+    exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id", "session_id"}
     segment_candidates = [
         c for c in raw_df.columns
         if c not in exclude_cols and 2 <= raw_df[c].nunique(dropna=True) <= 20

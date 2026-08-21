@@ -12,13 +12,25 @@ def load_and_validate_csv(
     uploaded_file,
     max_file_size_mb: int = 500,
     chunk_threshold_mb: int = 50,
-    chunk_size: int = 50000
+    chunk_size: int = 50000,
+    case_grouping: str = "user"
 ) -> Tuple[pd.DataFrame | None, list, bool]:
     """
     Loads, validates, and cleans an event log CSV into a PM4Py-compatible DataFrame.
 
     Handles file size checks, auto-mapping of column names to XES standards,
-    composite case key creation (user_id + session_id), and timestamp parsing.
+    case key creation, and timestamp parsing.
+
+    A user-scoped `session_id` (user_id + raw session id, so the same session
+    id re-used by two different users doesn't collide) is always created. Which
+    of the two becomes the PM4Py case (`case:concept:name`) is controlled by
+    `case_grouping`:
+      - "user"    (default) - one case per user, spanning all of their sessions.
+                    Needed to see a user's sequence of sessions (e.g. "browsing
+                    session, then a buying session") rather than just one
+                    session in isolation.
+      - "session" - one case per session (the previous default behaviour),
+                    i.e. case:concept:name == session_id.
 
     Returns
     -------
@@ -26,6 +38,8 @@ def load_and_validate_csv(
     messages : list of str
     has_category : bool
     """
+    if case_grouping not in ("user", "session"):
+        case_grouping = "user"
     errors = []
     notes = []
 
@@ -123,8 +137,13 @@ def load_and_validate_csv(
     try:
         df['user_id'] = df['user_id'].astype(str)
         df['case:concept:name'] = df['case:concept:name'].astype(str)
-        df['case:concept:name'] = df['user_id'] + '_' + df['case:concept:name']
-        notes.append("Composite Case ID created (user_id + session_id).")
+        df['session_id'] = df['user_id'] + '_' + df['case:concept:name']
+        if case_grouping == "user":
+            df['case:concept:name'] = df['user_id']
+            notes.append("Case ID set to User (case:concept:name = user_id). Session IDs kept in 'session_id' for session-level insights.")
+        else:
+            df['case:concept:name'] = df['session_id']
+            notes.append("Composite Case ID created (user_id + session_id).")
     except Exception as e:
         errors.append(f"Error creating composite key: {e}")
         return None, errors + notes, False
