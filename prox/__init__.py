@@ -18,6 +18,7 @@ from .data_manager import (
     sample_log_stratified,
     check_trace_length,
     check_data_quality,
+    winsorize_series,
 )
 from .config import CONFIG, create_analysis_config, get_column_mappings
 from .discovery import perform_process_discovery, DISCOVERY_ALGORITHMS
@@ -56,6 +57,7 @@ __all__ = [
     "sample_log_stratified",
     "check_trace_length",
     "check_data_quality",
+    "winsorize_series",
     "CONFIG",
     "create_analysis_config",
     "get_column_mappings",

@@ -10,6 +10,7 @@ from prox.data_manager import (
     optimize_dataframe_memory,
     refine_activity_labels,
     check_data_quality,
+    winsorize_series,
 )
 
 from conftest import make_event_log
@@ -334,3 +335,55 @@ def test_check_data_quality_empty_df_returns_no_issues():
     result = check_data_quality(pd.DataFrame())
     assert result['issues'] == []
     assert result['duplicate_events'] == 0
+
+
+# --- winsorize_series ---
+
+def test_winsorize_series_percentile_caps_a_single_extreme_outlier():
+    series = pd.Series([10.0, 12.0, 11.0, 9.0, 13.0, 10.0, 11.0, 12.0, 9.0, 999999.0])
+    clipped, lower, upper = winsorize_series(series, method='percentile', param=10.0)
+
+    assert clipped.max() == pytest.approx(upper)
+    assert clipped.max() < 999999.0
+    # Every non-outlier value is well inside the band, so only the injected
+    # outlier should actually get capped.
+    assert (series[:-1] == clipped[:-1]).all()
+
+
+def test_winsorize_series_std_caps_at_mean_plus_n_std():
+    series = pd.Series([10.0, 20.0, 30.0, 40.0, 50.0])
+    clipped, lower, upper = winsorize_series(series, method='std', param=1.0)
+
+    mean, std = series.mean(), series.std()
+    assert lower == pytest.approx(mean - std)
+    assert upper == pytest.approx(mean + std)
+    assert clipped.min() >= lower
+    assert clipped.max() <= upper
+
+
+def test_winsorize_series_preserves_nan_positions():
+    series = pd.Series([10.0, None, 30.0, None, 9999.0])
+    clipped, lower, upper = winsorize_series(series, method='percentile', param=10.0)
+
+    assert clipped.isna().tolist() == [False, True, False, True, False]
+
+
+def test_winsorize_series_no_outliers_leaves_values_unchanged():
+    series = pd.Series([10.0, 11.0, 12.0, 13.0, 14.0])
+    clipped, lower, upper = winsorize_series(series, method='std', param=3.0)
+
+    assert (clipped == series).all()
+
+
+def test_winsorize_series_empty_series_returns_zero_bounds():
+    clipped, lower, upper = winsorize_series(pd.Series([], dtype=float))
+    assert clipped.empty
+    assert lower == 0.0
+    assert upper == 0.0
+
+
+def test_winsorize_series_all_nan_returns_zero_bounds():
+    clipped, lower, upper = winsorize_series(pd.Series([None, None], dtype=float))
+    assert clipped.isna().all()
+    assert lower == 0.0
+    assert upper == 0.0
