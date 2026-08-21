@@ -1,7 +1,9 @@
 import io
 import logging
+import math
 import os
 import threading
+import time
 
 import pandas as pd
 import streamlit as st
@@ -163,17 +165,67 @@ def _cached_run_full_analysis(df_ready, config, output_folder="output"):
     CacheReplayClosureError on replay, since that bar no longer exists by the
     time the hit happens; a bar whose whole lifecycle (create, update, empty)
     is recorded from inside replays cleanly - just near-instantly on a hit.
+
+    The pipeline's own progress_callback only fires 6 times (once per major
+    stage - see pipeline.py's _PROGRESS_STAGES), and one of those stages
+    (Conformance, especially State Equation A*) can itself run for a long
+    time with no callback in between - the bar would otherwise sit frozen
+    for stretches at a time. So run_full_analysis executes on a background
+    thread, while *this* (main) thread polls it in a sleep loop and drives
+    the percentage itself from elapsed time - independent of the real
+    callback, which only supplies the stage label text. That percentage is
+    therefore a rough estimate, not a measurement: it climbs smoothly toward
+    a 95% cap (via an asymptotic curve, so it visibly slows down rather than
+    stalling outright on a longer-than-expected run) and only jumps to 100%
+    once the background thread actually finishes. Only the main thread ever
+    calls st.* here - the background thread just computes - since Streamlit
+    element updates aren't safe to make from arbitrary threads.
     """
     progress_bar = st.progress(0, text="Starting analysis...")
 
-    def _update_progress(stage_num, total_stages, stage_label):
-        progress_bar.progress(stage_num / total_stages, text=f"{stage_label} ({stage_num}/{total_stages})")
+    state = {"label": "Starting analysis...", "stage_num": 0, "total_stages": 0}
+    state_lock = threading.Lock()
 
-    results = run_full_analysis(
-        df_ready, config=config, output_folder=output_folder, progress_callback=_update_progress
-    )
+    def _update_progress(stage_num, total_stages, stage_label):
+        with state_lock:
+            state["label"] = stage_label
+            state["stage_num"] = stage_num
+            state["total_stages"] = total_stages
+
+    outcome = {}
+
+    def _run():
+        try:
+            outcome["results"] = run_full_analysis(
+                df_ready, config=config, output_folder=output_folder, progress_callback=_update_progress
+            )
+        except Exception as e:
+            outcome["error"] = e
+
+    # Rough duration estimate to scale the ticking curve by dataset size -
+    # not measured, just enough so a tiny log doesn't crawl and a huge one
+    # doesn't rocket to the 95% cap in the first second.
+    estimated_seconds = max(4.0, min(60.0, len(df_ready) / 3000))
+
+    worker = threading.Thread(target=_run, daemon=True)
+    start = time.monotonic()
+    worker.start()
+    while worker.is_alive():
+        elapsed = time.monotonic() - start
+        pct = min(1 - math.exp(-elapsed / estimated_seconds), 0.95)
+        with state_lock:
+            label, stage_num, total_stages = state["label"], state["stage_num"], state["total_stages"]
+        stage_note = f" ({stage_num}/{total_stages})" if total_stages else ""
+        progress_bar.progress(pct, text=f"{label}{stage_note} - {pct * 100:.0f}%")
+        time.sleep(0.15)
+    worker.join()
+
+    if "error" in outcome:
+        raise outcome["error"]
+
+    progress_bar.progress(1.0, text="Done - 100%")
     progress_bar.empty()
-    return results
+    return outcome.get("results")
 
 # ---------------------------------------------------------------------------
 # Sidebar - configuration
