@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from bigquery_source import render_bigquery_source
+from pdf_builder import render_pdf_builder
 from prox import (
     load_and_validate_csv,
     refine_activity_labels,
@@ -1373,3 +1374,10 @@ with tab_segments:
                 st.info("Comparison produced no results.")
         else:
             st.info("Choose a column and click **Compare Segments**.")
+
+# ---------------------------------------------------------------------------
+# Export: Build a Custom PDF Report
+# ---------------------------------------------------------------------------
+st.divider()
+st.header("5. Build a Custom PDF Report")
+render_pdf_builder(results, segment_result=st.session_state.get("segment_result"))

@@ -11,6 +11,7 @@ setup(
         "seaborn>=0.11.0,<1.0.0",
         "pm4py>=2.7.0,<3.0.0",
         "streamlit>=1.30.0,<2.0.0",
+        "reportlab>=4.0.0,<6.0.0",
     ],
     extras_require={
         # BigQuery live data source (docs/dev_roadmap.md). Pulls in
