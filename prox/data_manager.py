@@ -319,12 +319,16 @@ def refine_activity_labels(
 
     context_values = df.loc[mask, context_column].fillna('unknown').astype(str)
 
-    if not context_values.empty:
-        first_val = str(context_values.iloc[0])
-        if 'http' in first_val or '/' in first_val:
-            context_values = context_values.str.split('?').str[0]
-            context_values = context_values.str.strip('/')
-            context_values = context_values.apply(lambda x: x.split('/')[-1] if '/' in x else x)
+    # URL-cleaning applied per row, not gated on whether the column "looks
+    # like" a URL overall - a single whole-column decision (previously based
+    # on just the first matched row's value) missed URL-like values in any
+    # later row once the first row happened to be plain text, and vice
+    # versa. These steps are no-ops for genuinely plain values (no '?' to
+    # split on, no leading/trailing '/' to strip, no '/' to take the last
+    # segment of), so applying them unconditionally is safe either way.
+    context_values = context_values.str.split('?').str[0]
+    context_values = context_values.str.strip('/')
+    context_values = context_values.apply(lambda x: x.split('/')[-1] if '/' in x else x)
 
     df.loc[mask, 'concept:name'] = target_activity + '_' + context_values.str.upper()
     return df

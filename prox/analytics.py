@@ -10,6 +10,20 @@ from typing import Dict, Any, Tuple, List
 logger = logging.getLogger(__name__)
 
 
+def _contains_any(series: pd.Series, values: list) -> pd.Series:
+    """Case-insensitive substring match against any of `values`.
+
+    An empty `values` list returns an all-False mask - '|'.join([]) would
+    otherwise produce the empty-string pattern '', and str.contains('')
+    matches every row, silently classifying everything as a match instead
+    of nothing.
+    """
+    if not values:
+        return pd.Series(False, index=series.index)
+    pattern = '|'.join(str(v).lower() for v in values)
+    return series.astype(str).str.lower().str.contains(pattern, na=False)
+
+
 def get_event_log_summary(event_log_df: pd.DataFrame) -> Tuple[Dict[str, Any] | None, list]:
     """
     Computes high-level statistics for an event log.
@@ -523,8 +537,7 @@ def analyze_repeat_purchases(
     # GA4-style logs commonly attach event_value/price to browsing events too
     # (view_item, add_to_cart), not just completed transactions, so "revenue > 0
     # somewhere in this case" previously misclassified cart-abandoners as buyers.
-    pattern = '|'.join([p.lower() for p in purchase_values])
-    mask_text = df[real_activity_col].astype(str).str.lower().str.contains(pattern, na=False)
+    mask_text = _contains_any(df[real_activity_col], purchase_values)
 
     mask_col = pd.Series(False, index=df.index)
     for flag_col in [c for c in df.columns if 'purchase' in c.lower() or 'conversion' in c.lower()]:
@@ -543,8 +556,7 @@ def analyze_repeat_purchases(
     # --- Cart detection (activity name or an explicit flag column) ---
     # Computed independently of purchase detection so abandonment can still be
     # reported even when zero purchases exist (100% abandonment).
-    cart_pattern = '|'.join([c.lower() for c in cart_values])
-    mask_cart_text = df[real_activity_col].astype(str).str.lower().str.contains(cart_pattern, na=False)
+    mask_cart_text = _contains_any(df[real_activity_col], cart_values)
 
     mask_cart_col = pd.Series(False, index=df.index)
     for flag_col in [c for c in df.columns if 'cart' in c.lower() or 'basket' in c.lower()]:
@@ -1096,15 +1108,10 @@ def classify_sessions(
         return pd.DataFrame(columns=empty_cols)
 
     df = df.copy()
-    activities_lower = df[real_activity_col].astype(str).str.lower()
 
-    purchase_pattern = '|'.join(p.lower() for p in purchase_values)
-    cart_pattern = '|'.join(c.lower() for c in cart_values)
-    research_pattern = '|'.join(r.lower() for r in research_keywords)
-
-    df['_is_purchase'] = activities_lower.str.contains(purchase_pattern, na=False)
-    df['_is_cart'] = activities_lower.str.contains(cart_pattern, na=False)
-    df['_is_research'] = activities_lower.str.contains(research_pattern, na=False)
+    df['_is_purchase'] = _contains_any(df[real_activity_col], purchase_values)
+    df['_is_cart'] = _contains_any(df[real_activity_col], cart_values)
+    df['_is_research'] = _contains_any(df[real_activity_col], research_keywords)
 
     grouped = df.groupby(real_session_col).agg(
         user_id=(real_user_col, 'first'),

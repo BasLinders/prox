@@ -576,3 +576,20 @@ def test_summarize_user_journeys_empty_input_returns_empty():
     result = summarize_user_journeys(pd.DataFrame())
     assert result.empty
     assert list(result.columns) == ['user_id', 'session_count', 'journey']
+
+
+# --- _contains_any / empty keyword-list guard (regression) ---
+
+def test_analyze_repeat_purchases_empty_purchase_values_matches_nothing(tmp_path):
+    """Regression test: '|'.join([]) produces the empty-string pattern '',
+    and str.contains('') matches every row - purchase_values=[] used to
+    silently classify every case as a purchase instead of none."""
+    df = make_purchase_log()
+    result = analyze_repeat_purchases(df, purchase_values=[], output_folder=str(tmp_path))
+    assert result['metrics']['total_buyers'] == 0
+
+
+def test_classify_sessions_empty_keyword_lists_labels_everything_browsing():
+    df = make_session_intent_log()
+    labels = classify_sessions(df, purchase_values=[], cart_values=[], research_keywords=[])
+    assert set(labels['label']) == {'Browsing'}
