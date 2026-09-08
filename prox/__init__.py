@@ -53,6 +53,7 @@ from .incremental import (
     load_cached_dataset,
     list_cached_datasets,
     clear_cached_dataset,
+    cache_signature,
     DEFAULT_CACHE_DIR,
 )
 
@@ -97,5 +98,6 @@ __all__ = [
     "load_cached_dataset",
     "list_cached_datasets",
     "clear_cached_dataset",
+    "cache_signature",
     "DEFAULT_CACHE_DIR",
 ]

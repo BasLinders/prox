@@ -37,6 +37,7 @@ from prox import (
     merge_incremental,
     list_cached_datasets,
     clear_cached_dataset,
+    cache_signature,
     DEFAULT_CACHE_DIR,
 )
 
@@ -168,20 +169,26 @@ def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, c
 
 
 @st.cache_data(show_spinner=False)
-def _cached_merge_incremental(raw_df, dataset_id, case_grouping, cache_dir, generation):
+def _cached_merge_incremental(active_file_bytes, dataset_id, case_grouping, cache_dir, cache_sig, _raw_df):
     """Thin st.cache_data wrapper around prox.merge_incremental, matching the
     caching convention used by _cached_load_and_prepare/_cached_run_full_analysis
     above/below - so re-running with an unchanged upload doesn't re-read/
     re-write the on-disk cache file on every Streamlit rerun (which reruns
     the whole script on every widget interaction, not just on new uploads).
 
-    `generation` exists purely to bust this memoization: it has no effect on
-    the merge itself, but bumping it in session_state after a "Clear cache"
-    action changes the cache key, forcing a real recompute instead of
-    Streamlit serving a stale pre-clear result for the (unchanged) other args.
+    Hashed on active_file_bytes (identifies "which upload is this", cheap -
+    the same bytes _cached_load_and_prepare is already keyed on) and
+    cache_sig (prox.cache_signature: a stat-only, disk-derived value that
+    changes whenever the on-disk cache actually changes, from this session
+    or any other - including a "Clear cache" action). _raw_df is the
+    leading-underscore convention Streamlit uses to mark a large argument as
+    NOT hashed: it's the actual data the merge needs, but hashing the full
+    (potentially large, ever-growing) accumulated DataFrame on every rerun
+    just to check the cache key would defeat the point of caching this at
+    all. It's safe to leave unhashed here specifically because
+    active_file_bytes already uniquely identifies its content.
     """
-    del generation  # part of the cache key only, not the computation
-    return merge_incremental(raw_df, dataset_id, case_grouping, cache_dir=cache_dir)
+    return merge_incremental(_raw_df, dataset_id, case_grouping, cache_dir=cache_dir)
 
 
 @st.cache_resource(show_spinner=False)
@@ -605,14 +612,12 @@ st.caption(
     "events are added; events already seen (same case, activity, and "
     "timestamp) are skipped."
 )
-st.session_state.setdefault("incremental_cache_generation", 0)
-
 incremental_enabled = st.checkbox(
     "Merge with cached data for a recurring dataset", value=False,
     key="incremental_enabled",
 )
 if incremental_enabled:
-    known_datasets = list_cached_datasets()
+    known_datasets = list_cached_datasets(cache_dir=DEFAULT_CACHE_DIR)
     if known_datasets:
         with st.expander(f"{len(known_datasets)} cached dataset(s)"):
             for m in known_datasets:
@@ -636,16 +641,21 @@ if incremental_enabled:
 
     if dataset_id.strip():
         raw_df, incremental_stats, incremental_messages = _cached_merge_incremental(
-            raw_df, dataset_id.strip(), case_grouping, DEFAULT_CACHE_DIR,
-            st.session_state["incremental_cache_generation"],
+            active_file_bytes, dataset_id.strip(), case_grouping, DEFAULT_CACHE_DIR,
+            cache_signature(dataset_id.strip(), cache_dir=DEFAULT_CACHE_DIR),
+            raw_df,
         )
         for msg in incremental_messages:
             st.info(msg)
-        df_ready = _prepare_df_ready(raw_df)
+        # Only redo label refinement/memory optimization if the merge actually
+        # changed the data - _cached_load_and_prepare already computed df_ready
+        # for this exact upload, and that's still correct when nothing merged in
+        # (a fresh seed, or a case-grouping mismatch that skipped the merge).
+        if incremental_stats.get("merged"):
+            df_ready = _prepare_df_ready(raw_df)
 
         if st.button("Clear cache for this Dataset ID"):
             clear_cached_dataset(dataset_id.strip(), cache_dir=DEFAULT_CACHE_DIR)
-            st.session_state["incremental_cache_generation"] += 1
             st.rerun()
     else:
         st.caption("Enter a Dataset ID above to merge with (or start) its cache.")
