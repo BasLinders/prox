@@ -7,6 +7,7 @@ run_full_analysis       Full pipeline: filter → discover → conform → analy
 load_and_validate_csv   CSV ingestion with auto column mapping
 create_analysis_config  Build a config dict for run_full_analysis
 CONFIG                  Default configuration
+merge_incremental       Merge a freshly-loaded log with a cached recurring dataset
 """
 
 from .pipeline import run_full_analysis
@@ -47,6 +48,13 @@ from .report import (
 )
 from .segments import compare_segments
 from .mock_data import generate_mock_event_log, generate_mock_csv_bytes
+from .incremental import (
+    merge_incremental,
+    load_cached_dataset,
+    list_cached_datasets,
+    clear_cached_dataset,
+    DEFAULT_CACHE_DIR,
+)
 
 __all__ = [
     "run_full_analysis",
@@ -85,4 +93,9 @@ __all__ = [
     "compare_segments",
     "generate_mock_event_log",
     "generate_mock_csv_bytes",
+    "merge_incremental",
+    "load_cached_dataset",
+    "list_cached_datasets",
+    "clear_cached_dataset",
+    "DEFAULT_CACHE_DIR",
 ]

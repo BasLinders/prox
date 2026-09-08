@@ -11,8 +11,8 @@ current even when the detail lives elsewhere — this is the one page meant
 to answer "where does PRoX development actually stand?" without opening
 five files.
 
-Last assessed 2026-08-21, against `main` @ `52b8275` — 140 tests passing,
-`pyflakes` clean.
+Last assessed 2026-09-08, against `main` — 160 tests passing, `pyflakes`
+clean.
 
 ---
 
@@ -28,7 +28,7 @@ Last assessed 2026-08-21, against `main` @ `52b8275` — 140 tests passing,
 | Phase 5 — BigQuery live data source (via `foe.data`) | Complete | below |
 | Phase 6 — Session insight, reporting & data controls | Complete | below |
 | Phase 6b — Full-pipeline correctness pass | Complete | below |
-| Incremental analysis | Flagged, not scoped | `dev_phase2.md` |
+| Phase 7 — Incremental analysis (data-level caching) | Complete | below |
 | ML layer (conversion propensity + drivers) | Roadmapped | `ML_roadmap.md` |
 | AI-assisted recommendations (optional, Gemini) | Roadmapped | `AI_summary_roadmap.md` |
 | Process mining capability gaps (5 items, by effort) | Roadmapped, not scoped | below |
@@ -368,6 +368,50 @@ reproduction before fixing, with a regression test added per fix:
   query strings/slashes into activity names for every row that didn't
   match the first row's style. Cleaning is now applied per row.
 
+### Phase 7 — Incremental analysis (data-level caching)
+
+**Shipped 2026-09-08** (`prox/incremental.py`, wired into `main.py`'s new
+"2. Incremental Analysis" step).
+
+**Scope, deliberately narrower than the name suggests**: this is incremental
+*data ingestion*, not incremental *algorithmic* discovery/conformance. pm4py
+has no "add one more trace" incremental mode for either, so
+`run_full_analysis()` still runs a full batch pass every time - what this
+avoids is the load/clean/merge round trip on data already seen before, and
+it lets a user upload only the *new* rows of a recurring export (e.g. "this
+week's GA4 CSV") instead of re-exporting and re-uploading the full history
+each time.
+
+**How it works**: an opt-in "Merge with cached data for a recurring dataset"
+checkbox, keyed on a user-chosen **Dataset ID** (not the uploaded filename,
+which usually changes every export - e.g. a trailing date). On merge, the
+freshly-loaded upload is anti-joined against the cached copy on
+`(case:concept:name, concept:name, time:timestamp)` - the same triple
+`check_data_quality()` already uses to flag exact duplicates - so only
+genuinely new events are added; the merged result is written back as the
+new cache (write-through) and fed into the rest of the page exactly as if a
+bigger file had been uploaded directly. A "Clear cache for this Dataset ID"
+button resets it. Cache lives on disk under `.prox_cache/` (gitignored) as
+one gzipped CSV + a small JSON manifest per Dataset ID - no new dependency
+(no pyarrow/fastparquet), consistent with the "no compiled dependency, runs
+on a standard laptop" stance in the README.
+
+**Guardrail**: a cache built under one case-grouping setting (`user` vs.
+`session`) refuses to merge with a run using the other - case identities
+aren't comparable across the two, so mixing them would silently corrupt
+case boundaries. The merge is skipped with a warning instead; the upload
+still runs (unmerged), it just doesn't get cached under that mismatched
+identity.
+
+**Deliberately out of scope, revisit only if the ML layer's own design
+changes**: the ML/Predictive Insights tab (`ML_roadmap.md`) is not wired
+into this cache. That feature's v1 design retrains synchronously on
+whatever log is currently loaded, with no model persistence/versioning -
+mixing it with this cache would mean solving label churn (a case "in
+progress" at cache time can resolve to a labelled outcome once new data
+arrives) and model versioning, neither of which this module attempts. See
+`prox/incremental.py`'s module docstring for the full reasoning.
+
 ---
 
 ## In progress
@@ -377,17 +421,6 @@ Nothing currently in progress.
 ---
 
 ## Roadmapped (not yet scheduled)
-
-### Incremental analysis (flagged, not scoped)
-
-Deferred from Phase 4: an incremental/cached analysis mode for recurring
-large logs, so re-running PRoX on a growing dataset doesn't reprocess
-everything from scratch each time. Flagged rather than scoped because
-there's no concrete pain signal yet — no evidence of repeat-large-log usage
-in this project so far — and it's the most architecturally invasive item
-under discussion (would touch caching, log diffing, and pipeline
-re-entry points that don't exist today). Revisit once a real use case
-actually hits this. Full detail in `dev_phase2.md`.
 
 ### Machine learning layer
 
@@ -516,8 +549,7 @@ sequenced yet.
 
 #### Longer-term (bigger, already flagged elsewhere in these docs)
 
-- **Incremental analysis** for recurring large logs (above). Still
-  explicitly "no pain signal yet" — worth doing once someone is actually
-  re-running PRoX on a growing dataset regularly, not before.
+- ~~Incremental analysis~~ — shipped as Phase 7 (above), at the data-level
+  scope described there (not incremental discovery/conformance).
 - ~~BigQuery live data source~~ — shipped as Phase 5 (above).
 

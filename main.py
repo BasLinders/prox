@@ -34,6 +34,10 @@ from prox import (
     render_petri_net,
     DISCOVERY_ALGORITHMS,
     CONFORMANCE_METHODS,
+    merge_incremental,
+    list_cached_datasets,
+    clear_cached_dataset,
+    DEFAULT_CACHE_DIR,
 )
 
 # Pre-selected as a starting point in the event-filter UI - GA4-style noise
@@ -125,6 +129,24 @@ if st.session_state.get("shutdown_requested"):
     st.stop()
 
 
+def _prepare_df_ready(df: pd.DataFrame) -> pd.DataFrame:
+    """Derives the analysis-ready frame from an already-loaded/validated raw
+    log: category-dtype roundtrip, page_view label refinement, then memory
+    optimization. Shared by _cached_load_and_prepare (fresh upload) and the
+    incremental-merge step below (merged-with-cache upload), so both paths
+    produce df_ready the same way.
+    """
+    df_ready = df.copy()
+    for col in df_ready.select_dtypes(include=["category"]).columns:
+        df_ready[col] = df_ready[col].astype("object")
+
+    if "page_type" in df_ready.columns:
+        df_ready = refine_activity_labels(df_ready, target_activity="page_view", context_column="page_type")
+
+    optimize_dataframe_memory(df_ready)
+    return df_ready
+
+
 @st.cache_data(show_spinner=False)
 def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, chunk_size, case_grouping):
     """Loads + validates the CSV and applies label refinement/memory optimization.
@@ -141,16 +163,25 @@ def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, c
     if df is None:
         return None, None, messages, has_category
 
-    df_ready = df.copy()
-    for col in df_ready.select_dtypes(include=["category"]).columns:
-        df_ready[col] = df_ready[col].astype("object")
-
-    if "page_type" in df_ready.columns:
-        df_ready = refine_activity_labels(df_ready, target_activity="page_view", context_column="page_type")
-
-    optimize_dataframe_memory(df_ready)
-
+    df_ready = _prepare_df_ready(df)
     return df, df_ready, messages, has_category
+
+
+@st.cache_data(show_spinner=False)
+def _cached_merge_incremental(raw_df, dataset_id, case_grouping, cache_dir, generation):
+    """Thin st.cache_data wrapper around prox.merge_incremental, matching the
+    caching convention used by _cached_load_and_prepare/_cached_run_full_analysis
+    above/below - so re-running with an unchanged upload doesn't re-read/
+    re-write the on-disk cache file on every Streamlit rerun (which reruns
+    the whole script on every widget interaction, not just on new uploads).
+
+    `generation` exists purely to bust this memoization: it has no effect on
+    the merge itself, but bumping it in session_state after a "Clear cache"
+    action changes the cache key, forcing a real recompute instead of
+    Streamlit serving a stale pre-clear result for the (unchanged) other args.
+    """
+    del generation  # part of the cache key only, not the computation
+    return merge_incremental(raw_df, dataset_id, case_grouping, cache_dir=cache_dir)
 
 
 @st.cache_resource(show_spinner=False)
@@ -553,6 +584,73 @@ if raw_df is None:
     st.stop()
 
 # ---------------------------------------------------------------------------
+# Incremental analysis - opt-in, applied right after a fresh upload is
+# loaded/validated but before anything downstream (outlier handling,
+# filtering, sampling) touches it, so a merge-with-cache changes what the
+# rest of the page sees exactly as if a bigger file had been uploaded
+# directly. See docs/dev_roadmap.md's "Incremental analysis" entry and
+# prox/incremental.py's module docstring for scope - this merges *data*
+# across runs so a recurring export doesn't need re-uploading in full each
+# time; it does not make discovery/conformance themselves incremental, and
+# it deliberately doesn't touch the ML/Predictive Insights tab (not built
+# yet - see prox/incremental.py's docstring for why that's kept out of this
+# cache's boundary).
+# ---------------------------------------------------------------------------
+st.divider()
+st.header("2. Incremental Analysis")
+st.caption(
+    "Optional: merge this upload with previously cached data for the same "
+    "recurring export (e.g. this week's GA4 CSV joining last week's), "
+    "instead of needing the full history re-uploaded every time. New "
+    "events are added; events already seen (same case, activity, and "
+    "timestamp) are skipped."
+)
+st.session_state.setdefault("incremental_cache_generation", 0)
+
+incremental_enabled = st.checkbox(
+    "Merge with cached data for a recurring dataset", value=False,
+    key="incremental_enabled",
+)
+if incremental_enabled:
+    known_datasets = list_cached_datasets()
+    if known_datasets:
+        with st.expander(f"{len(known_datasets)} cached dataset(s)"):
+            for m in known_datasets:
+                st.caption(
+                    f"**{m.get('dataset_id')}** - {m.get('n_events', 0):,} events, "
+                    f"{m.get('n_cases', 0):,} cases, grouping={m.get('case_grouping')}, "
+                    f"last updated {m.get('last_updated', '?')}"
+                )
+
+    dataset_id = st.text_input(
+        "Dataset ID",
+        value=st.session_state.get("incremental_dataset_id", ""),
+        help=(
+            "A stable label for this recurring export - not the filename, "
+            "which usually changes every time (e.g. a trailing date). "
+            "Reused across sessions to find the right cache, e.g. "
+            "'GA4 checkout funnel'."
+        ),
+    )
+    st.session_state["incremental_dataset_id"] = dataset_id
+
+    if dataset_id.strip():
+        raw_df, incremental_stats, incremental_messages = _cached_merge_incremental(
+            raw_df, dataset_id.strip(), case_grouping, DEFAULT_CACHE_DIR,
+            st.session_state["incremental_cache_generation"],
+        )
+        for msg in incremental_messages:
+            st.info(msg)
+        df_ready = _prepare_df_ready(raw_df)
+
+        if st.button("Clear cache for this Dataset ID"):
+            clear_cached_dataset(dataset_id.strip(), cache_dir=DEFAULT_CACHE_DIR)
+            st.session_state["incremental_cache_generation"] += 1
+            st.rerun()
+    else:
+        st.caption("Enter a Dataset ID above to merge with (or start) its cache.")
+
+# ---------------------------------------------------------------------------
 # Winsorize revenue/price outliers - opt-in, applied right after the data is
 # cached (both raw_df and df_ready) and before anything downstream reads
 # 'price' (business insights' AOV/revenue trend/category breakdown, sampling
@@ -560,7 +658,7 @@ if raw_df is None:
 # Caps values rather than dropping rows - see prox.winsorize_series.
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("2. Handle Outliers")
+st.header("3. Handle Outliers")
 if "price" not in raw_df.columns:
     st.caption("No revenue/price column detected - nothing to winsorize.")
 else:
@@ -614,7 +712,7 @@ else:
 # caught here instead of showing up as a confusing downstream result
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("3. Data Quality Check")
+st.header("4. Data Quality Check")
 data_quality = check_data_quality(raw_df)
 if data_quality["issues"]:
     with st.expander(f"{len(data_quality['issues'])} data quality issue(s) found", expanded=True):
@@ -627,7 +725,7 @@ else:
 # Filter events before analysis
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("4. Filter Events")
+st.header("5. Filter Events")
 st.caption(
     "Remove noisy or irrelevant events before analysis, or narrow it down to "
     "just the events you care about. Optional - leave the list empty to "
@@ -704,7 +802,7 @@ st.caption(
 # Sampling - opt-in, with a warning above a "large" case-count threshold
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("5. Sampling")
+st.header("6. Sampling")
 enable_sampling = st.checkbox(
     "Enable Sampling", value=False,
     help=(
@@ -1540,5 +1638,5 @@ with tab_segments:
 # Export: Build a Custom PDF Report
 # ---------------------------------------------------------------------------
 st.divider()
-st.header("6. Build a Custom PDF Report")
+st.header("7. Build a Custom PDF Report")
 render_pdf_builder(results, segment_result=st.session_state.get("segment_result"))

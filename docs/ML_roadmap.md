@@ -92,7 +92,13 @@ haven't reached an outcome yet.
 - **Out of scope for v1**: real-time/streaming scoring, deep learning
   models, automatic hyperparameter tuning (use sensible defaults),
   multi-class outcomes (v1 is binary success/failure only), saving or
-  exporting trained models.
+  exporting trained models. Also out of scope: wiring into
+  `prox/incremental.py`'s cache (`dev_roadmap.md`'s Phase 7) - that cache
+  merges *data* across runs, but this feature's v1 retrains synchronously
+  on whatever log is currently loaded with no model persistence/versioning,
+  and mixing the two would mean solving label churn (a case "in progress"
+  at cache time can resolve to a labelled outcome once new data arrives) -
+  deliberately deferred, not attempted here.
 
 ### Open questions to resolve before implementation
 

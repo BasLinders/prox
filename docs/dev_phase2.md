@@ -108,6 +108,10 @@ Went through vectorization, clustering, batching, multiprocessing, and CUDA agai
 
 **Proposed scope**: (1) expose `cores` as a UI control, since the wiring already exists — **done**; (2) profile the pipeline against a realistically-large synthetic log to find actual bottlenecks empirically rather than guessing further — **done, see `dev_optimization.md`**; (3) check whether precision calculation would benefit from the same variant-dedup trick alignments already use — **resolved by (2)'s profiling data: deprioritized, precision/token-replay conformance is not the bottleneck at scale (discovery and visualisation are).**
 
-## Phase 5 — Incremental analysis (flagged, not scoped)
+## Incremental analysis — shipped as Phase 7
 
-Deferred from Phase 4: an incremental/cached analysis mode for recurring large logs, so re-running PRoX on a growing dataset doesn't reprocess everything from scratch each time. Flagged rather than scoped because there's no concrete pain signal yet — no evidence of repeat-large-log usage in this project so far — and it's the most architecturally invasive item under discussion (would touch caching, log diffing, and pipeline re-entry points that don't exist today). Revisit once a real use case actually hits this.
+(This section was numbered "Phase 5" before `dev_roadmap.md`'s own Phase 5
+went to the BigQuery data source instead — renumbered here to avoid two
+different "Phase 5"s across the docs.) Shipped 2026-09-08 as data-level
+caching only, not incremental discovery/conformance — full detail in
+`dev_roadmap.md`'s Phase 7 entry and `prox/incremental.py`'s docstring.
