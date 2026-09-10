@@ -20,8 +20,8 @@ It is best practice to run this tool in a clean environment to avoid conflicts.
 
 **Windows:**
 ```bash
-python -m venv venv
-venv\Scripts\activate
+python -m venv .venv-prox
+source .venv-prox\Scripts\activate
 ```
 
 **Mac / Linux:**
