@@ -121,19 +121,25 @@ def render_bigquery_source() -> Optional[bytes]:
         )
         return None
 
+    # Read before from_credentials(): OAuth user credentials (unlike a
+    # service-account key) carry no project id of their own, so without an
+    # explicit project the bigquery.Client() constructor falls back to
+    # Application Default Credentials discovery (google.auth.default()) --
+    # which fails for anyone who hasn't run `gcloud auth application-default
+    # login`, and shouldn't be needed at all here.
+    default_project = secrets.get("project", "")
+    default_dataset = secrets.get("dataset", "")
+    default_location = secrets.get("location") or None
+
     credentials = DataEngine.credentials_from_dict(creds_dict)
     credentials = DataEngine.refresh_if_expired(credentials)
     st.session_state["bq_credentials"] = DataEngine.credentials_to_dict(credentials)
-    engine = DataEngine.from_credentials(credentials)
+    engine = DataEngine.from_credentials(credentials, project=default_project or None)
 
     if st.button("Sign out of Google"):
         for key in _SESSION_KEYS:
             st.session_state.pop(key, None)
         st.rerun()
-
-    default_project = secrets.get("project", "")
-    default_dataset = secrets.get("dataset", "")
-    default_location = secrets.get("location") or None
 
     try:
         projects = engine.list_projects()
