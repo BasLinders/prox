@@ -23,10 +23,20 @@ than a crash when missing, since most PRoX users run CSV-only.
 from __future__ import annotations
 
 import datetime as dt
+import os
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
+
+# Google's OAuth server returns the union of newly-requested scopes and
+# whatever was previously granted to this client+account (e.g. "drive.file"
+# tags along if it's configured on the consent screen from earlier testing).
+# oauthlib treats any such mismatch as fatal by default; relax that so a
+# wider-than-requested scope set doesn't fail exchange_code(). Must be set
+# before DataEngine.exchange_code() runs, not just before foe is imported --
+# oauthlib reads this env var at call time.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 try:
     from foe.data import DataEngine
