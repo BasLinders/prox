@@ -16,7 +16,7 @@ Before you begin, ensure you have the following installed:
 ## Installation
 
 ### 1. Set up a Virtual Environment (Recommended)
-It is best practice to run this tool in a clean environment to avoid conflicts.
+It is best practice to run this tool in a clean environment to avoid conflicts. You can give the virtual environment any name.
 
 **Windows:**
 ```bash
@@ -26,11 +26,33 @@ source .venv-prox\Scripts\activate
 
 **Mac / Linux:**
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv-prox
+source .venv-prox/bin/activate
 ```
 
-### 2. Install Python Dependencies
+**Deactivating the virtual environment**
+```bash
+deactivate
+```
+
+### 2. Clone the repository to your disk
+There's no install package for ProX yet. Both installation and updates have to be done manually for the time being. By default, the command below installs the program into C://prox. If you want to install it into a specific directory, navigate to it first in your Bash window.
+
+**Install ProX**
+```bash
+git clone "https://www.github.com/BasLinders/prox.git"
+```
+
+### 3. Installing updates
+Updates can be pulled down from the repository in a Bash window. Navigate to the ProX directory first, then execute the command below.
+
+**Pulling updates down**
+```bash
+git pull
+```
+
+
+### 4. Install Python Dependencies
 
 Install all required libraries (pandas, numpy, matplotlib, seaborn, pm4py, streamlit):
 
