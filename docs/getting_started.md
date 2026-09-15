@@ -40,7 +40,7 @@ There's no install package for ProX yet. Both installation and updates have to b
 
 **Install ProX**
 ```bash
-git clone "https://www.github.com/BasLinders/prox.git"
+git clone "https://github.com/BasLinders/prox.git"
 ```
 
 ### 3. Installing updates
