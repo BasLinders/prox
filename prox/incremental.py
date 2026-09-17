@@ -278,9 +278,13 @@ def merge_incremental(
         return new_df, _build_stats(cached_df, new_df, new_df, merged=False), messages
 
     # Anti-join: keep only incoming rows whose dedup key isn't already cached.
-    marker = cached_df[_DEDUP_KEY].drop_duplicates().assign(_cached=True)
-    tagged = new_df.merge(marker, on=_DEDUP_KEY, how="left")
-    genuinely_new = new_df[tagged["_cached"].isna().to_numpy()]
+    # A MultiIndex.isin() check, rather than a left merge, avoids materializing
+    # a full extra copy of new_df (every column, not just the dedup key) purely
+    # to compute a duplicate mask - on a large recurring log, with cached_df
+    # already resident in memory, that extra copy was enough to exhaust RAM.
+    cached_keys = pd.MultiIndex.from_frame(cached_df[_DEDUP_KEY].drop_duplicates())
+    new_keys = pd.MultiIndex.from_frame(new_df[_DEDUP_KEY])
+    genuinely_new = new_df[~new_keys.isin(cached_keys)]
 
     n_duplicate = len(new_df) - len(genuinely_new)
     merged_df = (
