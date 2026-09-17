@@ -5,7 +5,7 @@ seaborn>=0.11.0,<1.0.0
 pm4py>=2.7.0,<3.0.0
 streamlit>=1.61.0,<2.0.0
 reportlab>=4.0.0,<6.0.0
-db-dtypes=1.7.1
+db-dtypes==1.7.1
 
 # Optional: BigQuery live data source (docs/dev_roadmap.md). Not installed
 # by default - most users run PRoX CSV-only. Requires Python >=3.10 and
