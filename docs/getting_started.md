@@ -89,6 +89,13 @@ Your CSV must contain at least these three columns (names are auto-detected, see
 
 Optional columns (`price`/`revenue`, `purchase`/`transaction`, `add_to_cart`, `page_type`, `category`) unlock additional analytics — see `README.md` for the full table.
 
+### Keeping the App Running During Long Analyses
+
+PRoX runs as a local process, not a background service — if your machine goes to sleep, Windows/macOS suspends every process, including Streamlit, and the browser tab loses its connection. This is separate from screen lock/dimming, which doesn't affect background processes; it's full system sleep that does. Worth preventing this during a long BigQuery pull or a large event log merge:
+
+* **Windows:** Install [PowerToys](https://learn.microsoft.com/en-us/windows/powertoys/) and enable the **Awake** module — set it to keep the machine awake indefinitely while PRoX is working (the screen can still turn off; only actual sleep kills the process). Without extra tools, go to Settings → System → Power & sleep and set "Sleep" to "Never" for the duration, or run `powercfg /change standby-timeout-ac 0` from a terminal (revert afterward, e.g. `powercfg /change standby-timeout-ac 30`).
+* **Mac:** Prefix the run command with `caffeinate -i`, e.g. `caffeinate -i streamlit run main.py`. This keeps the Mac awake only for as long as that process runs, then lets it sleep normally again once you quit it.
+
 ---
 
 ## Configuration
@@ -131,5 +138,6 @@ Tune performance and depth via `create_analysis_config()` or by editing `CONFIG`
 | --- | --- | --- |
 | **ExecutableNotFound:** failed to execute `dot` | GraphViz is missing or not in PATH. | Install GraphViz and add the `/bin` folder to your System PATH. |
 | **System Freeze / Memory Error** | Dataset is too large for RAM. | Reduce `sample_size` / `total_sample_size`, or lower the sidebar sample size. |
+| **Browser shows "Connection lost"** | Machine went to sleep, suspending the PRoX process. | See [Keeping the App Running During Long Analyses](#keeping-the-app-running-during-long-analyses) above. |
 | **"Failed to load data"** | Required columns (Case ID, Activity, Timestamp) not found. | Check your CSV headers against `COLUMN_MAPPINGS` in `prox/config.py`, or rename them. |
 | **No process map images shown** | GraphViz not installed/on PATH. | See above. |
