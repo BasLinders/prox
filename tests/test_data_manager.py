@@ -67,14 +67,6 @@ def test_load_and_validate_csv_missing_required_column():
     assert any('user_id' in m for m in messages)
 
 
-def test_load_and_validate_csv_rejects_oversized_file():
-    df, messages, has_category = load_and_validate_csv(
-        make_csv_bytes(make_raw_log_df()), max_file_size_mb=0
-    )
-    assert df is None
-    assert any('too large' in m.lower() for m in messages)
-
-
 def test_load_and_validate_csv_does_not_rename_resource_column_to_user_id():
     """Regression test: COLUMN_MAPPINGS used to alias 'resource'/'org:resource'
     (the XES standard name for who performed a step) into 'user_id' (whose

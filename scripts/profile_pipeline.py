@@ -129,7 +129,7 @@ def profile_size(n_events: int, output_folder: str) -> Timer:
     config = create_analysis_config(sample_size=250, enable_sampling=True)
 
     with timer.stage("1. CSV load + validate"):
-        df, messages, _ = load_and_validate_csv(csv_bytes, max_file_size_mb=500, chunk_threshold_mb=50)
+        df, messages, _ = load_and_validate_csv(csv_bytes, chunk_threshold_mb=50)
     if df is None:
         print("  Load failed:", messages)
         return timer

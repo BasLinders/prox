@@ -149,14 +149,13 @@ def _prepare_df_ready(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def _cached_load_and_prepare(file_bytes, max_file_size_mb, chunk_threshold_mb, chunk_size, case_grouping):
+def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_grouping):
     """Loads + validates the CSV and applies label refinement/memory optimization.
     Cached on file content and loader params so re-running with the same
     upload (e.g. only sidebar options changed) skips CSV parsing entirely.
     """
     df, messages, has_category = load_and_validate_csv(
         io.BytesIO(file_bytes),
-        max_file_size_mb=max_file_size_mb,
         chunk_threshold_mb=chunk_threshold_mb,
         chunk_size=chunk_size,
         case_grouping=case_grouping,
@@ -573,7 +572,6 @@ loader_defaults = create_analysis_config()["data_loading"]
 with st.spinner("Loading and validating data..."):
     raw_df, df_ready, load_messages, has_category = _cached_load_and_prepare(
         active_file_bytes,
-        loader_defaults["max_file_size_mb"],
         loader_defaults["chunk_threshold_mb"],
         loader_defaults["chunk_size"],
         case_grouping,

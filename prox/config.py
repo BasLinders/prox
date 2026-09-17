@@ -35,7 +35,6 @@ CONFIG = {
     "active_case_id": "session_unique_id",
 
     "data_loading": {
-        "max_file_size_mb": 500,
         "chunk_threshold_mb": 50,
         "chunk_size": 50000,
     },
@@ -132,7 +131,6 @@ def create_analysis_config(
     bottleneck_top_k: int = 50,
     max_bottleneck_edges: int = 2,
     business_params: dict = None,
-    max_file_size_mb: int = 500,
     chunk_threshold_mb: int = 50,
     chunk_size: int = 50000,
 ) -> Dict[str, Any]:
@@ -141,7 +139,6 @@ def create_analysis_config(
         "active_case_id": active_case_id,
 
         "data_loading": {
-            "max_file_size_mb": max_file_size_mb,
             "chunk_threshold_mb": chunk_threshold_mb,
             "chunk_size": chunk_size,
         },

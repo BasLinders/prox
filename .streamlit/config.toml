@@ -1,0 +1,4 @@
+[server]
+# Streamlit's default upload cap (200 MB) is too small for real event logs.
+# Raised well beyond any realistic export size for local use.
+maxUploadSize = 20000
