@@ -20,6 +20,10 @@ setup(
         "bigquery": [
             "foe[bigquery] @ git+https://github.com/BasLinders/first-order-engine.git",
         ],
+        # Predictive Insights / conversion propensity model (docs/ML_roadmap.md).
+        "ml": [
+            "scikit-learn>=1.3.0,<2.0.0",
+        ],
     },
     python_requires=">=3.9",
 )
