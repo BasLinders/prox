@@ -18,8 +18,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
-          pip install pytest pyflakes
+          pip install -r requirements-dev.txt
 
       - name: Lint (pyflakes)
         run: python -m pyflakes prox utility main.py

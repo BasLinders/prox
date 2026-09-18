@@ -29,7 +29,7 @@ clean.
 | Phase 6 — Session insight, reporting & data controls | Complete | below |
 | Phase 6b — Full-pipeline correctness pass | Complete | below |
 | Phase 7 — Incremental analysis (data-level caching) | Complete | below |
-| ML layer (conversion propensity + drivers) | Roadmapped | `ML_roadmap.md` |
+| ML layer (conversion propensity + drivers) | Engine shipped, UI roadmapped | `ML_roadmap.md` |
 | AI-assisted recommendations (optional, Gemini) | Roadmapped | `AI_summary_roadmap.md` |
 | Process mining capability gaps (5 items, by effort) | Roadmapped, not scoped | below |
 | Product development suggestions | Roadmapped | below |
@@ -411,6 +411,30 @@ mixing it with this cache would mean solving label churn (a case "in
 progress" at cache time can resolve to a labelled outcome once new data
 arrives) and model versioning, neither of which this module attempts. See
 `prox/incremental.py`'s module docstring for the full reasoning.
+
+### ML layer — engine slice
+
+**Shipped 2026-09-18** (`prox/predictive.py`, `tests/test_predictive.py`) -
+the engine half of the "conversion propensity + driver analysis" idea
+scoped in `ML_roadmap.md`: `train_propensity_model()`,
+`analyze_propensity_drivers()`, `summarize_propensity_scores()`, and the
+completed/in-progress case split (`split_completed_in_progress()`) it all
+sits on. No `main.py`/UI changes - that's a deliberately separate follow-up.
+Optional dependency (`pip install prox[ml]`, scikit-learn), same pattern as
+the BigQuery extra above.
+
+Deviates from `ML_roadmap.md`'s original framing in three ways, decided
+during implementation: plain logistic regression instead of
+HistGradientBoostingClassifier (explainability, and the driver analysis is
+model-agnostic permutation importance either way); stratified k-fold CV
+instead of a single train/test split (more honest given case counts will
+often sit close to the minimum-data guard); and no public per-case scoring
+output at all (not even a "highest risk sessions" table) - PRoX runs on a
+manually exported, reviewed-later log, so a named in-progress case would
+very likely have already resolved by the time a stakeholder reads it,
+risking a stale-looking prediction casting doubt on the feature's other,
+aggregate numbers. `ML_roadmap.md`'s open questions are resolved inline
+there.
 
 ---
 

@@ -8,6 +8,8 @@ load_and_validate_csv   CSV ingestion with auto column mapping
 create_analysis_config  Build a config dict for run_full_analysis
 CONFIG                  Default configuration
 merge_incremental       Merge a freshly-loaded log with a cached recurring dataset
+train_propensity_model  Train a conversion-propensity classifier (optional
+                         extra: pip install prox[ml])
 """
 
 from .pipeline import run_full_analysis
@@ -56,6 +58,12 @@ from .incremental import (
     cache_signature,
     DEFAULT_CACHE_DIR,
 )
+from .predictive import (
+    split_completed_in_progress,
+    train_propensity_model,
+    analyze_propensity_drivers,
+    summarize_propensity_scores,
+)
 
 __all__ = [
     "run_full_analysis",
@@ -100,4 +108,8 @@ __all__ = [
     "clear_cached_dataset",
     "cache_signature",
     "DEFAULT_CACHE_DIR",
+    "split_completed_in_progress",
+    "train_propensity_model",
+    "analyze_propensity_drivers",
+    "summarize_propensity_scores",
 ]
