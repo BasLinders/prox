@@ -167,13 +167,21 @@ def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_gr
     return df, df_ready, messages, has_category
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_resource(show_spinner=False)
 def _cached_merge_incremental(active_file_bytes, dataset_id, case_grouping, cache_dir, cache_sig, _raw_df):
-    """Thin st.cache_data wrapper around prox.merge_incremental, matching the
+    """Thin st.cache_resource wrapper around prox.merge_incremental, matching the
     caching convention used by _cached_load_and_prepare/_cached_run_full_analysis
     above/below - so re-running with an unchanged upload doesn't re-read/
     re-write the on-disk cache file on every Streamlit rerun (which reruns
     the whole script on every widget interaction, not just on new uploads).
+
+    Uses cache_resource rather than cache_data: the merged frame can be tens
+    of millions of rows, and cache_data pickles its return value (to hand out
+    defensive copies), which briefly doubles memory and can raise MemoryError
+    at this size. cache_resource stores the object by reference instead - safe
+    here because nothing downstream mutates raw_df in place without copying
+    first (see the winsorize step, which does raw_df = raw_df.copy() before
+    any column assignment).
 
     Hashed on active_file_bytes (identifies "which upload is this", cheap -
     the same bytes _cached_load_and_prepare is already keyed on) and
