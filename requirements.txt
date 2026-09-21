@@ -13,3 +13,9 @@ google-cloud-bigquery-storage
 # pulls in first-order-engine's core deps (incl. Prophet, which may need a
 # compiled Stan backend). Install with:
 #   pip install "foe[bigquery] @ git+https://github.com/BasLinders/first-order-engine.git"
+
+# Optional: Predictive Insights / conversion propensity model
+# (docs/ML_roadmap.md). Not installed by default - most users run PRoX
+# without the ML layer. Adds scikit-learn (pure Python + numpy/scipy, no
+# GPU/compiled deps). Install with:
+#   pip install prox[ml]

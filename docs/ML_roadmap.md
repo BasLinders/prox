@@ -100,21 +100,41 @@ haven't reached an outcome yet.
   at cache time can resolve to a labelled outcome once new data arrives) -
   deliberately deferred, not attempted here.
 
-### Open questions to resolve before implementation
+### Open questions — resolved (2026-09-18)
 
-- **Minimum data volume.** How many completed positive/negative cases are
-  needed before a propensity model is trustworthy rather than noise? Needs
-  a documented minimum-sample-size guard (refuse to train, or warn, below
-  some threshold of the minority class) — similar in spirit to the
-  existing stratified-sampling safeguards elsewhere in the pipeline.
-- **Leakage risk.** Trace-prefix features must genuinely reflect
-  information available *before* the outcome — accidentally including the
-  outcome activity itself, or any post-outcome event, in the feature set
-  would silently inflate apparent accuracy. Needs careful feature-
-  engineering discipline and a test that would catch this.
-- **Where this fits relative to Funnel analysis.** The outcome-picker
-  concept overlaps with `analyze_conversion_funnel()`'s stage definition —
-  worth deciding whether propensity scoring is a genuinely separate tab or
-  an extension of the existing Funnel tab before building either, so the
-  two don't end up as two different UIs for defining "what does success
-  mean" on the same log.
+- **Minimum data volume — resolved.** Hard-refuse (not warn), below 30
+  completed cases in either class — a deliberate departure from the rest
+  of the codebase's "always warn, never block" convention, since below
+  that count a held-out CV fold leaves single-digit class counts, making
+  every metric sampling-noise-dominated rather than actually informative.
+  Implemented in `train_propensity_model()`'s `min_cases_per_class` guard
+  (`prox/predictive.py`).
+- **Leakage risk — resolved.** A single shared prefix-truncation function
+  (`_extract_case_features()`, private) is the only place raw case events
+  become a feature row, called identically by both the training-set and
+  scoring-set builders — the two paths can't structurally diverge in what
+  they include, only in which cutoff timestamp they pass. Covered by
+  explicit regression tests in `tests/test_predictive.py`
+  (`test_train_propensity_model_excludes_post_outcome_events_from_features`
+  and others).
+- **Where this fits relative to Funnel analysis — resolved.** A genuinely
+  separate future "Predictive Insights" tab, not a Funnel tab extension —
+  keeps deterministic Funnel metrics and probabilistic model output
+  visually and architecturally separate, matching the trust-boundary
+  concern above. The outcome-picker is its own independent parameter, not
+  shared state with `analyze_conversion_funnel()`.
+
+Three further decisions were made during implementation, not anticipated
+above: **logistic regression** instead of HistGradientBoostingClassifier
+(driver analysis is model-agnostic permutation importance either way, so
+this costs little, and buys simpler, more transparent output); **stratified
+k-fold CV** instead of a single train/test split (more honest validation
+when case counts sit close to the minimum-data guard); and **no public
+per-case scoring output** at all, not even a "highest risk sessions" table
+— PRoX runs on a manually exported, reviewed-later log, so a named
+in-progress case would very likely have already resolved to a real outcome
+by the time a stakeholder reads a report, risking a stale-looking
+prediction that casts doubt on the feature's other, aggregate numbers.
+`summarize_propensity_scores()` is the only public scoring output:
+aggregate distribution/risk-tier stats and plain-language narrative, never
+a named case.
