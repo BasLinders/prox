@@ -39,6 +39,9 @@ from prox import (
     clear_cached_dataset,
     cache_signature,
     DEFAULT_CACHE_DIR,
+    train_propensity_model,
+    analyze_propensity_drivers,
+    summarize_propensity_scores,
 )
 
 # Pre-selected as a starting point in the event-filter UI - GA4-style noise
@@ -947,7 +950,8 @@ if summary:
 
 st.divider()
 
-tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_sessions, tab_segments = st.tabs(
+(tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_sessions,
+ tab_segments, tab_predictive) = st.tabs(
     [
         "Process Maps",
         "Variants",
@@ -957,6 +961,7 @@ tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_sessi
         "Business Insights",
         "Session Insights",
         "Segment Comparison",
+        "Predictive Insights",
     ],
     # on_change="rerun" makes the tabs a stateful widget: the active tab is
     # tracked via `key` and survives reruns triggered by other widgets (e.g.
@@ -1641,6 +1646,151 @@ with tab_segments:
                 st.info("Comparison produced no results.")
         else:
             st.info("Choose a column and click **Compare Segments**.")
+
+# ---------------------------------------------------------------------------
+# Tab: Predictive Insights
+# ---------------------------------------------------------------------------
+with tab_predictive:
+    st.caption(
+        "Trains a model that predicts whether an in-progress case will reach "
+        "a chosen outcome, and explains which earlier activities are "
+        "associated with reaching it. Unlike every other tab, this is a "
+        "**prediction**, not a measurement - check the validation metrics "
+        "below before trusting it. Scoring only ever appears as an aggregate "
+        "summary, never a named-case list: by the time an analysis like this "
+        "is reviewed, any individual in-progress case has likely already "
+        "resolved one way or another in reality."
+    )
+
+    raw_df = st.session_state.get("df")
+    saved_config = st.session_state.get("config", {})
+
+    if raw_df is None or "concept:name" not in raw_df.columns:
+        st.info("Run an analysis first to enable predictive insights.")
+    else:
+        activities = _analyzed_activities(raw_df, saved_config)
+        outcome_activities = st.multiselect(
+            "Outcome activity (what counts as success)",
+            options=activities,
+            help=(
+                "The activity/activities that mark a case as having succeeded, "
+                "e.g. 'purchase'. A case is labelled positive if it reaches any "
+                "one of the selected activities."
+            )
+        )
+
+        predictive_exclude_cols = {
+            "case:concept:name", "concept:name", "time:timestamp", "user_id", "session_id",
+        }
+        attribute_candidates = [
+            c for c in raw_df.columns
+            if c not in predictive_exclude_cols and 2 <= raw_df[c].nunique(dropna=True) <= 20
+        ]
+        case_attribute_cols = st.multiselect(
+            "Case attributes to include (optional)",
+            options=attribute_candidates,
+            help=(
+                "Static or slowly-changing columns (e.g. device, category) added "
+                "as features alongside the activities visited so far."
+            )
+        )
+
+        revenue_candidates = [c for c in ["price", "event_value", "revenue", "amount"] if c in raw_df.columns]
+        revenue_col = None
+        if revenue_candidates:
+            revenue_choice = st.selectbox("Revenue column (optional)", options=["None"] + revenue_candidates)
+            if revenue_choice != "None":
+                revenue_col = revenue_choice
+
+        with st.expander("Advanced settings"):
+            a1, a2 = st.columns(2)
+            with a1:
+                min_cases_per_class = st.number_input(
+                    "Minimum completed cases per class", min_value=5, max_value=500, value=30,
+                    help=(
+                        "Training is refused below this many positive AND negative "
+                        "completed cases - fewer than that makes every reported "
+                        "metric dominated by sampling noise rather than signal."
+                    )
+                )
+            with a2:
+                cv_folds = st.number_input(
+                    "Cross-validation folds", min_value=2, max_value=10, value=5,
+                    help=(
+                        "More folds = more stable metrics, at the cost of smaller "
+                        "held-out sets per fold."
+                    )
+                )
+
+        train_btn = st.button("Train Propensity Model", width='stretch')
+
+        if train_btn:
+            if not outcome_activities:
+                st.warning("Select at least one outcome activity.")
+            else:
+                with st.spinner("Training model..."):
+                    st.session_state["propensity_model"] = train_propensity_model(
+                        raw_df, outcome_activities,
+                        case_attribute_cols=case_attribute_cols,
+                        revenue_col=revenue_col,
+                        min_cases_per_class=int(min_cases_per_class),
+                        cv_folds=int(cv_folds),
+                    )
+
+        model_bundle = st.session_state.get("propensity_model")
+        if model_bundle:
+            for err in model_bundle.get("errors", []):
+                st.error(err)
+
+            if model_bundle.get("model") is not None:
+                metrics = model_bundle["metrics"]
+
+                st.subheader("Validation")
+                st.caption(
+                    f"{metrics['n_completed']:,} completed cases "
+                    f"({metrics['n_positive']:,} reached the outcome, "
+                    f"{metrics['n_negative']:,} didn't), evaluated with stratified "
+                    "k-fold cross-validation. The model scoring in-progress cases "
+                    "below is refit on all completed cases afterward, so these "
+                    "metrics describe the cross-validation process's typical "
+                    "performance, not literally that exact refit model."
+                )
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Accuracy", f"{metrics['accuracy_mean']:.1%}", help=f"± {metrics['accuracy_std']:.1%}")
+                m2.metric("Precision", f"{metrics['precision_mean']:.1%}", help=f"± {metrics['precision_std']:.1%}")
+                m3.metric("Recall", f"{metrics['recall_mean']:.1%}", help=f"± {metrics['recall_std']:.1%}")
+                m4.metric("ROC AUC", f"{metrics['roc_auc_mean']:.2f}", help=f"± {metrics['roc_auc_std']:.2f}")
+
+                st.subheader("Top Drivers")
+                st.caption("Associative, not causal - what tends to go together with reaching the outcome.")
+                drivers = analyze_propensity_drivers(model_bundle)
+                if drivers:
+                    for sentence in drivers:
+                        st.markdown(f"- {sentence}")
+                else:
+                    st.info("No drivers to report.")
+
+                st.subheader("In-Progress Cases")
+                summary = summarize_propensity_scores(raw_df, model_bundle)
+                if summary["n_scored"]:
+                    s1, s2, s3 = st.columns(3)
+                    s1.metric("In-Progress Cases Scored", f"{summary['n_scored']:,}")
+                    s2.metric("Average Propensity", f"{summary['mean_score']:.1%}")
+                    hist_rate = summary.get("historical_positive_rate")
+                    s3.metric(
+                        "Historical Conversion Rate",
+                        f"{hist_rate:.1%}" if hist_rate is not None else "N/A"
+                    )
+                    st.bar_chart(pd.Series(summary["risk_tiers"], name="Cases"))
+                    for sentence in summary["narrative"]:
+                        st.markdown(f"- {sentence}")
+                else:
+                    st.info(
+                        "No in-progress cases to score - every case in the log has "
+                        "either reached the outcome or aged out."
+                    )
+        else:
+            st.info("Choose an outcome activity above and click **Train Propensity Model**.")
 
 # ---------------------------------------------------------------------------
 # Export: Build a Custom PDF Report
