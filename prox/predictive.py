@@ -455,9 +455,10 @@ def train_propensity_model(
     n_negative = int((training_features['label'] == 0).sum()) if not training_features.empty else 0
 
     if n_positive < min_cases_per_class or n_negative < min_cases_per_class:
+        outcome_label = ' or '.join(_coerce_to_list(outcome_activity))
         errors.append(
             f"Not enough completed cases to train a trustworthy model: {n_positive} reached "
-            f"'{outcome_activity}', {n_negative} confirmed they didn't "
+            f"'{outcome_label}', {n_negative} confirmed they didn't "
             f"(need at least {min_cases_per_class} of each). Refusing to train."
         )
         return empty
