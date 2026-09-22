@@ -35,6 +35,7 @@ from prox import (
     DISCOVERY_ALGORITHMS,
     CONFORMANCE_METHODS,
     merge_incremental,
+    load_cached_dataset,
     list_cached_datasets,
     clear_cached_dataset,
     cache_signature,
@@ -508,11 +509,43 @@ ORDER BY
 
 st.header("1. Load Data")
 data_source = st.radio(
-    "Data source", ["Upload CSV", "Connect to BigQuery"],
+    "Data source", ["Load cached dataset", "Upload CSV", "Connect to BigQuery"],
     horizontal=True, key="data_source_choice",
 )
 
-if data_source == "Connect to BigQuery":
+loaded_from_cache = False
+
+if data_source == "Load cached dataset":
+    known_datasets = list_cached_datasets(cache_dir=DEFAULT_CACHE_DIR)
+    if not known_datasets:
+        st.info(
+            "No cached datasets yet. Upload a CSV or connect to BigQuery first, "
+            "then enable incremental analysis below with a Dataset ID to start one."
+        )
+        st.stop()
+
+    dataset_options = {
+        f"{m.get('dataset_id')} — {m.get('n_events', 0):,} events, "
+        f"{m.get('n_cases', 0):,} cases, grouping={m.get('case_grouping')}, "
+        f"last updated {m.get('last_updated', '?')}": m.get("dataset_id")
+        for m in known_datasets
+    }
+    chosen_label = st.selectbox("Cached dataset", list(dataset_options.keys()))
+    chosen_dataset_id = dataset_options[chosen_label]
+
+    cached_raw_df, cached_manifest = load_cached_dataset(chosen_dataset_id, cache_dir=DEFAULT_CACHE_DIR)
+    if cached_raw_df is None:
+        st.error(f"Could not load cached dataset '{chosen_dataset_id}'. It may have just been cleared.")
+        st.stop()
+
+    raw_df = cached_raw_df
+    case_grouping = cached_manifest.get("case_grouping", "user")
+    has_category = "category" in raw_df.columns
+    df_ready = _prepare_df_ready(raw_df)
+    load_messages = [f"Loaded cached dataset '{chosen_dataset_id}' ({len(raw_df):,} events, skipping upload/query)."]
+    st.session_state["load_messages"] = load_messages
+    loaded_from_cache = True
+elif data_source == "Connect to BigQuery":
     active_file_bytes = render_bigquery_source()
     if active_file_bytes is None:
         st.stop()
@@ -564,31 +597,38 @@ else:
         st.info("Upload a CSV event log above to get started, or generate a mock one.")
         st.stop()
 
-case_grouping_label = st.radio(
-    "Case grouping",
-    ["By user (recommended)", "By session"],
-    horizontal=True,
-    help=(
-        "By user: one case spans everything a user did across all their "
-        "sessions - needed to see a user's sequence of sessions (e.g. a "
-        "browsing session followed by a buying session) in the Session "
-        "Insights tab. By session: one case per session, as before - use "
-        "this if you want process discovery/conformance scoped to a single "
-        "session instead of a user's full history."
-    ),
-)
-case_grouping = "user" if case_grouping_label.startswith("By user") else "session"
-
-loader_defaults = create_analysis_config()["data_loading"]
-with st.spinner("Loading and validating data..."):
-    raw_df, df_ready, load_messages, has_category = _cached_load_and_prepare(
-        active_file_bytes,
-        loader_defaults["chunk_threshold_mb"],
-        loader_defaults["chunk_size"],
-        case_grouping,
+if loaded_from_cache:
+    st.caption(
+        f"Case grouping is fixed to how this cache was built: "
+        f"**{'By user' if case_grouping == 'user' else 'By session'}**. "
+        "Clear the cache and reload from a fresh upload/query to change it."
     )
+else:
+    case_grouping_label = st.radio(
+        "Case grouping",
+        ["By user (recommended)", "By session"],
+        horizontal=True,
+        help=(
+            "By user: one case spans everything a user did across all their "
+            "sessions - needed to see a user's sequence of sessions (e.g. a "
+            "browsing session followed by a buying session) in the Session "
+            "Insights tab. By session: one case per session, as before - use "
+            "this if you want process discovery/conformance scoped to a single "
+            "session instead of a user's full history."
+        ),
+    )
+    case_grouping = "user" if case_grouping_label.startswith("By user") else "session"
 
-st.session_state["load_messages"] = load_messages
+    loader_defaults = create_analysis_config()["data_loading"]
+    with st.spinner("Loading and validating data..."):
+        raw_df, df_ready, load_messages, has_category = _cached_load_and_prepare(
+            active_file_bytes,
+            loader_defaults["chunk_threshold_mb"],
+            loader_defaults["chunk_size"],
+            case_grouping,
+        )
+
+    st.session_state["load_messages"] = load_messages
 
 if raw_df is None:
     st.error("Failed to load data. See messages below.")
@@ -614,60 +654,66 @@ if raw_df is None:
 # ---------------------------------------------------------------------------
 st.divider()
 st.header("2. Incremental Analysis")
-st.caption(
-    "Optional: merge this upload with previously cached data for the same "
-    "recurring export (e.g. this week's GA4 CSV joining last week's), "
-    "instead of needing the full history re-uploaded every time. New "
-    "events are added; events already seen (same case, activity, and "
-    "timestamp) are skipped."
-)
-incremental_enabled = st.checkbox(
-    "Merge with cached data for a recurring dataset", value=False,
-    key="incremental_enabled",
-)
-if incremental_enabled:
-    known_datasets = list_cached_datasets(cache_dir=DEFAULT_CACHE_DIR)
-    if known_datasets:
-        with st.expander(f"{len(known_datasets)} cached dataset(s)"):
-            for m in known_datasets:
-                st.caption(
-                    f"**{m.get('dataset_id')}** - {m.get('n_events', 0):,} events, "
-                    f"{m.get('n_cases', 0):,} cases, grouping={m.get('case_grouping')}, "
-                    f"last updated {m.get('last_updated', '?')}"
-                )
-
-    dataset_id = st.text_input(
-        "Dataset ID",
-        value=st.session_state.get("incremental_dataset_id", ""),
-        help=(
-            "A stable label for this recurring export - not the filename, "
-            "which usually changes every time (e.g. a trailing date). "
-            "Reused across sessions to find the right cache, e.g. "
-            "'GA4 checkout funnel'."
-        ),
+if loaded_from_cache:
+    st.caption(
+        f"Not applicable - '{chosen_dataset_id}' was loaded directly from cache above, "
+        "so there's no new upload/query to merge in this run."
     )
-    st.session_state["incremental_dataset_id"] = dataset_id
+else:
+    st.caption(
+        "Optional: merge this upload with previously cached data for the same "
+        "recurring export (e.g. this week's GA4 CSV joining last week's), "
+        "instead of needing the full history re-uploaded every time. New "
+        "events are added; events already seen (same case, activity, and "
+        "timestamp) are skipped."
+    )
+    incremental_enabled = st.checkbox(
+        "Merge with cached data for a recurring dataset", value=False,
+        key="incremental_enabled",
+    )
+    if incremental_enabled:
+        known_datasets = list_cached_datasets(cache_dir=DEFAULT_CACHE_DIR)
+        if known_datasets:
+            with st.expander(f"{len(known_datasets)} cached dataset(s)"):
+                for m in known_datasets:
+                    st.caption(
+                        f"**{m.get('dataset_id')}** - {m.get('n_events', 0):,} events, "
+                        f"{m.get('n_cases', 0):,} cases, grouping={m.get('case_grouping')}, "
+                        f"last updated {m.get('last_updated', '?')}"
+                    )
 
-    if dataset_id.strip():
-        raw_df, incremental_stats, incremental_messages = _cached_merge_incremental(
-            active_file_bytes, dataset_id.strip(), case_grouping, DEFAULT_CACHE_DIR,
-            cache_signature(dataset_id.strip(), cache_dir=DEFAULT_CACHE_DIR),
-            raw_df,
+        dataset_id = st.text_input(
+            "Dataset ID",
+            value=st.session_state.get("incremental_dataset_id", ""),
+            help=(
+                "A stable label for this recurring export - not the filename, "
+                "which usually changes every time (e.g. a trailing date). "
+                "Reused across sessions to find the right cache, e.g. "
+                "'GA4 checkout funnel'."
+            ),
         )
-        for msg in incremental_messages:
-            st.info(msg)
-        # Only redo label refinement/memory optimization if the merge actually
-        # changed the data - _cached_load_and_prepare already computed df_ready
-        # for this exact upload, and that's still correct when nothing merged in
-        # (a fresh seed, or a case-grouping mismatch that skipped the merge).
-        if incremental_stats.get("merged"):
-            df_ready = _prepare_df_ready(raw_df)
+        st.session_state["incremental_dataset_id"] = dataset_id
 
-        if st.button("Clear cache for this Dataset ID"):
-            clear_cached_dataset(dataset_id.strip(), cache_dir=DEFAULT_CACHE_DIR)
-            st.rerun()
-    else:
-        st.caption("Enter a Dataset ID above to merge with (or start) its cache.")
+        if dataset_id.strip():
+            raw_df, incremental_stats, incremental_messages = _cached_merge_incremental(
+                active_file_bytes, dataset_id.strip(), case_grouping, DEFAULT_CACHE_DIR,
+                cache_signature(dataset_id.strip(), cache_dir=DEFAULT_CACHE_DIR),
+                raw_df,
+            )
+            for msg in incremental_messages:
+                st.info(msg)
+            # Only redo label refinement/memory optimization if the merge actually
+            # changed the data - _cached_load_and_prepare already computed df_ready
+            # for this exact upload, and that's still correct when nothing merged in
+            # (a fresh seed, or a case-grouping mismatch that skipped the merge).
+            if incremental_stats.get("merged"):
+                df_ready = _prepare_df_ready(raw_df)
+
+            if st.button("Clear cache for this Dataset ID"):
+                clear_cached_dataset(dataset_id.strip(), cache_dir=DEFAULT_CACHE_DIR)
+                st.rerun()
+        else:
+            st.caption("Enter a Dataset ID above to merge with (or start) its cache.")
 
 # ---------------------------------------------------------------------------
 # Winsorize revenue/price outliers - opt-in, applied right after the data is
