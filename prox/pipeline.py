@@ -153,6 +153,13 @@ def run_full_analysis(
         n_cases = log_df['case:concept:name'].nunique()
         logger.info("Post-sampling: %d events, %d cases.", n_events, n_cases)
 
+    # Exposed so callers outside this pipeline (e.g. the propensity-modeling
+    # tab, which reruns its own feature extraction rather than reading a
+    # precomputed stage result) can train/score on the same filtered+sampled
+    # dataset the rest of these results describe, instead of silently
+    # re-pulling the full unfiltered/unsampled log.
+    pipeline_results['processed_log'] = log_df
+
     _report_progress(1)
 
     # -------------------------------------------------------------------------

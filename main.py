@@ -1898,13 +1898,21 @@ def _render_results_tabs():
             """
             )
 
-        raw_df = st.session_state.get("df")
+        # Uses the same filtered+sampled dataset the rest of this run's results
+        # describe (see pipeline.py's Step 1b), not the raw unfiltered/
+        # unsampled log - otherwise a propensity model trained here would
+        # silently disagree with the sampled conformance/business-insight
+        # numbers shown in the other tabs. Falls back to the raw log only for
+        # results computed before 'processed_log' existed.
+        analysis_df = results.get("processed_log")
+        if analysis_df is None:
+            analysis_df = st.session_state.get("df")
         saved_config = st.session_state.get("config", {})
 
-        if raw_df is None or "concept:name" not in raw_df.columns:
+        if analysis_df is None or "concept:name" not in analysis_df.columns:
             st.info("Run an analysis first to enable predictive insights.")
         else:
-            activities = _analyzed_activities(raw_df, saved_config)
+            activities = _analyzed_activities(analysis_df, saved_config)
             outcome_activities = st.multiselect(
                 "Outcome activity (what counts as success)",
                 options=activities,
@@ -1919,8 +1927,8 @@ def _render_results_tabs():
                 "case:concept:name", "concept:name", "time:timestamp", "user_id", "session_id",
             }
             attribute_candidates = [
-                c for c in raw_df.columns
-                if c not in predictive_exclude_cols and 2 <= raw_df[c].nunique(dropna=True) <= 20
+                c for c in analysis_df.columns
+                if c not in predictive_exclude_cols and 2 <= analysis_df[c].nunique(dropna=True) <= 20
             ]
             case_attribute_cols = st.multiselect(
                 "Case attributes to include (optional)",
@@ -1931,7 +1939,7 @@ def _render_results_tabs():
                 )
             )
 
-            revenue_candidates = [c for c in ["price", "event_value", "revenue", "amount"] if c in raw_df.columns]
+            revenue_candidates = [c for c in ["price", "event_value", "revenue", "amount"] if c in analysis_df.columns]
             revenue_col = None
             if revenue_candidates:
                 revenue_choice = st.selectbox("Revenue column (optional)", options=["None"] + revenue_candidates)
@@ -1966,7 +1974,7 @@ def _render_results_tabs():
                 else:
                     with st.spinner("Training model..."):
                         st.session_state["propensity_model"] = train_propensity_model(
-                            raw_df, outcome_activities,
+                            analysis_df, outcome_activities,
                             case_attribute_cols=case_attribute_cols,
                             revenue_col=revenue_col,
                             min_cases_per_class=int(min_cases_per_class),
@@ -2007,7 +2015,7 @@ def _render_results_tabs():
                         st.info("No drivers to report.")
 
                     st.subheader("In-Progress Cases")
-                    summary = summarize_propensity_scores(raw_df, model_bundle)
+                    summary = summarize_propensity_scores(analysis_df, model_bundle)
                     if summary["n_scored"]:
                         s1, s2, s3 = st.columns(3)
                         s1.metric("In-Progress Cases Scored", f"{summary['n_scored']:,}")
