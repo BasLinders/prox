@@ -10,7 +10,7 @@ from .analytics import (
     classify_sessions, summarize_user_journeys
 )
 from .visualizer import visualize_focused_insights, export_results
-from .data_manager import filter_event_log, FILTER_HANDLERS
+from .data_manager import filter_event_log, FILTER_HANDLERS, sample_log_stratified
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # are near-instant, so they're folded into the stage they sit next to rather
 # than getting their own tick.
 _PROGRESS_STAGES = [
-    "Filtering events",
+    "Filtering & sampling events",
     "Discovering process model",
     "Checking conformance",
     "Analysing performance",
@@ -39,6 +39,11 @@ def run_full_analysis(
 
     Stages (in order):
         1. Filter        — apply configured filter chain
+        1b. Sampling     — if enabled, stratified case sampling applied once;
+                           every later stage (including business insights)
+                           shares this same subset, so results describe one
+                           consistent dataset instead of mixing a sampled
+                           conformance check with full-log discovery/insights
         2. Summary       — event log statistics
         3. Discovery     — Petri net model from event log
         4. Conformance   — fitness, precision, trace deviations
@@ -121,6 +126,33 @@ def run_full_analysis(
     if n_events > 10_000:
         logger.warning("Dataset is large (>10k events). Consider enabling sampling.")
 
+    # -------------------------------------------------------------------------
+    # Step 1b: Sampling (applied once, upstream of every remaining stage)
+    # -------------------------------------------------------------------------
+    # Previously only conformance checking sampled - discovery, performance
+    # analysis, visualisation, and business insights all ran on the full
+    # filtered log regardless of this toggle, which both defeated the point
+    # of enabling sampling (those unsampled stages dominate runtime on a
+    # large/noisy log) and meant business insights could describe a
+    # different dataset than the conformance results shown alongside them.
+    if sampling_enabled:
+        sample_size = sampling_config.get("total_sample_size", speed_params.get("max_align", 250))
+        strata_col = sampling_config.get("strata_col", "purchase")
+        max_priority_ratio = sampling_config.get("max_priority_ratio", 0.5)
+
+        logger.info("Applying stratified sampling (target: %d cases, strata: '%s').", sample_size, strata_col)
+        log_df, sample_messages = sample_log_stratified(
+            log_df, strata_col,
+            total_sample_size=sample_size,
+            max_priority_ratio=max_priority_ratio
+        )
+        for msg in sample_messages:
+            logger.info("  [sampling] %s", msg)
+
+        n_events = len(log_df)
+        n_cases = log_df['case:concept:name'].nunique()
+        logger.info("Post-sampling: %d events, %d cases.", n_events, n_cases)
+
     _report_progress(1)
 
     # -------------------------------------------------------------------------
@@ -182,9 +214,11 @@ def run_full_analysis(
         enable_detailed_analysis=conf_cfg.get("calculate_precision", True),
         calculate_fitness=conf_cfg.get("calculate_fitness", False),
         optimize_variants=conf_cfg.get("optimize_variants", True),
-        perform_sampling=sampling_enabled,
-        strata_col=sampling_config.get("strata_col", "purchase"),
-        max_priority_ratio=sampling_config.get("max_priority_ratio", 0.5)
+        # log_df was already sampled once in Step 1b (when sampling_enabled) and
+        # is reused as-is for every stage; sampling here too would re-stratify
+        # an already-sampled subset for no benefit, on top of being redundant
+        # with Step 1b's own sampling log messages.
+        perform_sampling=False,
     )
 
     pipeline_results['conformance'] = conformance_results
