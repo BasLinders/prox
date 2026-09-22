@@ -466,7 +466,18 @@ def run_conformance_checking(
                 )
                 sampled_log = pm4py.convert_to_event_log(s_df)
             else:
-                sampled_log = pm4py.convert_to_event_log(event_log_df.iloc[:max_align])
+                # Case-level cap, not a row/event slice: event_log_df.iloc[:max_align]
+                # used to cut by event position, so a handful of multi-event cases
+                # could exhaust max_align rows and leave far fewer than max_align
+                # cases in sampled_log (and mid-trace at that) - understating "every
+                # case" when sampling is off, and (once pipeline.py started passing
+                # its own already-sampled, already-case-sized log_df here with
+                # perform_sampling=False) silently re-truncating an already-correct
+                # sample down to a fraction of its intended size.
+                case_ids = event_log_df['case:concept:name'].drop_duplicates().iloc[:max_align]
+                sampled_log = pm4py.convert_to_event_log(
+                    event_log_df[event_log_df['case:concept:name'].isin(case_ids)]
+                )
         except Exception:
             sampled_log = pm4py.convert_to_event_log(event_log_df)
 
