@@ -82,6 +82,43 @@ def test_load_and_validate_csv_does_not_rename_resource_column_to_user_id():
     assert df['user_id'].tolist() == ['u1', 'u1', 'u2']  # unaffected by the resource column
 
 
+def test_load_and_validate_csv_derives_purchase_flag_from_activity_names():
+    """Regression test: a live BigQuery extract or a plain event-name CSV only
+    has 'purchase' as a *value* inside concept:name, not as its own 0/1
+    column - unlike the mock dataset, which bakes a literal 'purchase' column
+    into every row. Without deriving one here, steps that require a literal
+    binary column (e.g. main.py's sampling stratify-column picker) silently
+    found nothing to offer on real data even when purchase events existed."""
+    raw = make_raw_log_df()
+    raw['event_name'] = ['view_item', 'purchase', 'view_item']
+    df, messages, has_category = load_and_validate_csv(make_csv_bytes(raw))
+
+    assert df is not None
+    assert 'purchase' in df.columns
+    assert df['purchase'].tolist() == [False, True, False]
+    assert df['purchase'].nunique() == 2
+    assert any("Derived 'purchase' column" in m for m in messages)
+
+
+def test_load_and_validate_csv_does_not_overwrite_existing_purchase_column():
+    raw = make_raw_log_df()
+    raw['purchase'] = [1, 0, 0]
+    df, messages, has_category = load_and_validate_csv(make_csv_bytes(raw))
+
+    assert df is not None
+    assert df['purchase'].tolist() == [1, 0, 0]
+    assert not any("Derived 'purchase' column" in m for m in messages)
+
+
+def test_load_and_validate_csv_no_purchase_activity_leaves_column_absent():
+    raw = make_raw_log_df()  # event_name values are just 'a' and 'b'
+    df, messages, has_category = load_and_validate_csv(make_csv_bytes(raw))
+
+    assert df is not None
+    assert 'purchase' not in df.columns
+    assert 'add_to_cart' not in df.columns
+
+
 # --- filter_event_log ---
 
 def test_filter_event_log_remove_events(simple_event_log):
