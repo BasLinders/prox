@@ -722,223 +722,228 @@ else:
 # strata, etc.), so a handful of extreme values don't dilute those reports.
 # Caps values rather than dropping rows - see prox.winsorize_series.
 # ---------------------------------------------------------------------------
-st.divider()
-st.header("3. Handle Outliers")
-if "price" not in raw_df.columns:
-    st.caption("No revenue/price column detected - nothing to winsorize.")
-else:
-    winsorize_enabled = st.checkbox(
-        "Winsorize Revenue/Price Outliers", value=False,
-        help=(
-            "Caps extreme values in the revenue/price column instead of "
-            "removing those rows, so a handful of outlier orders don't "
-            "dilute Average Order Value, revenue trend, or category "
-            "revenue breakdown in Business Insights."
-        )
-    )
-    if winsorize_enabled:
-        w_col1, w_col2 = st.columns(2)
-        with w_col1:
-            winsorize_method_label = st.radio(
-                "Method", ["Standard Deviation", "Percentile"], horizontal=True,
-                help=(
-                    "Standard Deviation: caps at mean +/- N standard deviations. "
-                    "Percentile: caps at the Nth/100-Nth percentile band."
-                )
-            )
-        with w_col2:
-            if winsorize_method_label == "Standard Deviation":
-                winsorize_param = st.slider(
-                    "Std deviations", 1.0, 5.0, 3.0, 0.5,
-                    help="Values beyond mean +/- this many standard deviations are capped.",
-                )
-            else:
-                winsorize_param = st.slider(
-                    "Percentile cutoff", 0.5, 10.0, 1.0, 0.5,
-                    help="Caps at this percentile and its mirror (e.g. 1 = 1st/99th percentile).",
-                )
-
-        winsorize_method = "std" if winsorize_method_label == "Standard Deviation" else "percentile"
-        clipped, lower, upper = winsorize_series(raw_df["price"], method=winsorize_method, param=winsorize_param)
-        n_capped = int(((raw_df["price"] < lower) | (raw_df["price"] > upper)).sum())
-
-        raw_df = raw_df.copy()
-        df_ready = df_ready.copy()
-        raw_df["price"] = clipped
-        df_ready["price"] = df_ready["price"].clip(lower, upper)
-
-        if n_capped > 0:
-            st.info(f"Capped {n_capped:,} value(s) to the range [{lower:,.2f}, {upper:,.2f}].")
-        else:
-            st.caption("No values fell outside the winsorization bounds - nothing was capped.")
-
-# ---------------------------------------------------------------------------
-# Data quality check - surfaced before filtering/analysis, so messy data is
-# caught here instead of showing up as a confusing downstream result
-# ---------------------------------------------------------------------------
-st.divider()
-st.header("4. Data Quality Check")
-data_quality = check_data_quality(raw_df)
-if data_quality["issues"]:
-    with st.expander(f"{len(data_quality['issues'])} data quality issue(s) found", expanded=True):
-        for issue in data_quality["issues"]:
-            st.warning(issue)
-else:
-    st.success("No data quality issues detected.")
-
-# ---------------------------------------------------------------------------
-# Filter events before analysis
-# ---------------------------------------------------------------------------
-st.divider()
-st.header("5. Filter Events")
-st.caption(
-    "Remove noisy or irrelevant events before analysis, or narrow it down to "
-    "just the events you care about. Optional - leave the list empty to "
-    "analyse every event."
-)
-
-all_activities = sorted(raw_df["concept:name"].dropna().astype(str).unique().tolist())
-default_noise_selection = [a for a in all_activities if a in KNOWN_NOISE_ACTIVITIES]
-
-filter_col1, filter_col2 = st.columns([1, 2])
-with filter_col1:
-    filter_mode_label = st.radio(
-        "Mode",
-        ["Remove selected events", "Keep only selected events"],
-        help=(
-            "Remove: analyse everything except the events picked on the right. "
-            "Keep: analyse only the events picked on the right."
-        )
-    )
-with filter_col2:
-    selected_events = st.multiselect(
-        "Events",
-        options=all_activities,
-        default=default_noise_selection,
-        help=(
-            "Pre-checked with common non-process noise events (cookie banners, "
-            "scroll, JS errors, etc.) found in this log - add or remove freely."
-        )
-    )
-
-filter_steps = []
-if selected_events:
-    filter_mode = "remove_events" if filter_mode_label == "Remove selected events" else "keep_events"
-    filter_steps.append({"type": "activity", "activities": selected_events, "mode": filter_mode})
-
-default_purchase_activities = {"purchase", "has_purchase"}
-endpoint_options = ["(no cropping - use full traces)"] + all_activities
-default_endpoint = next(
-    (a for a in all_activities if a.lower() in default_purchase_activities),
-    endpoint_options[0],
-)
-endpoint_choice = st.selectbox(
-    "Process end point",
-    endpoint_options,
-    index=endpoint_options.index(default_endpoint),
-    help=(
-        "Crops every case's trace at the first occurrence of this activity - "
-        "later events in the same case are dropped, and cases that never "
-        "reach it are removed entirely. Anchors the analysis to a specific "
-        "outcome (e.g. purchase) instead of wherever the log happens to end. "
-        "Pick '(no cropping)' to analyse full traces."
-    ),
-)
-if endpoint_choice != endpoint_options[0]:
-    filter_steps.append({"type": "crop", "activity": [endpoint_choice]})
-
-preview_df = raw_df
-for _step in filter_steps:
-    _params = _step.copy()
-    _f_type = _params.pop("type")
-    _filtered, _ = filter_event_log(preview_df, filter_type=_f_type, **_params)
-    if _filtered is not None and not _filtered.empty:
-        preview_df = _filtered
-
-post_cases = preview_df["case:concept:name"].nunique() if preview_df is not None and not preview_df.empty else 0
-post_events = len(preview_df) if preview_df is not None else 0
-
-st.caption(
-    f"After filtering: **{post_cases:,} cases**, **{post_events:,} events** "
-    f"(from {raw_df['case:concept:name'].nunique():,} cases, {len(raw_df):,} events)."
-)
-
-# ---------------------------------------------------------------------------
-# Sampling - opt-in, with a warning above a "large" case-count threshold
-# ---------------------------------------------------------------------------
-st.divider()
-st.header("6. Sampling")
-enable_sampling = st.checkbox(
-    "Enable Sampling", value=False,
-    help=(
-        "Off by default: conformance checking runs on every case. Turn this "
-        "on to check only a representative subset instead, which is much "
-        "faster on large logs."
-    )
-)
-if enable_sampling:
-    sample_size = st.number_input(
-        "Sample Size (cases)", min_value=50, max_value=1000, value=250, step=50,
-        help="Cases used for conformance. Higher = more accurate but slower."
-    )
-
-    # Stratification candidates: binary flag-style columns (e.g. 'purchase',
-    # 'add_to_cart') where sample_log_stratified's priority_value=1 actually
-    # means something - a non-binary or all-zero column would silently just
-    # degrade to a random sample, so those aren't offered.
-    exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id", "session_id"}
-
-    def _has_priority_value(series: pd.Series) -> bool:
-        try:
-            return (series == 1).any() or (series.astype(str).str.strip() == "1").any()
-        except Exception:
-            return False
-
-    strata_candidates = [
-        c for c in raw_df.columns
-        if c not in exclude_cols and raw_df[c].nunique(dropna=True) == 2 and _has_priority_value(raw_df[c])
-    ]
-
-    strata_col1, strata_col2 = st.columns([2, 1])
-    with strata_col1:
-        strata_options = ["(none - plain random sample)"] + strata_candidates
-        default_strata = next((c for c in strata_candidates if c.lower() in {"purchase", "has_purchase"}), strata_options[0])
-        strata_choice = st.selectbox(
-            "Prioritise a column when sampling",
-            strata_options,
-            index=strata_options.index(default_strata),
+with st.form("configuration_form"):
+    st.divider()
+    st.header("3. Handle Outliers")
+    if "price" not in raw_df.columns:
+        st.caption("No revenue/price column detected - nothing to winsorize.")
+    else:
+        winsorize_enabled = st.checkbox(
+            "Winsorize Revenue/Price Outliers", value=False,
             help=(
-                "Stratified sampling: reserves part of the sample for cases where "
-                "this column = 1, so rare-but-important cases (e.g. purchases) "
-                "aren't sampled away, instead of a plain random sample across all "
-                "cases. Only binary (0/1-style) columns are offered here, since "
-                "that's what stratification actually prioritises on."
-            ),
+                "Caps extreme values in the revenue/price column instead of "
+                "removing those rows, so a handful of outlier orders don't "
+                "dilute Average Order Value, revenue trend, or category "
+                "revenue breakdown in Business Insights."
+            )
         )
-    with strata_col2:
-        max_priority_ratio = st.slider(
-            "Max priority share", 0.1, 1.0, 0.5, 0.05,
-            help="Upper bound on how much of the sample can be priority cases.",
-            disabled=(strata_choice == strata_options[0]),
+        if winsorize_enabled:
+            w_col1, w_col2 = st.columns(2)
+            with w_col1:
+                winsorize_method_label = st.radio(
+                    "Method", ["Standard Deviation", "Percentile"], horizontal=True,
+                    help=(
+                        "Standard Deviation: caps at mean +/- N standard deviations. "
+                        "Percentile: caps at the Nth/100-Nth percentile band."
+                    )
+                )
+            with w_col2:
+                if winsorize_method_label == "Standard Deviation":
+                    winsorize_param = st.slider(
+                        "Std deviations", 1.0, 5.0, 3.0, 0.5,
+                        help="Values beyond mean +/- this many standard deviations are capped.",
+                    )
+                else:
+                    winsorize_param = st.slider(
+                        "Percentile cutoff", 0.5, 10.0, 1.0, 0.5,
+                        help="Caps at this percentile and its mirror (e.g. 1 = 1st/99th percentile).",
+                    )
+
+            winsorize_method = "std" if winsorize_method_label == "Standard Deviation" else "percentile"
+            clipped, lower, upper = winsorize_series(raw_df["price"], method=winsorize_method, param=winsorize_param)
+            n_capped = int(((raw_df["price"] < lower) | (raw_df["price"] > upper)).sum())
+
+            raw_df = raw_df.copy()
+            df_ready = df_ready.copy()
+            raw_df["price"] = clipped
+            df_ready["price"] = df_ready["price"].clip(lower, upper)
+
+            if n_capped > 0:
+                st.info(f"Capped {n_capped:,} value(s) to the range [{lower:,.2f}, {upper:,.2f}].")
+            else:
+                st.caption("No values fell outside the winsorization bounds - nothing was capped.")
+
+    # ---------------------------------------------------------------------------
+    # Data quality check - surfaced before filtering/analysis, so messy data is
+    # caught here instead of showing up as a confusing downstream result
+    # ---------------------------------------------------------------------------
+    st.divider()
+    st.header("4. Data Quality Check")
+    data_quality = check_data_quality(raw_df)
+    if data_quality["issues"]:
+        with st.expander(f"{len(data_quality['issues'])} data quality issue(s) found", expanded=True):
+            for issue in data_quality["issues"]:
+                st.warning(issue)
+    else:
+        st.success("No data quality issues detected.")
+
+    # ---------------------------------------------------------------------------
+    # Filter events before analysis
+    # ---------------------------------------------------------------------------
+    st.divider()
+    st.header("5. Filter Events")
+    st.caption(
+        "Remove noisy or irrelevant events before analysis, or narrow it down to "
+        "just the events you care about. Optional - leave the list empty to "
+        "analyse every event."
+    )
+
+    all_activities = sorted(raw_df["concept:name"].dropna().astype(str).unique().tolist())
+    default_noise_selection = [a for a in all_activities if a in KNOWN_NOISE_ACTIVITIES]
+
+    filter_col1, filter_col2 = st.columns([1, 2])
+    with filter_col1:
+        filter_mode_label = st.radio(
+            "Mode",
+            ["Remove selected events", "Keep only selected events"],
+            help=(
+                "Remove: analyse everything except the events picked on the right. "
+                "Keep: analyse only the events picked on the right."
+            )
         )
-    # "(none)" needs an explicit non-purchase sentinel, not None/"" - those
-    # are falsy, and run_conformance_checking's own fallback then re-checks
-    # for a 'purchase' column regardless, silently reintroducing
-    # stratification the user just opted out of. 'case:concept:name' is
-    # unique per case, so priority-matching against it never hits - the same
-    # sentinel that function already falls back to internally.
-    strata_col = "case:concept:name" if strata_choice == strata_options[0] else strata_choice
-else:
-    sample_size = max(post_cases, 1)
-    strata_col = "case:concept:name"
-    max_priority_ratio = 0.5
-    if post_cases > LARGE_CASE_COUNT_THRESHOLD:
-        st.warning(
-            f"{post_cases:,} cases will be analysed without sampling. Conformance "
-            f"checking - especially State Equation A* - can get slow above "
-            f"~{LARGE_CASE_COUNT_THRESHOLD:,} cases. Consider enabling sampling above, "
-            "or switching to Token Replay in the sidebar."
+    with filter_col2:
+        selected_events = st.multiselect(
+            "Events",
+            options=all_activities,
+            default=default_noise_selection,
+            help=(
+                "Pre-checked with common non-process noise events (cookie banners, "
+                "scroll, JS errors, etc.) found in this log - add or remove freely."
+            )
         )
+
+    filter_steps = []
+    if selected_events:
+        filter_mode = "remove_events" if filter_mode_label == "Remove selected events" else "keep_events"
+        filter_steps.append({"type": "activity", "activities": selected_events, "mode": filter_mode})
+
+    default_purchase_activities = {"purchase", "has_purchase"}
+    endpoint_options = ["(no cropping - use full traces)"] + all_activities
+    default_endpoint = next(
+        (a for a in all_activities if a.lower() in default_purchase_activities),
+        endpoint_options[0],
+    )
+    endpoint_choice = st.selectbox(
+        "Process end point",
+        endpoint_options,
+        index=endpoint_options.index(default_endpoint),
+        help=(
+            "Crops every case's trace at the first occurrence of this activity - "
+            "later events in the same case are dropped, and cases that never "
+            "reach it are removed entirely. Anchors the analysis to a specific "
+            "outcome (e.g. purchase) instead of wherever the log happens to end. "
+            "Pick '(no cropping)' to analyse full traces."
+        ),
+    )
+    if endpoint_choice != endpoint_options[0]:
+        filter_steps.append({"type": "crop", "activity": [endpoint_choice]})
+
+    preview_df = raw_df
+    for _step in filter_steps:
+        _params = _step.copy()
+        _f_type = _params.pop("type")
+        _filtered, _ = filter_event_log(preview_df, filter_type=_f_type, **_params)
+        if _filtered is not None and not _filtered.empty:
+            preview_df = _filtered
+
+    post_cases = preview_df["case:concept:name"].nunique() if preview_df is not None and not preview_df.empty else 0
+    post_events = len(preview_df) if preview_df is not None else 0
+
+    st.caption(
+        f"After filtering: **{post_cases:,} cases**, **{post_events:,} events** "
+        f"(from {raw_df['case:concept:name'].nunique():,} cases, {len(raw_df):,} events)."
+    )
+
+    # ---------------------------------------------------------------------------
+    # Sampling - opt-in, with a warning above a "large" case-count threshold
+    # ---------------------------------------------------------------------------
+    st.divider()
+    st.header("6. Sampling")
+    enable_sampling = st.checkbox(
+        "Enable Sampling", value=False,
+        help=(
+            "Off by default: conformance checking runs on every case. Turn this "
+            "on to check only a representative subset instead, which is much "
+            "faster on large logs."
+        )
+    )
+    if enable_sampling:
+        sample_size = st.number_input(
+            "Sample Size (cases)", min_value=50, max_value=1000, value=250, step=50,
+            help="Cases used for conformance. Higher = more accurate but slower."
+        )
+
+        # Stratification candidates: binary flag-style columns (e.g. 'purchase',
+        # 'add_to_cart') where sample_log_stratified's priority_value=1 actually
+        # means something - a non-binary or all-zero column would silently just
+        # degrade to a random sample, so those aren't offered.
+        exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id", "session_id"}
+
+        def _has_priority_value(series: pd.Series) -> bool:
+            try:
+                return (series == 1).any() or (series.astype(str).str.strip() == "1").any()
+            except Exception:
+                return False
+
+        strata_candidates = [
+            c for c in raw_df.columns
+            if c not in exclude_cols and raw_df[c].nunique(dropna=True) == 2 and _has_priority_value(raw_df[c])
+        ]
+
+        strata_col1, strata_col2 = st.columns([2, 1])
+        with strata_col1:
+            strata_options = ["(none - plain random sample)"] + strata_candidates
+            default_strata = next((c for c in strata_candidates if c.lower() in {"purchase", "has_purchase"}), strata_options[0])
+            strata_choice = st.selectbox(
+                "Prioritise a column when sampling",
+                strata_options,
+                index=strata_options.index(default_strata),
+                help=(
+                    "Stratified sampling: reserves part of the sample for cases where "
+                    "this column = 1, so rare-but-important cases (e.g. purchases) "
+                    "aren't sampled away, instead of a plain random sample across all "
+                    "cases. Only binary (0/1-style) columns are offered here, since "
+                    "that's what stratification actually prioritises on."
+                ),
+            )
+        with strata_col2:
+            max_priority_ratio = st.slider(
+                "Max priority share", 0.1, 1.0, 0.5, 0.05,
+                help="Upper bound on how much of the sample can be priority cases.",
+                disabled=(strata_choice == strata_options[0]),
+            )
+        # "(none)" needs an explicit non-purchase sentinel, not None/"" - those
+        # are falsy, and run_conformance_checking's own fallback then re-checks
+        # for a 'purchase' column regardless, silently reintroducing
+        # stratification the user just opted out of. 'case:concept:name' is
+        # unique per case, so priority-matching against it never hits - the same
+        # sentinel that function already falls back to internally.
+        strata_col = "case:concept:name" if strata_choice == strata_options[0] else strata_choice
+    else:
+        sample_size = max(post_cases, 1)
+        strata_col = "case:concept:name"
+        max_priority_ratio = 0.5
+        if post_cases > LARGE_CASE_COUNT_THRESHOLD:
+            st.warning(
+                f"{post_cases:,} cases will be analysed without sampling. Conformance "
+                f"checking - especially State Equation A* - can get slow above "
+                f"~{LARGE_CASE_COUNT_THRESHOLD:,} cases. Consider enabling sampling above, "
+                "or switching to Token Replay in the sidebar."
+            )
+
+    applied = st.form_submit_button("Apply Configuration", type="primary", width='stretch')
+if applied:
+    st.success("Configuration applied.")
 
 st.divider()
 run_btn = st.button("Run Analysis", type="primary", width='stretch')
