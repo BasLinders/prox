@@ -722,74 +722,74 @@ else:
 # strata, etc.), so a handful of extreme values don't dilute those reports.
 # Caps values rather than dropping rows - see prox.winsorize_series.
 # ---------------------------------------------------------------------------
-with st.form("configuration_form"):
-    st.divider()
-    st.header("3. Handle Outliers")
-    if "price" not in raw_df.columns:
-        st.caption("No revenue/price column detected - nothing to winsorize.")
-    else:
-        winsorize_enabled = st.checkbox(
-            "Winsorize Revenue/Price Outliers", value=False,
-            help=(
-                "Caps extreme values in the revenue/price column instead of "
-                "removing those rows, so a handful of outlier orders don't "
-                "dilute Average Order Value, revenue trend, or category "
-                "revenue breakdown in Business Insights."
-            )
+st.divider()
+st.header("3. Handle Outliers")
+if "price" not in raw_df.columns:
+    st.caption("No revenue/price column detected - nothing to winsorize.")
+else:
+    winsorize_enabled = st.checkbox(
+        "Winsorize Revenue/Price Outliers", value=False,
+        help=(
+            "Caps extreme values in the revenue/price column instead of "
+            "removing those rows, so a handful of outlier orders don't "
+            "dilute Average Order Value, revenue trend, or category "
+            "revenue breakdown in Business Insights."
         )
-        if winsorize_enabled:
-            w_col1, w_col2 = st.columns(2)
-            with w_col1:
-                winsorize_method_label = st.radio(
-                    "Method", ["Standard Deviation", "Percentile"], horizontal=True,
-                    help=(
-                        "Standard Deviation: caps at mean +/- N standard deviations. "
-                        "Percentile: caps at the Nth/100-Nth percentile band."
-                    )
+    )
+    if winsorize_enabled:
+        w_col1, w_col2 = st.columns(2)
+        with w_col1:
+            winsorize_method_label = st.radio(
+                "Method", ["Standard Deviation", "Percentile"], horizontal=True,
+                help=(
+                    "Standard Deviation: caps at mean +/- N standard deviations. "
+                    "Percentile: caps at the Nth/100-Nth percentile band."
                 )
-            with w_col2:
-                if winsorize_method_label == "Standard Deviation":
-                    winsorize_param = st.slider(
-                        "Std deviations", 1.0, 5.0, 3.0, 0.5,
-                        help="Values beyond mean +/- this many standard deviations are capped.",
-                    )
-                else:
-                    winsorize_param = st.slider(
-                        "Percentile cutoff", 0.5, 10.0, 1.0, 0.5,
-                        help="Caps at this percentile and its mirror (e.g. 1 = 1st/99th percentile).",
-                    )
-
-            winsorize_method = "std" if winsorize_method_label == "Standard Deviation" else "percentile"
-            clipped, lower, upper = winsorize_series(raw_df["price"], method=winsorize_method, param=winsorize_param)
-            n_capped = int(((raw_df["price"] < lower) | (raw_df["price"] > upper)).sum())
-
-            raw_df = raw_df.copy()
-            df_ready = df_ready.copy()
-            raw_df["price"] = clipped
-            df_ready["price"] = df_ready["price"].clip(lower, upper)
-
-            if n_capped > 0:
-                st.info(f"Capped {n_capped:,} value(s) to the range [{lower:,.2f}, {upper:,.2f}].")
+            )
+        with w_col2:
+            if winsorize_method_label == "Standard Deviation":
+                winsorize_param = st.slider(
+                    "Std deviations", 1.0, 5.0, 3.0, 0.5,
+                    help="Values beyond mean +/- this many standard deviations are capped.",
+                )
             else:
-                st.caption("No values fell outside the winsorization bounds - nothing was capped.")
+                winsorize_param = st.slider(
+                    "Percentile cutoff", 0.5, 10.0, 1.0, 0.5,
+                    help="Caps at this percentile and its mirror (e.g. 1 = 1st/99th percentile).",
+                )
 
-    # ---------------------------------------------------------------------------
-    # Data quality check - surfaced before filtering/analysis, so messy data is
-    # caught here instead of showing up as a confusing downstream result
-    # ---------------------------------------------------------------------------
-    st.divider()
-    st.header("4. Data Quality Check")
-    data_quality = check_data_quality(raw_df)
-    if data_quality["issues"]:
-        with st.expander(f"{len(data_quality['issues'])} data quality issue(s) found", expanded=True):
-            for issue in data_quality["issues"]:
-                st.warning(issue)
-    else:
-        st.success("No data quality issues detected.")
+        winsorize_method = "std" if winsorize_method_label == "Standard Deviation" else "percentile"
+        clipped, lower, upper = winsorize_series(raw_df["price"], method=winsorize_method, param=winsorize_param)
+        n_capped = int(((raw_df["price"] < lower) | (raw_df["price"] > upper)).sum())
 
-    # ---------------------------------------------------------------------------
-    # Filter events before analysis
-    # ---------------------------------------------------------------------------
+        raw_df = raw_df.copy()
+        df_ready = df_ready.copy()
+        raw_df["price"] = clipped
+        df_ready["price"] = df_ready["price"].clip(lower, upper)
+
+        if n_capped > 0:
+            st.info(f"Capped {n_capped:,} value(s) to the range [{lower:,.2f}, {upper:,.2f}].")
+        else:
+            st.caption("No values fell outside the winsorization bounds - nothing was capped.")
+
+# ---------------------------------------------------------------------------
+# Data quality check - surfaced before filtering/analysis, so messy data is
+# caught here instead of showing up as a confusing downstream result
+# ---------------------------------------------------------------------------
+st.divider()
+st.header("4. Data Quality Check")
+data_quality = check_data_quality(raw_df)
+if data_quality["issues"]:
+    with st.expander(f"{len(data_quality['issues'])} data quality issue(s) found", expanded=True):
+        for issue in data_quality["issues"]:
+            st.warning(issue)
+else:
+    st.success("No data quality issues detected.")
+
+# ---------------------------------------------------------------------------
+# Filter events before analysis
+# ---------------------------------------------------------------------------
+with st.form("configuration_form"):
     st.divider()
     st.header("5. Filter Events")
     st.caption(
