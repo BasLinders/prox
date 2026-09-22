@@ -463,6 +463,7 @@ in the file:
 | Revenue | Optional - unlocks AOV, revenue trend | `price`, `revenue`, `event_value` |
 | Purchase / conversion flag | Optional - unlocks repeat-buyer, cart abandonment | `purchase`, `transaction`, `conversion` |
 | Category | Optional - unlocks category revenue breakdown | `category`, `product_category` |
+| Device, traffic source, traffic medium | Optional - any low-cardinality column (2-20 unique values) is picked up automatically by Segment Comparison | any column name |
 
 If both a user ID and a session ID are present, PRoX groups cases by user by
 default, so the same user's several sessions form one case - letting you see
@@ -494,6 +495,11 @@ SELECT
   TIMESTAMP_MICROS(event_timestamp)                   AS event_timestamp,
   ecommerce.purchase_revenue                          AS price,
   (SELECT item_category FROM UNNEST(items) LIMIT 1)   AS category,
+  device.category                                     AS device_category,
+  COALESCE(session_traffic_source_last_click.manual_campaign.source,
+           traffic_source.source)                     AS traffic_source,
+  COALESCE(session_traffic_source_last_click.manual_campaign.medium,
+           traffic_source.medium)                     AS traffic_medium,
   IF(event_name = 'purchase', 1, 0)                   AS purchase,
   IF(event_name = 'add_to_cart', 1, 0)                AS add_to_cart
 FROM

@@ -10,10 +10,15 @@ isolated from the rest of the UI.
 Returns extracted data as CSV bytes so it flows through the exact same
 load_and_validate_csv() path the CSV-upload source already uses -- no
 prox/ engine changes needed. extract_event_log() is called with
-session_id_param/include_user_id/include_purchase_revenue set below so its
-output (case_id, activity, timestamp, user_id, revenue) lands directly on
-PRoX's existing COLUMN_MAPPINGS (see docs/dev_roadmap.md's "BigQuery live
-data source" section for the full compatibility assessment).
+session_id_param/include_user_id/include_purchase_revenue/include_device/
+include_traffic_source/include_item_category set below so its output
+(case_id, activity, timestamp, user_id, revenue, device_category,
+traffic_source, traffic_medium, category) lands directly on PRoX's
+existing COLUMN_MAPPINGS, and the segment columns are picked up
+automatically by the Segment Comparison tab's generic low-cardinality
+column scan -- no prox/config.py changes needed either (see
+docs/dev_roadmap.md's "BigQuery live data source" section for the full
+compatibility assessment).
 
 Requires the optional `foe[bigquery]` extra and a filled-in
 .streamlit/secrets.toml -- both degrade to a clear on-screen message rather
@@ -185,21 +190,68 @@ def render_bigquery_source() -> Optional[bytes]:
         event_names_raw = st.text_input(
             "Event names (comma-separated, blank = all events in range)", value="",
         )
+        st.caption(
+            "If you restrict events, keep 'purchase' in the list - revenue is "
+            "only ever populated on purchase events, and GA4 export naming "
+            "conventions mean omitting it here makes every row's revenue "
+            "column come back empty."
+        )
     event_names = [e.strip() for e in event_names_raw.split(",") if e.strip()] if event_names_raw else []
 
     # session_id_param/include_user_id/include_purchase_revenue give
     # session-level cases with a real user_id + revenue column - see the
     # roadmap doc's "Recommended EventLogExtractionParams defaults" note.
+    # include_device/include_traffic_source/include_item_category add the
+    # standard GA4 segment dimensions (device_category, traffic_source,
+    # traffic_medium, category), assuming standard GA4 export naming
+    # conventions throughout.
     connection = BQConnectionConfig(project=project, dataset=dataset, location=default_location)
     date_range = DateRange(start_date=start_date, end_date=end_date)
-    params = EventLogExtractionParams(
-        connection=connection,
-        date_range=date_range,
-        session_id_param="ga_session_id",
-        include_user_id=True,
-        include_purchase_revenue=True,
-        event_names=event_names,
-    )
+    try:
+        params = EventLogExtractionParams(
+            connection=connection,
+            date_range=date_range,
+            session_id_param="ga_session_id",
+            include_user_id=True,
+            include_purchase_revenue=True,
+            include_device=True,
+            include_traffic_source=True,
+            include_item_category=True,
+            event_names=event_names,
+        )
+    except Exception as e:
+        st.error(f"Invalid configuration: {e}")
+        return st.session_state.get("bq_extracted_csv")
+
+    with st.expander("Verify columns before running (sample data)"):
+        st.caption(
+            "Pulls a small, capped sample (<=50 rows, narrowed to the most "
+            "recent day in the selected range) so you can check revenue, "
+            "device, traffic source, and category are actually populated in "
+            "this export before running the full extraction."
+        )
+        if st.button("Preview sample data"):
+            with st.spinner("Sampling BigQuery..."):
+                try:
+                    preview_df = engine.preview_columns(params)
+                except Exception as e:
+                    st.error(f"Preview failed: {e}")
+                    preview_df = None
+            if preview_df is not None:
+                if preview_df.empty:
+                    st.warning(
+                        "No rows in the sampled window - this doesn't "
+                        "necessarily mean the full range is empty, try "
+                        "widening the date range or check the dataset."
+                    )
+                else:
+                    st.dataframe(preview_df, width='stretch')
+                    non_null = preview_df.notna().sum()
+                    st.caption(
+                        f"Non-null values per column (out of {len(preview_df)} "
+                        "sampled rows): "
+                        + ", ".join(f"{col}={n}" for col, n in non_null.items())
+                    )
 
     if st.button("Estimate cost (dry run)"):
         sql = build_event_log(params)

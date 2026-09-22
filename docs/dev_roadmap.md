@@ -271,6 +271,38 @@ positioning. Also: `foe` requires Python ≥3.10 vs. PRoX's README-stated
 3.9+ base requirement — noted directly in `requirements.txt`'s `[bigquery]`
 comment as shipped, so this doesn't need a separate doc update.
 
+#### Segment/revenue wiring — resolved (2026-09-22)
+
+Revenue and standard GA4 segment dimensions (device, traffic source,
+category) were reported missing from live BigQuery extractions. Root
+cause for revenue: not a bug — `ecommerce.purchase_revenue` is only ever
+populated on `purchase` events, so it reads NULL elsewhere by design.
+`first-order-engine` (PR #14) added a validator rejecting
+`include_purchase_revenue=True` combined with a restricted `event_names`
+list that omits `'purchase'`, since that combination silently zeroes out
+every row's revenue. Device/traffic source/category had no extraction
+path at all (they live outside `event_params`, so `attribute_params`
+couldn't reach them) — fixed via three new `EventLogExtractionParams`
+flags: `include_device`, `include_traffic_source` (session-scoped
+last-click, COALESCEd to the event-level struct for older export
+schemas), `include_item_category`. A capped preview
+(`DataEngine.preview_columns()`, ≤50 rows, narrowed date window) was
+added alongside these so a caller can verify column data is populated
+before running a full extraction.
+
+`utility/bigquery_source.py` now sets all three new flags (matching the
+existing always-on `include_user_id`/`include_purchase_revenue` pattern —
+no UI toggle, since PRoX's downstream features want these whenever
+they're available), wraps `EventLogExtractionParams` construction in a
+try/except for the new validator, and adds a "Verify columns before
+running" expander that calls `preview_columns()` and shows per-column
+non-null counts. No `prox/config.py` changes were needed: `device_category`/
+`traffic_source`/`traffic_medium` aren't required concepts, they pass
+through as ordinary columns and are picked up automatically by the
+Segment Comparison tab's generic low-cardinality column scan. The static
+SQL template in `main.py` (for CSV-export users) was updated to match, so
+both of PRoX's GA4 data paths agree on column names.
+
 #### Open questions to resolve before implementation
 
 - Where does OAuth client registration (GCP project, redirect URI) live —
