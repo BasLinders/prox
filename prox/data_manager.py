@@ -7,6 +7,19 @@ from .config import COLUMN_MAPPINGS
 
 logger = logging.getLogger(__name__)
 
+# Activity-name values that mark a 'purchase' or 'add_to_cart' event, used to
+# derive those flag columns when the source data doesn't already have one --
+# e.g. a live BigQuery extract or a plain event-name CSV, where "purchase" is
+# only a *value* inside concept:name, not its own 0/1 column. Mirrors
+# prox.analytics's purchase_values/cart_values defaults and the 'purchase'/
+# 'add_to_cart' columns prox/mock_data.py bakes into every mock row, so real
+# and mock logs present the same schema to steps (e.g. main.py's sampling
+# stratify-column picker) that expect a literal binary column.
+_ACTIVITY_FLAG_COLUMNS = {
+    'purchase': ['purchase', 'has_purchase'],
+    'add_to_cart': ['add_to_cart', 'add_to_basket'],
+}
+
 
 def load_and_validate_csv(
     uploaded_file,
@@ -152,6 +165,16 @@ def load_and_validate_csv(
     except Exception as e:
         errors.append(f"Critical error parsing timestamps: {e}")
         return None, errors + notes, False
+
+    # --- Derive purchase / add_to_cart flags from activity names, if missing ---
+    for flag_col, activity_values in _ACTIVITY_FLAG_COLUMNS.items():
+        if flag_col in df.columns:
+            continue
+        pattern = '|'.join(activity_values)
+        matched = df['concept:name'].astype(str).str.lower().str.contains(pattern, na=False)
+        if matched.any():
+            df[flag_col] = matched
+            notes.append(f"Derived '{flag_col}' column from activity names matching {activity_values}.")
 
     has_category = 'category' in df.columns
     if not has_category:
