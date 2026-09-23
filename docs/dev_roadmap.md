@@ -304,6 +304,17 @@ Segment Comparison tab's generic low-cardinality column scan. The static
 SQL template in `main.py` (for CSV-export users) was updated to match, so
 both of PRoX's GA4 data paths agree on column names.
 
+`first-order-engine` later added a fourth flag, `include_geo` (adds
+`geo.country AS geo_country`), as a more reliable fallback segment
+dimension than `category` — GA4's automatic IP geolocation populates it
+regardless of the property's ecommerce/GTM setup, unlike `item_category`
+which depends on that setup actually being in place. `utility/
+bigquery_source.py` sets `include_geo=True` alongside the other always-on
+flags, and the `main.py` SQL template gained a matching `geo.country AS
+geo_country` line. Same reasoning as above applies: no `prox/config.py`
+change needed, `geo_country` is picked up automatically by the Segment
+Comparison tab's generic column scan.
+
 #### Open questions to resolve before implementation
 
 - Where does OAuth client registration (GCP project, redirect URI) live —

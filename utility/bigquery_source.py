@@ -11,10 +11,10 @@ Returns extracted data as CSV bytes so it flows through the exact same
 load_and_validate_csv() path the CSV-upload source already uses -- no
 prox/ engine changes needed. extract_event_log() is called with
 session_id_param/include_user_id/include_purchase_revenue/include_device/
-include_traffic_source/include_item_category set below so its output
-(case_id, activity, timestamp, user_id, revenue, device_category,
-traffic_source, traffic_medium, category) lands directly on PRoX's
-existing COLUMN_MAPPINGS, and the segment columns are picked up
+include_traffic_source/include_item_category/include_geo set below so its
+output (case_id, activity, timestamp, user_id, revenue, device_category,
+traffic_source, traffic_medium, category, geo_country) lands directly on
+PRoX's existing COLUMN_MAPPINGS, and the segment columns are picked up
 automatically by the Segment Comparison tab's generic low-cardinality
 column scan -- no prox/config.py changes needed either (see
 docs/dev_roadmap.md's "BigQuery live data source" section for the full
@@ -206,7 +206,10 @@ def render_bigquery_source() -> Optional[bytes]:
     # include_device/include_traffic_source/include_item_category add the
     # standard GA4 segment dimensions (device_category, traffic_source,
     # traffic_medium, category), assuming standard GA4 export naming
-    # conventions throughout.
+    # conventions throughout. include_geo adds geo_country, which -- unlike
+    # category -- comes from GA4's own automatic IP geolocation rather than
+    # the site's ecommerce/GTM setup, so it's a reliable fallback segment
+    # dimension even when category comes back empty.
     connection = BQConnectionConfig(project=project, dataset=dataset, location=default_location)
     date_range = DateRange(start_date=start_date, end_date=end_date)
     try:
@@ -219,6 +222,7 @@ def render_bigquery_source() -> Optional[bytes]:
             include_device=True,
             include_traffic_source=True,
             include_item_category=True,
+            include_geo=True,
             event_names=event_names,
         )
     except Exception as e:
@@ -229,8 +233,8 @@ def render_bigquery_source() -> Optional[bytes]:
         st.caption(
             "Pulls a small, capped sample (<=50 rows, narrowed to the most "
             "recent day in the selected range) so you can check revenue, "
-            "device, traffic source, and category are actually populated in "
-            "this export before running the full extraction."
+            "device, traffic source, category, and country are actually "
+            "populated in this export before running the full extraction."
         )
         if st.button("Preview sample data"):
             with st.spinner("Sampling BigQuery..."):
