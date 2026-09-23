@@ -7,3 +7,4 @@ venv/
 *.egg-info/
 .streamlit/secrets.toml
 .prox_cache/
+.prox_saved_runs/

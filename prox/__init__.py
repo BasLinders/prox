@@ -58,6 +58,13 @@ from .incremental import (
     cache_signature,
     DEFAULT_CACHE_DIR,
 )
+from .saved_runs import (
+    save_run,
+    list_saved_runs,
+    load_saved_run,
+    delete_saved_run,
+    DEFAULT_SAVED_RUNS_DIR,
+)
 from .predictive import (
     split_completed_in_progress,
     train_propensity_model,
@@ -108,6 +115,11 @@ __all__ = [
     "clear_cached_dataset",
     "cache_signature",
     "DEFAULT_CACHE_DIR",
+    "save_run",
+    "list_saved_runs",
+    "load_saved_run",
+    "delete_saved_run",
+    "DEFAULT_SAVED_RUNS_DIR",
     "split_completed_in_progress",
     "train_propensity_model",
     "analyze_propensity_drivers",

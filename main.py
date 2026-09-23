@@ -40,6 +40,11 @@ from prox import (
     clear_cached_dataset,
     cache_signature,
     DEFAULT_CACHE_DIR,
+    save_run,
+    list_saved_runs,
+    load_saved_run,
+    delete_saved_run,
+    DEFAULT_SAVED_RUNS_DIR,
     train_propensity_model,
     analyze_propensity_drivers,
     summarize_propensity_scores,
@@ -69,6 +74,22 @@ def _analyzed_activities(raw_df: pd.DataFrame, config: dict) -> list:
         if filtered_df is not None and not filtered_df.empty:
             df = filtered_df
     return sorted(df["concept:name"].dropna().astype(str).unique().tolist())
+
+
+def _svg_download_button(png_path: str, label: str = "Download High-Res (SVG)", key: str | None = None) -> None:
+    """Offers the SVG sibling of a process-map PNG for download, if it was
+    generated alongside it. SVG is vector, so it stays legible at any zoom
+    or print size, unlike the fixed-resolution PNG used for on-screen display."""
+    svg_path = os.path.splitext(png_path)[0] + ".svg"
+    if os.path.exists(svg_path):
+        with open(svg_path, "rb") as f:
+            st.download_button(
+                label,
+                data=f.read(),
+                file_name=os.path.basename(svg_path),
+                mime="image/svg+xml",
+                key=key,
+            )
 
 
 def _describe_reference_stages(stages: list) -> str:
@@ -520,11 +541,17 @@ ORDER BY
 
 st.header("1. Load Data")
 data_source = st.radio(
-    "Data source", ["Load cached dataset", "Upload CSV", "Connect to BigQuery"],
+    "Data source", ["Load cached dataset", "Load saved run", "Upload CSV", "Connect to BigQuery"],
     horizontal=True, key="data_source_choice",
 )
 
 loaded_from_cache = False
+loaded_from_saved_run = False
+# Which incremental-cache dataset_id (if any) backs the currently loaded
+# raw_df - used to couple a later "Save Event Log" with that cache instead
+# of writing a redundant second copy. Reset each rerun; set below by
+# whichever branch actually loaded from (or merged into) a cache.
+st.session_state["active_source_dataset_id"] = None
 
 if data_source == "Load cached dataset":
     known_datasets = list_cached_datasets(cache_dir=DEFAULT_CACHE_DIR)
@@ -556,6 +583,44 @@ if data_source == "Load cached dataset":
     load_messages = [f"Loaded cached dataset '{chosen_dataset_id}' ({len(raw_df):,} events, skipping upload/query)."]
     st.session_state["load_messages"] = load_messages
     loaded_from_cache = True
+    st.session_state["active_source_dataset_id"] = chosen_dataset_id
+elif data_source == "Load saved run":
+    known_runs = list_saved_runs(save_dir=DEFAULT_SAVED_RUNS_DIR)
+    if not known_runs:
+        st.info(
+            "No saved runs yet. Run an analysis, then use **Save Event Log** "
+            "next to the results to add one here for later."
+        )
+        st.stop()
+
+    run_options = {}
+    for m in known_runs:
+        link_note = f", linked to cache '{m['source_dataset_id']}'" if m.get("source_dataset_id") else ""
+        run_options[
+            f"{m.get('label')} — {m.get('n_events', 0):,} events, "
+            f"{m.get('n_cases', 0):,} cases, saved {m.get('saved_at', '?')}{link_note}"
+        ] = m.get("run_id")
+    chosen_run_label = st.selectbox("Saved run", list(run_options.keys()))
+    chosen_run_id = run_options[chosen_run_label]
+
+    saved_raw_df, saved_manifest, saved_run_error = load_saved_run(
+        chosen_run_id, save_dir=DEFAULT_SAVED_RUNS_DIR, cache_dir=DEFAULT_CACHE_DIR
+    )
+    if st.button("Delete this saved run"):
+        delete_saved_run(chosen_run_id, save_dir=DEFAULT_SAVED_RUNS_DIR)
+        st.rerun()
+    if saved_raw_df is None:
+        st.error(saved_run_error)
+        st.stop()
+
+    raw_df = saved_raw_df
+    case_grouping = saved_manifest.get("case_grouping", "user")
+    has_category = "category" in raw_df.columns
+    df_ready = _prepare_df_ready(raw_df)
+    load_messages = [f"Loaded saved run '{saved_manifest.get('label')}' ({len(raw_df):,} events)."]
+    st.session_state["load_messages"] = load_messages
+    loaded_from_saved_run = True
+    st.session_state["active_source_dataset_id"] = saved_manifest.get("source_dataset_id")
 elif data_source == "Connect to BigQuery":
     active_file_bytes = render_bigquery_source()
     if active_file_bytes is None:
@@ -608,11 +673,12 @@ else:
         st.info("Upload a CSV event log above to get started, or generate a mock one.")
         st.stop()
 
-if loaded_from_cache:
+if loaded_from_cache or loaded_from_saved_run:
+    source_desc = "this cache" if loaded_from_cache else "this saved run"
     st.caption(
-        f"Case grouping is fixed to how this cache was built: "
+        f"Case grouping is fixed to how {source_desc} was built: "
         f"**{'By user' if case_grouping == 'user' else 'By session'}**. "
-        "Clear the cache and reload from a fresh upload/query to change it."
+        "Load a fresh upload/query to change it."
     )
 else:
     case_grouping_label = st.radio(
@@ -650,6 +716,10 @@ if raw_df is None:
             st.warning(msg)
     st.stop()
 
+# Needed later if the user clicks "Save Event Log" after a run - saved runs
+# record the case grouping they were built with, same as the cache manifest.
+st.session_state["case_grouping"] = case_grouping
+
 # ---------------------------------------------------------------------------
 # Incremental analysis - opt-in, applied right after a fresh upload is
 # loaded/validated but before anything downstream (outlier handling,
@@ -670,6 +740,8 @@ if loaded_from_cache:
         f"Not applicable - '{chosen_dataset_id}' was loaded directly from cache above, "
         "so there's no new upload/query to merge in this run."
     )
+elif loaded_from_saved_run:
+    st.caption("Not applicable - a saved run was loaded directly above, so there's no new upload/query to merge in this run.")
 else:
     st.caption(
         "Optional: merge this upload with previously cached data for the same "
@@ -719,6 +791,11 @@ else:
             # (a fresh seed, or a case-grouping mismatch that skipped the merge).
             if incremental_stats.get("merged"):
                 df_ready = _prepare_df_ready(raw_df)
+            # merge_incremental writes raw_df through to the cache for both the
+            # seed and actual-merge cases - only a grouping mismatch skips that
+            # write, leaving raw_df un-coupled from this dataset_id.
+            if not any("Skipping the merge" in msg for msg in incremental_messages):
+                st.session_state["active_source_dataset_id"] = dataset_id.strip()
 
             if st.button("Clear cache for this Dataset ID"):
                 clear_cached_dataset(dataset_id.strip(), cache_dir=DEFAULT_CACHE_DIR)
@@ -1006,7 +1083,7 @@ def _render_results_tabs():
     # Top-level metrics strip
     summary = results.get("log_summary", {})
     if summary:
-        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1.2])
+        c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1, 1.2, 1.2])
         c1.metric("Cases", f"{summary.get('Number of Cases', 0):,}")
         c2.metric("Events", f"{summary.get('Number of Events', 0):,}")
         c3.metric("Activities", summary.get("Number of Unique Activities", 0))
@@ -1019,6 +1096,60 @@ def _render_results_tabs():
                 mime="text/html",
                 width='stretch',
             )
+        with c6:
+            event_log_df = st.session_state.get("df")
+            if event_log_df is not None:
+                st.download_button(
+                    "Download Event Log",
+                    data=event_log_df.to_csv(index=False).encode("utf-8"),
+                    file_name="prox_event_log.csv",
+                    mime="text/csv",
+                    width='stretch',
+                    help="Download the event log used for this run as a CSV, for a "
+                         "one-off copy. To pick it back up in-app later, use "
+                         "'Save Event Log to Library' below instead.",
+                )
+
+        event_log_df = st.session_state.get("df")
+        active_source_dataset_id = st.session_state.get("active_source_dataset_id")
+        if event_log_df is not None:
+            with st.expander("Save Event Log to Library"):
+                st.caption(
+                    "Register this run's event log so you can pick it back up later "
+                    "from Step 1 → **Load saved run**, without re-running conformance "
+                    "checks or other configurables. Useful when saving separate runs "
+                    "for different clients."
+                )
+                if active_source_dataset_id:
+                    st.caption(
+                        f"This event log is already cached as '{active_source_dataset_id}' - "
+                        "saving will link to that cache instead of storing a second copy."
+                    )
+                save_c1, save_c2 = st.columns([3, 1])
+                with save_c1:
+                    save_label = st.text_input(
+                        "Label (e.g. client name)",
+                        value=active_source_dataset_id or "",
+                        key="save_run_label",
+                        label_visibility="collapsed",
+                        placeholder="Label (e.g. client name)",
+                    )
+                with save_c2:
+                    if st.button("Save to Library", width='stretch'):
+                        if not save_label.strip():
+                            st.warning("Enter a label first.")
+                        else:
+                            manifest = save_run(
+                                event_log_df,
+                                save_label.strip(),
+                                st.session_state.get("case_grouping", "user"),
+                                source_dataset_id=active_source_dataset_id,
+                                save_dir=DEFAULT_SAVED_RUNS_DIR,
+                            )
+                            st.success(
+                                f"Saved as '{manifest['label']}'. Load it later from "
+                                "Step 1 → **Load saved run**."
+                            )
 
     st.divider()
 
@@ -1073,6 +1204,7 @@ def _render_results_tabs():
             hp = viz.get("happy_path")
             if hp and os.path.exists(hp):
                 st.image(hp, width='stretch')
+                _svg_download_button(hp, key="dl_svg_happy_path")
             else:
                 st.info("Happy path image not available. Check that Graphviz is installed.")
 
@@ -1082,6 +1214,7 @@ def _render_results_tabs():
             mf = viz.get("bottlenecks")
             if mf and os.path.exists(mf):
                 st.image(mf, width='stretch')
+                _svg_download_button(mf, key="dl_svg_main_flow")
             else:
                 st.info("Main flow image not available.")
 
@@ -1453,12 +1586,14 @@ def _render_results_tabs():
                     st.caption("Discovered from your data")
                     if ref_state["discovered_img"] and os.path.exists(ref_state["discovered_img"]):
                         st.image(ref_state["discovered_img"], width='stretch')
+                        _svg_download_button(ref_state["discovered_img"], key="dl_svg_discovered")
                     else:
                         st.info("Not available.")
                 with img_c2:
                     st.caption("Reference model")
                     if ref_state["reference_img"] and os.path.exists(ref_state["reference_img"]):
                         st.image(ref_state["reference_img"], width='stretch')
+                        _svg_download_button(ref_state["reference_img"], key="dl_svg_reference")
                     else:
                         st.info("Not available.")
 
@@ -1868,6 +2003,7 @@ def _render_results_tabs():
                             hp = seg_results.get("visualizations", {}).get("happy_path")
                             if hp and os.path.exists(hp):
                                 st.image(hp, width='stretch')
+                                _svg_download_button(hp, key=f"dl_svg_segment_{seg_value}")
                             else:
                                 st.info("Not available.")
                 else:

@@ -44,6 +44,18 @@ def visualize_focused_insights(
             for event in trace:
                 event['concept:name'] = str(event['concept:name'])
 
+    def _write_png_and_svg(gviz, output_path: str) -> None:
+        # SVG is vector, so it stays sharp at any zoom/print size - the format
+        # offered for "high-res" downloads. Reuses the same rendered graph, so
+        # this costs one extra `dot` invocation rather than a re-discovery.
+        gviz.format = 'png'
+        with open(output_path, 'wb') as f:
+            f.write(gviz.pipe())
+        svg_path = os.path.splitext(output_path)[0] + '.svg'
+        gviz.format = 'svg'
+        with open(svg_path, 'wb') as f:
+            f.write(gviz.pipe())
+
     def _generate_bpmn(log_data, filename: str, title: str) -> str | None:
         output_path = os.path.join(abs_output, filename)
         threshold = 0.0 if "happy" in filename else 0.2
@@ -52,9 +64,7 @@ def visualize_focused_insights(
             tree = pm4py.discover_process_tree_inductive(log_data, noise_threshold=threshold)
             bpmn_graph = pm4py.convert_to_bpmn(tree)
             gviz = bpmn_visualizer.apply(bpmn_graph)
-            gviz.format = 'png'
-            with open(output_path, 'wb') as f:
-                f.write(gviz.pipe())
+            _write_png_and_svg(gviz, output_path)
             logger.info("%s saved: %s", title, output_path)
             return output_path
         except Exception as e:
@@ -62,9 +72,7 @@ def visualize_focused_insights(
             try:
                 net, im, fm = pm4py.discover_petri_net_inductive(log_data, noise_threshold=threshold)
                 gviz = pn_visualizer.apply(net, im, fm)
-                gviz.format = 'png'
-                with open(output_path, 'wb') as f:
-                    f.write(gviz.pipe())
+                _write_png_and_svg(gviz, output_path)
                 logger.info("%s (Petri Net) saved: %s", title, output_path)
                 return output_path
             except Exception as e2:
@@ -113,6 +121,12 @@ def render_petri_net(net, im, fm, output_path: str) -> str | None:
         gviz = pn_visualizer.apply(net, im, fm)
         gviz.format = 'png'
         with open(output_path, 'wb') as f:
+            f.write(gviz.pipe())
+        # SVG is vector, so it stays sharp at any zoom/print size - the format
+        # offered for "high-res" downloads.
+        svg_path = os.path.splitext(output_path)[0] + '.svg'
+        gviz.format = 'svg'
+        with open(svg_path, 'wb') as f:
             f.write(gviz.pipe())
         return output_path
     except Exception as e:
