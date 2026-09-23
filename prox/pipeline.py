@@ -1,6 +1,5 @@
 import logging
 import pandas as pd
-import pm4py
 from typing import Callable, Dict, Any
 
 from .discovery import perform_process_discovery
@@ -275,14 +274,9 @@ def run_full_analysis(
     # Step 5b: Visualisation
     # -------------------------------------------------------------------------
     logger.info("--- Step 5b: Visualisation ---")
-    log_for_vis = (
-        pm4py.convert_to_event_log(log_df)
-        if isinstance(log_df, pd.DataFrame) else log_df
-    )
-
     vis_cfg = config.get("visualisation_params", {})
     happy_img, main_img = visualize_focused_insights(
-        log_for_vis,
+        log_df,
         output_folder=output_folder,
         bottleneck_top_k=vis_cfg.get("bottleneck_top_k", 15)
     )

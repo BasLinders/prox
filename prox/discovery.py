@@ -8,6 +8,8 @@ from pm4py.algo.discovery.heuristics import algorithm as heuristics_miner
 from pm4py.objects.conversion.process_tree import converter as pt_converter
 from pm4py.objects.conversion.dfg import converter as dfg_converter
 
+from .data_manager import to_pm4py_frame
+
 logger = logging.getLogger(__name__)
 
 
@@ -116,9 +118,9 @@ def perform_process_discovery(
         return None, errors, messages
 
     try:
-        log = pm4py.convert_to_event_log(event_log_df)
+        log = to_pm4py_frame(event_log_df)
     except Exception as e:
-        errors.append(f"Error converting DataFrame to PM4Py EventLog: {e}")
+        errors.append(f"Error preparing event log for PM4Py: {e}")
         return None, errors, messages
 
     entry = DISCOVERY_ALGORITHMS.get(discovery_algo)

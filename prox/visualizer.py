@@ -4,9 +4,10 @@ import pandas as pd
 import pm4py
 from typing import Union, Dict, List, Tuple
 
-from pm4py.algo.filtering.log.variants import variants_filter
 from pm4py.visualization.bpmn import visualizer as bpmn_visualizer
 from pm4py.visualization.petri_net import visualizer as pn_visualizer
+
+from .data_manager import to_pm4py_frame
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +33,16 @@ def visualize_focused_insights(
     abs_output = os.path.abspath(output_folder)
     os.makedirs(abs_output, exist_ok=True)
 
-    # Normalise all activity labels to strings to prevent PM4Py serialisation issues
-    for trace in event_log:
-        trace.attributes['concept:name'] = str(trace.attributes.get('concept:name', 'Unknown'))
-        for event in trace:
-            event['concept:name'] = str(event['concept:name'])
+    # Normalise all activity labels to strings to prevent PM4Py serialisation
+    # issues. A DataFrame is passed to PM4Py as-is (see to_pm4py_frame) rather
+    # than converted to an EventLog, which costs ~18x the memory.
+    if isinstance(event_log, pd.DataFrame):
+        event_log = to_pm4py_frame(event_log)
+    else:
+        for trace in event_log:
+            trace.attributes['concept:name'] = str(trace.attributes.get('concept:name', 'Unknown'))
+            for event in trace:
+                event['concept:name'] = str(event['concept:name'])
 
     def _generate_bpmn(log_data, filename: str, title: str) -> str | None:
         output_path = os.path.join(abs_output, filename)
@@ -70,8 +76,11 @@ def visualize_focused_insights(
     try:
         variants = pm4py.get_variants_as_tuples(event_log)
         if variants:
-            top_variant = max(variants, key=lambda x: len(variants[x]))
-            happy_log = variants_filter.apply(event_log, [top_variant])
+            # Values are trace lists for an EventLog, plain counts for a DataFrame.
+            top_variant = max(
+                variants, key=lambda x: variants[x] if isinstance(variants[x], int) else len(variants[x])
+            )
+            happy_log = pm4py.filter_variants(event_log, [top_variant])
             happy_output = _generate_bpmn(happy_log, "happy_path_model.png", "Happy Path")
         else:
             logger.warning("No variants found in log for happy path generation.")

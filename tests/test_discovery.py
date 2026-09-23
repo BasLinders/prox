@@ -60,3 +60,20 @@ def test_inductive_miner_noise_threshold_actually_affects_the_model():
     net_high, im_high, fm_high, _ = _discover_inductive_miner(log, noise_threshold=0.9)
 
     assert (len(net_low.places), len(net_low.transitions)) != (len(net_high.places), len(net_high.transitions))
+
+
+@pytest.mark.parametrize("algo", ["inductive_miner", "heuristics_miner", "dfg"])
+def test_discovery_uses_timestamp_order_not_row_order(algo):
+    """Discovery hands PM4Py a time-sorted DataFrame (to_pm4py_frame), so the
+    model can't depend on file row order - which isn't time order once a
+    user-level case spans overlapping sessions."""
+    raw = generate_mock_event_log(n_sessions=60, seed=3)
+    df, _, _ = load_and_validate_csv(io.BytesIO(raw.to_csv(index=False).encode()), case_grouping='user')
+    shuffled = df.sample(frac=1, random_state=7).reset_index(drop=True)
+
+    def signature(frame):
+        (net, _im, _fm), errors, _ = perform_process_discovery(frame, discovery_algo=algo)
+        assert errors == []
+        return sorted(str(t.label) for t in net.transitions), len(net.places), len(net.arcs)
+
+    assert signature(df) == signature(shuffled)
