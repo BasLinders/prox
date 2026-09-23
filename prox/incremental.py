@@ -146,15 +146,17 @@ def load_cached_dataset(
             )
             return None, None
 
-        cached_df = pd.read_csv(data_path, compression="gzip", **_READ_CSV_NA_KWARGS)
+        # Told upfront rather than fixed up after: without a dtype hint, read_csv
+        # infers types per chunk, so a mix of numeric-looking and hashed IDs in
+        # case:concept:name/user_id triggers a DtypeWarning and can round-trip as a
+        # mixed-type object column - which later breaks Arrow serialization for
+        # st.dataframe. Unmatched keys (e.g. no user_id column) are ignored by pandas.
+        cached_df = pd.read_csv(
+            data_path, compression="gzip",
+            dtype={'case:concept:name': str, 'user_id': str},
+            **_READ_CSV_NA_KWARGS,
+        )
         cached_df['time:timestamp'] = pd.to_datetime(cached_df['time:timestamp'])
-        cached_df['case:concept:name'] = cached_df['case:concept:name'].astype(str)
-        if 'user_id' in cached_df.columns:
-            # Without an explicit dtype, read_csv infers per-chunk, so a mix of
-            # numeric-looking and hashed user IDs (see DtypeWarning on load) round-trips
-            # as a mixed-type object column - which later breaks Arrow serialization
-            # for st.dataframe. Force it back to the str dtype it was written in.
-            cached_df['user_id'] = cached_df['user_id'].astype(str)
         return cached_df, manifest
     except (OSError, json.JSONDecodeError, pd.errors.ParserError, KeyError) as e:
         logger.warning("Cached dataset '%s' unreadable, treating as absent: %s", dataset_id, e)
