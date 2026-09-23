@@ -1437,65 +1437,66 @@ def _render_results_tabs():
         if ref_raw_df is None or "concept:name" not in ref_raw_df.columns:
             st.info("Run an analysis first to enable reference-model conformance checking.")
         else:
-            ref_mode = st.radio(
-                "Reference model source",
-                ["Define expected path", "Import a BPMN file"],
-                horizontal=True,
-                key="ref_mode",
-            )
-
-            ref_stages = []
-            ref_uploaded_bpmn = None
-
-            if ref_mode == "Define expected path":
-                ref_activities = _analyzed_activities(ref_raw_df, st.session_state.get("config", {}))
-                ref_selected_activities = st.multiselect(
-                    "Expected activities, in order",
-                    options=ref_activities,
-                    key="ref_selected_activities",
-                    help="Activities are added to the reference path in the order you select them."
+            with st.form("reference_model_form"):
+                ref_mode = st.radio(
+                    "Reference model source",
+                    ["Define expected path", "Import a BPMN file"],
+                    horizontal=True,
+                    key="ref_mode",
                 )
 
-                if ref_selected_activities:
-                    st.caption("Configure each step:")
-                    skip_next = False
-                    for i, act in enumerate(ref_selected_activities):
-                        if skip_next:
-                            skip_next = False
-                            continue
+                ref_stages = []
+                ref_uploaded_bpmn = None
 
-                        has_next = i + 1 < len(ref_selected_activities)
-                        cols = st.columns([2, 2, 2, 2])
-                        with cols[0]:
-                            st.write(f"**{act}**")
-                        with cols[1]:
-                            step_type = st.selectbox(
-                                "Type", ["Required", "Optional", "Repeatable"],
-                                key=f"ref_type_{act}", label_visibility="collapsed"
-                            )
-                        with cols[2]:
-                            combine_choice = st.checkbox(
-                                "Choice with next", key=f"ref_choice_{act}", disabled=not has_next
-                            )
-                        with cols[3]:
-                            combine_parallel = st.checkbox(
-                                "Parallel with next", key=f"ref_parallel_{act}",
-                                disabled=not has_next or combine_choice
-                            )
+                if ref_mode == "Define expected path":
+                    ref_activities = _analyzed_activities(ref_raw_df, st.session_state.get("config", {}))
+                    ref_selected_activities = st.multiselect(
+                        "Expected activities, in order",
+                        options=ref_activities,
+                        key="ref_selected_activities",
+                        help="Activities are added to the reference path in the order you select them."
+                    )
 
-                        if has_next and (combine_choice or combine_parallel):
-                            next_act = ref_selected_activities[i + 1]
-                            stage_type = "choice" if combine_choice else "parallel"
-                            ref_stages.append({"activities": [act, next_act], "type": stage_type})
-                            skip_next = True
-                        else:
-                            ref_stages.append({"activities": [act], "type": step_type.lower()})
+                    if ref_selected_activities:
+                        st.caption("Configure each step:")
+                        skip_next = False
+                        for i, act in enumerate(ref_selected_activities):
+                            if skip_next:
+                                skip_next = False
+                                continue
 
-                    st.caption("Reference path: " + _describe_reference_stages(ref_stages))
-            else:
-                ref_uploaded_bpmn = st.file_uploader("BPMN file", type=["bpmn", "xml"], key="ref_bpmn_upload")
+                            has_next = i + 1 < len(ref_selected_activities)
+                            cols = st.columns([2, 2, 2, 2])
+                            with cols[0]:
+                                st.write(f"**{act}**")
+                            with cols[1]:
+                                step_type = st.selectbox(
+                                    "Type", ["Required", "Optional", "Repeatable"],
+                                    key=f"ref_type_{act}", label_visibility="collapsed"
+                                )
+                            with cols[2]:
+                                combine_choice = st.checkbox(
+                                    "Choice with next", key=f"ref_choice_{act}", disabled=not has_next
+                                )
+                            with cols[3]:
+                                combine_parallel = st.checkbox(
+                                    "Parallel with next", key=f"ref_parallel_{act}",
+                                    disabled=not has_next or combine_choice
+                                )
 
-            run_ref_btn = st.button("Check Conformance Against Reference Model", width='stretch')
+                            if has_next and (combine_choice or combine_parallel):
+                                next_act = ref_selected_activities[i + 1]
+                                stage_type = "choice" if combine_choice else "parallel"
+                                ref_stages.append({"activities": [act, next_act], "type": stage_type})
+                                skip_next = True
+                            else:
+                                ref_stages.append({"activities": [act], "type": step_type.lower()})
+
+                        st.caption("Reference path: " + _describe_reference_stages(ref_stages))
+                else:
+                    ref_uploaded_bpmn = st.file_uploader("BPMN file", type=["bpmn", "xml"], key="ref_bpmn_upload")
+
+                run_ref_btn = st.form_submit_button("Check Conformance Against Reference Model", width='stretch')
 
             if run_ref_btn:
                 ref_model = None
