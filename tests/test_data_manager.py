@@ -435,3 +435,18 @@ def test_refine_activity_labels_cleans_urls_per_row_not_by_first_row_only():
     })
     out = refine_activity_labels(df, target_activity='page_view', context_column='page_type')
     assert out['concept:name'].tolist() == ['page_view_PRODUCT', 'page_view_PRODUCT']
+
+
+def test_to_pm4py_frame_is_slim_and_time_sorted():
+    from prox.data_manager import to_pm4py_frame
+    df = pd.DataFrame({
+        'case:concept:name': ['b', 'a', 'a', 'b'],
+        'concept:name': pd.Categorical(['y', 'x2', 'x1', 'z']),
+        'time:timestamp': pd.to_datetime(['2026-01-01 10:00', '2026-01-01 09:05', '2026-01-01 09:00', '2026-01-01 09:30']),
+        'user_id': ['u', 'u', 'u', 'u'],
+    })
+    out = to_pm4py_frame(df)
+    assert list(out.columns) == ['case:concept:name', 'concept:name', 'time:timestamp']
+    assert out['concept:name'].tolist() == ['x1', 'x2', 'z', 'y']
+    assert not isinstance(out['concept:name'].dtype, pd.CategoricalDtype)
+    assert 'user_id' in df.columns  # input untouched

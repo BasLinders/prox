@@ -199,9 +199,7 @@ def profile_size(n_events: int, output_folder: str) -> Timer:
         )
 
     with timer.stage("7. Visualisation (BPMN + bottleneck PNGs)"):
-        import pm4py
-        log_for_vis = pm4py.convert_to_event_log(log_df)
-        visualize_focused_insights(log_for_vis, output_folder=output_folder)
+        visualize_focused_insights(log_df, output_folder=output_folder)
 
     with timer.stage("8. Business insights (repeat purchase)"):
         biz_cfg = config["business_params"]

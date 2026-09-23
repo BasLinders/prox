@@ -18,6 +18,22 @@ from .data_manager import sample_log_stratified
 
 logger = logging.getLogger(__name__)
 
+# Per-trace time limit for State Equation A* alignments. PM4Py's default is
+# unlimited, and on a noisy model with long traces the A* search space (and
+# the memory holding it) can grow without bound - one runaway trace could
+# stall the run or exhaust RAM. A trace that hits the limit gets no alignment
+# (PM4Py returns None) and is reported as timed out rather than counted.
+MAX_ALIGN_SECONDS_PER_TRACE = 30
+
+# Upper bound on the prefix log ETConformance precision builds. PM4Py turns
+# every unique prefix of every trace into its own trace and replays each one
+# from scratch, so cost grows with the square of trace length (measured
+# ~0.75KB and ~0.14ms per prefix event): user-level cases with thousands of
+# events could need tens of GB. Past this budget, traces are cut to a common
+# maximum length - the precision score barely moves (0.077 -> 0.075 going from
+# 200- to 800-event caps on a long-trace log), memory stays ~200MB worst case.
+MAX_PRECISION_PREFIX_EVENTS = 250_000
+
 # Stage 'type' -> ProcessTree operator, for stage types that combine multiple
 # activities into one node (choice = XOR between activities, parallel = AND).
 # 'required'/'optional'/'repeatable' are single-activity stage types handled
@@ -215,6 +231,38 @@ def calculate_fitness_in_batches(log, net, im, fm, batch_size: int = 200) -> flo
     return total_fitness / total_traces if total_traces > 0 else 0.0
 
 
+def cap_traces_for_precision(log, budget: int = MAX_PRECISION_PREFIX_EVENTS):
+    """
+    Truncates traces to the longest common length whose prefix log fits in
+    `budget` events (see MAX_PRECISION_PREFIX_EVENTS). The cost estimate is
+    per unique variant, since identical traces share all their prefixes.
+
+    Returns
+    -------
+    log : EventLog - the input unchanged if it already fits, else truncated.
+    cap : int or None - the per-trace event cap applied, None if untouched.
+    """
+    lengths = [len(v) for v in {tuple(e['concept:name'] for e in trace) for trace in log}]
+
+    def cost(cap):
+        return sum(min(n, cap) * (min(n, cap) - 1) // 2 for n in lengths)
+
+    longest = max(lengths, default=0)
+    if cost(longest) <= budget:
+        return log, None
+
+    lo, hi = 2, longest
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if cost(mid) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+
+    capped = EventLog([Trace(list(trace)[:lo], attributes=trace.attributes) for trace in log])
+    return capped, lo
+
+
 def parse_alignments(clean_log, alignments: list) -> list:
     """
     Parses raw alignment results into per-case fitness and deviation dicts.
@@ -322,7 +370,11 @@ def _fitness_state_equation_alignments(
             rfm[list(process_model.places)[-1]] = 1
 
     max_cores = max(1, os.cpu_count() - 1) if cores == 0 else cores
-    params = {'cores': max_cores, 'ret_tuple_as_trans_desc': True}
+    params = {
+        'cores': max_cores,
+        'ret_tuple_as_trans_desc': True,
+        'max_align_time_trace': MAX_ALIGN_SECONDS_PER_TRACE,
+    }
 
     if optimize_variants:
         # Group identical traces and align once per unique variant
@@ -357,6 +409,12 @@ def _fitness_state_equation_alignments(
 
     method_results = {}
     valid = [a for a in final_alignments if isinstance(a, dict) and 'cost' in a]
+    timed_out = sum(1 for a in final_alignments if a is None)
+    if timed_out:
+        logger.warning(
+            "%d of %d trace(s) exceeded the %ds alignment limit and were skipped.",
+            timed_out, len(final_alignments), MAX_ALIGN_SECONDS_PER_TRACE
+        )
     if valid:
         f_vals = []
         for i, align in enumerate(final_alignments):
@@ -375,9 +433,16 @@ def _fitness_state_equation_alignments(
         method_results['alignments'] = {
             'total': len(valid),
             'average_cost': float(np.mean([a['cost'] for a in valid])),
-            'note': f"Calculated on {len(valid)} traces"
+            'note': f"Calculated on {len(valid)} traces",
+            'timed_out': timed_out,
         }
         method_results['case_analysis'] = {'cases': parse_alignments(clean_log, final_alignments)}
+    elif timed_out:
+        method_results['fitness'] = {
+            'log_fitness': 0.0,
+            'note': f"Not calculated: all {timed_out} trace(s) exceeded the alignment time limit",
+        }
+        method_results['alignments'] = {'total': 0, 'timed_out': timed_out}
 
     return method_results
 
@@ -499,13 +564,19 @@ def run_conformance_checking(
         if enable_detailed_analysis:
             try:
                 prec_input = sampled_log[:max_prec_cases] if len(sampled_log) > max_prec_cases else sampled_log
+                prec_input, prec_cap = cap_traces_for_precision(prec_input)
+                if prec_cap:
+                    logger.warning(
+                        "Long traces: precision computed on the first %d events of each case.", prec_cap
+                    )
                 logger.info("Calculating precision on %d traces.", len(prec_input))
                 prec = precision_evaluator.apply(
                     prec_input, process_model, initial_marking, final_marking,
                     variant=precision_evaluator.Variants.ETCONFORMANCE_TOKEN
                 )
                 results['precision'] = {
-                    'precision_score': prec if isinstance(prec, float) else prec.get('precision', 0)
+                    'precision_score': prec if isinstance(prec, float) else prec.get('precision', 0),
+                    'truncated_to': prec_cap,
                 }
             except Exception as e:
                 results['errors'].append(f"Precision calculation failed: {e}")
@@ -522,6 +593,12 @@ def run_conformance_checking(
                     max_align=max_align, cores=cores, optimize_variants=optimize_variants
                 )
                 results.update(method_results)
+                timed_out = results['alignments'].get('timed_out', 0)
+                if timed_out:
+                    results['errors'].append(
+                        f"{timed_out} trace(s) exceeded the {MAX_ALIGN_SECONDS_PER_TRACE}s alignment "
+                        "time limit and are excluded from fitness and deviations."
+                    )
             except Exception as e:
                 results['errors'].append(f"{entry['label']} fitness calculation failed: {e}")
 

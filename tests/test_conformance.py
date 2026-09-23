@@ -1,3 +1,4 @@
+import pandas as pd
 import pm4py
 import pytest
 
@@ -9,6 +10,7 @@ from prox.conformance import (
     import_reference_model_bpmn,
     diff_reference_model_coverage,
     _fitness_state_equation_alignments,
+    cap_traces_for_precision,
 )
 
 from conftest import make_event_log, make_simple_variant_log
@@ -390,3 +392,66 @@ def test_state_equation_alignments_uses_supplied_markings_not_topology_guess():
         log, net, im, fm, max_align=10, cores=1, optimize_variants=True
     )
     assert result['fitness']['log_fitness'] == pytest.approx(1.0)
+
+
+def test_alignment_time_limit_reports_timed_out_traces(perfect_model, monkeypatch):
+    """A trace that exceeds MAX_ALIGN_SECONDS_PER_TRACE gets no alignment from
+    PM4Py; it must be reported, not silently dropped from the fitness figures."""
+    import prox.conformance as conformance
+    monkeypatch.setattr(conformance, "MAX_ALIGN_SECONDS_PER_TRACE", -1)
+
+    df, (net, im, fm) = perfect_model
+    result = run_conformance_checking(
+        df, net, im, fm,
+        alignment_variant='state_equation_a_star',
+        perform_sampling=False
+    )
+    assert result['alignments']['timed_out'] == 3
+    assert result['fitness']['log_fitness'] == 0.0
+    assert any('alignment time limit' in e for e in result['errors'])
+
+
+def _long_trace_log(n_cases=3, n_events=2000):
+    """Few cases with thousands of events each - the shape user-level case
+    grouping produces for heavy users, where precision's prefix log explodes."""
+    base = pd.Timestamp('2024-01-01 00:00:00')
+    acts = ['a', 'b', 'c', 'd']
+    rows = [
+        (f'u{c}', acts[(i * (c + 1)) % 4], base + pd.Timedelta(seconds=i))
+        for c in range(n_cases) for i in range(n_events)
+    ]
+    return make_event_log(rows)
+
+
+def test_cap_traces_for_precision_leaves_short_logs_untouched():
+    log = pm4py.convert_to_event_log(make_simple_variant_log(n_cases=3))
+    capped, cap = cap_traces_for_precision(log)
+    assert cap is None
+    assert capped is log
+
+
+def test_cap_traces_for_precision_fits_budget():
+    log = pm4py.convert_to_event_log(_long_trace_log())
+    capped, cap = cap_traces_for_precision(log, budget=10_000)
+    assert cap is not None and cap < 2000
+    unique = {tuple(e['concept:name'] for e in t) for t in capped}
+    assert sum(len(v) * (len(v) - 1) // 2 for v in unique) <= 10_000
+    assert all(len(t) <= cap for t in capped)
+    assert len(capped) == len(log)
+
+
+def test_precision_on_long_traces_is_capped_not_exhausting_memory():
+    """Regression: 3 cases x 2000 events meant ~6M prefix events for
+    ETConformance precision; it must now finish, capped, and say so."""
+    df = _long_trace_log()
+    (net, im, fm), errors, _ = perform_process_discovery(df, discovery_algo='inductive_miner')
+    assert errors == []
+    result = run_conformance_checking(
+        df, net, im, fm,
+        alignment_variant='token_replay',
+        enable_detailed_analysis=True,
+        perform_sampling=False,
+    )
+    assert result['errors'] == []
+    assert result['precision']['truncated_to'] is not None
+    assert result['precision']['precision_score'] > 0

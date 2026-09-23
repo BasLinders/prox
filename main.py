@@ -152,7 +152,12 @@ def _prepare_df_ready(df: pd.DataFrame) -> pd.DataFrame:
     return df_ready
 
 
-@st.cache_data(show_spinner=False)
+# The caches below are capped with max_entries: unbounded, every distinct
+# upload / config / on-disk cache state kept its full DataFrames and results in
+# memory for the life of the server process, which only grows until restart.
+# Each cap keeps the current entry (plus the previous config's results, so
+# flipping back to it stays instant); older entries are evicted.
+@st.cache_data(show_spinner=False, max_entries=1)
 def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_grouping):
     """Loads + validates the CSV and applies label refinement/memory optimization.
     Cached on file content and loader params so re-running with the same
@@ -171,7 +176,7 @@ def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_gr
     return df, df_ready, messages, has_category
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=1)
 def _cached_merge_incremental(active_file_bytes, dataset_id, case_grouping, cache_dir, cache_sig, _raw_df):
     """Thin st.cache_resource wrapper around prox.merge_incremental, matching the
     caching convention used by _cached_load_and_prepare/_cached_run_full_analysis
@@ -202,7 +207,7 @@ def _cached_merge_incremental(active_file_bytes, dataset_id, case_grouping, cach
     return merge_incremental(_raw_df, dataset_id, case_grouping, cache_dir=cache_dir)
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=2)
 def _cached_run_full_analysis(df_ready, config, output_folder="output"):
     """Runs the full pipeline. Cached on the input data + config, so re-running
     with identical settings (e.g. clicking Run Analysis again) is instant
@@ -1243,6 +1248,12 @@ def _render_results_tabs():
             c1.metric("Fitness", f"{overall.get('fitness_score', 0):.1%}")
             c2.metric("Precision", f"{overall.get('precision_score', 0):.1%}")
             c3.metric("Quality", overall.get("quality_assessment", "N/A"))
+            prec_cap = conf.get("precision", {}).get("truncated_to")
+            if prec_cap:
+                st.caption(
+                    f"Precision is computed on the first {prec_cap} events of each case: "
+                    "on cases this long, the full calculation needs more memory than is safe."
+                )
 
         cases = conf.get("case_analysis", {}).get("cases", [])
         imperfect = sorted(
@@ -1252,6 +1263,12 @@ def _render_results_tabs():
 
         if cases:
             st.caption(f"{len(imperfect)} deviant case(s) out of {len(cases)} sampled.")
+        timed_out = conf.get("alignments", {}).get("timed_out", 0)
+        if timed_out:
+            st.warning(
+                f"{timed_out} trace(s) took too long to align and are left out of fitness "
+                "and the deviation table. Try Token Replay, a higher noise threshold, or a smaller sample."
+            )
             if imperfect:
                 dev_rows = [
                     {
