@@ -2,3 +2,11 @@
 # Streamlit's default upload cap (200 MB) is too small for real event logs.
 # Raised well beyond any realistic export size for local use.
 maxUploadSize = 20000
+
+# Long analysis runs can drop the browser's websocket, especially behind a
+# proxy such as Codespaces port forwarding ("Connection error"). Pinging the
+# client keeps the connection from looking idle to the proxy.
+websocketPingInterval = 30
+# If the connection still drops, keep the session (results, uploaded files)
+# alive for 30 minutes so the browser reconnects to it instead of starting over.
+disconnectedSessionTTL = 1800
