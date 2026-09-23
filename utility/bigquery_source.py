@@ -71,11 +71,13 @@ def render_bigquery_source() -> Optional[bytes]:
         st.error(
             "The BigQuery data source needs the optional `foe[bigquery]` extra "
             "(first-order-engine). Install it with:\n\n"
-            '`pip install "foe[bigquery] @ '
+            '`pip install --upgrade --force-reinstall "foe[bigquery] @ '
             'git+https://github.com/BasLinders/first-order-engine.git"`\n\n'
             "Note: this pulls in first-order-engine's core dependencies "
             "(including Prophet), which may need a compiled Stan backend on "
-            "first install."
+            "first install. `--upgrade --force-reinstall` matters for "
+            "reinstalls too - foe's version string never bumps, so a plain "
+            "`pip install` of the same URL won't pick up upstream changes."
         )
         return None
 

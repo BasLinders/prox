@@ -11,8 +11,11 @@ google-cloud-bigquery-storage
 # Optional: BigQuery live data source (docs/dev_roadmap.md). Not installed
 # by default - most users run PRoX CSV-only. Requires Python >=3.10 and
 # pulls in first-order-engine's core deps (incl. Prophet, which may need a
-# compiled Stan backend). Install with:
-#   pip install "foe[bigquery] @ git+https://github.com/BasLinders/first-order-engine.git"
+# compiled Stan backend). Install (or reinstall to pick up upstream changes -
+# foe's version string never bumps, so a plain `pip install` of the same URL
+# silently keeps a stale build; --upgrade --force-reinstall makes pip
+# actually re-clone) with:
+#   pip install --upgrade --force-reinstall "foe[bigquery] @ git+https://github.com/BasLinders/first-order-engine.git"
 
 # Optional: Predictive Insights / conversion propensity model
 # (docs/ML_roadmap.md). Not installed by default - most users run PRoX
