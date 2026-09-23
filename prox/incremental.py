@@ -149,6 +149,12 @@ def load_cached_dataset(
         cached_df = pd.read_csv(data_path, compression="gzip", **_READ_CSV_NA_KWARGS)
         cached_df['time:timestamp'] = pd.to_datetime(cached_df['time:timestamp'])
         cached_df['case:concept:name'] = cached_df['case:concept:name'].astype(str)
+        if 'user_id' in cached_df.columns:
+            # Without an explicit dtype, read_csv infers per-chunk, so a mix of
+            # numeric-looking and hashed user IDs (see DtypeWarning on load) round-trips
+            # as a mixed-type object column - which later breaks Arrow serialization
+            # for st.dataframe. Force it back to the str dtype it was written in.
+            cached_df['user_id'] = cached_df['user_id'].astype(str)
         return cached_df, manifest
     except (OSError, json.JSONDecodeError, pd.errors.ParserError, KeyError) as e:
         logger.warning("Cached dataset '%s' unreadable, treating as absent: %s", dataset_id, e)
