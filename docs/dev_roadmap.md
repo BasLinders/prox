@@ -11,7 +11,7 @@ current even when the detail lives elsewhere — this is the one page meant
 to answer "where does PRoX development actually stand?" without opening
 five files.
 
-Last assessed 2026-09-08, against `main` — 160 tests passing, `pyflakes`
+Last assessed 2026-09-23, against `main` — 201 tests passing, `pyflakes`
 clean.
 
 ---
@@ -29,6 +29,7 @@ clean.
 | Phase 6 — Session insight, reporting & data controls | Complete | below |
 | Phase 6b — Full-pipeline correctness pass | Complete | below |
 | Phase 7 — Incremental analysis (data-level caching) | Complete | below |
+| Phase 7b — High-res process map export & saved-run library | Complete | below |
 | ML layer (conversion propensity + drivers) | Engine shipped, UI roadmapped | `ML_roadmap.md` |
 | AI-assisted recommendations (optional, Gemini) | Roadmapped | `AI_summary_roadmap.md` |
 | Process mining capability gaps (5 items, by effort) | Roadmapped, not scoped | below |
@@ -443,6 +444,41 @@ mixing it with this cache would mean solving label churn (a case "in
 progress" at cache time can resolve to a labelled outcome once new data
 arrives) and model versioning, neither of which this module attempts. See
 `prox/incremental.py`'s module docstring for the full reasoning.
+
+### Phase 7b — High-res process map export & saved-run library
+
+**Shipped 2026-09-23** (`prox/saved_runs.py`, `prox/visualizer.py`, wired
+into `main.py`).
+
+**High-res process map export**: `visualize_focused_insights()` and
+`render_petri_net()` now render an SVG alongside every process-map PNG
+(happy path, main flow, per-segment happy paths, and the discovered/
+reference-model images in the Conformance tab), reusing the same rendered
+graphviz object so it costs one extra `dot` invocation rather than a
+re-discovery. SVG is vector, so activity names stay legible at any zoom or
+print size - the on-screen PNG was too low-resolution to read once
+exported. A "Download High-Res (SVG)" button sits next to each process map
+image.
+
+**Saved-run library**: a "Save Event Log to Library" action (next to the
+results header's existing report download) lets an analyst label and
+persist the event log behind a completed run, then pick it back up later
+from Step 1 → "Load saved run" - without re-running conformance checking,
+sampling, or any other configurable, which can be too slow to redo on
+demand. Unlike `prox/incremental.py`'s Dataset ID (a reused key for one
+recurring cache), a saved-run label is expected to repeat across saves
+(e.g. the same client saved every month), so each save gets its own
+`run_id` keyed by label + timestamp, never overwriting a prior entry.
+
+**Coupling with the incremental cache**: if the event log being saved is
+already sitting in an incremental-cache dataset (loaded via "Load cached
+dataset", or merged into one via Incremental Analysis), the saved-run
+manifest records that `source_dataset_id` and does not write a second copy
+of the data - loading it reads through to that cache instead. If the
+linked cache is later cleared, loading the saved run surfaces a clear
+error rather than a crash or stale data. Deleting a saved-run entry never
+touches the cache it links to, since that's a shared resource managed
+separately via "Clear cache for this Dataset ID".
 
 ### ML layer — engine slice
 
