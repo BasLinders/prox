@@ -28,9 +28,15 @@ A modular process mining tool for analysing customer journeys from any event log
 - **Business Insights** - Repeat buyer detection, inter-purchase timing, revenue multiplier (repeat vs. one-time buyers), average order value, cart abandonment rate, category-level revenue breakdown, and revenue-over-time trend.
 - **Funnel Analysis** - Conversion/drop-off rate across any sequence of activities you define, for any process in any industry — or let PRoX auto-derive a likely order from the data as a starting point.
 - **Segment Comparison** - Split the log by any low-cardinality column (e.g. device, traffic source) and compare health score, fitness, precision, repeat rate, and happy path side by side, optionally run in parallel across CPU cores.
+- **Predictive Insights** - Train a conversion-propensity classifier (logistic regression, k-fold cross-validated) on in-progress cases to estimate their likelihood of reaching a chosen "success" activity, and surface the activities most associated with converting vs. not. Aggregate/driver-level only — no per-case scoring. Optional extra: `pip install prox[ml]`.
+- **Incremental Analysis** - Merge a freshly-loaded export into a named, on-disk cached dataset instead of reprocessing a recurring log from scratch each time; pick up a previously cached dataset on a later run.
+- **Outlier Handling** - Opt-in winsorization of revenue/price outliers, capping by standard deviation or percentile, before discovery and analysis run.
+- **BigQuery Live Data Source** - Connect directly to BigQuery and extract a GA4-style event log instead of uploading a CSV. Optional extra: `pip install "foe[bigquery] @ git+https://github.com/BasLinders/first-order-engine.git"`, plus a `.streamlit/secrets.toml`.
+- **Mock Data Generator** - Generate a realistic mock e-commerce event log in-app to try the full workflow without any real data.
 - **Self-Contained HTML Reports** - Download a standalone report (no external dependencies, images embedded) for the full analysis or a segment comparison. Opens with a plain-language Executive Summary — health verdict, translated fitness/precision, biggest bottleneck, business/funnel highlights — for non-technical stakeholders, ahead of the detailed technical tables. Process-map diagrams are click-to-zoom.
-- **Fast, Cached, and Local** - Chunked CSV loading for files up to 500 MB, categorical downcasting to reduce RAM usage, and Streamlit-layer caching so re-running with unchanged inputs is near-instant. No cloud dependency and no GPU required — everything runs on your machine.
-- **Streamlit UI** - All results presented across seven tabs; no notebook required.
+- **Custom PDF Reports** - Build a scoped PDF report by opting into just the result sections you want, via `reportlab` (no system PDF dependencies).
+- **Fast, Cached, and Local** - Chunked CSV loading for files up to 500 MB, categorical downcasting to reduce RAM usage, and Streamlit-layer caching (with capped cache sizes and background-threaded analysis) so re-running with unchanged inputs is near-instant and long runs don't disconnect the session. No cloud dependency and no GPU required — everything runs on your machine.
+- **Streamlit UI** - All results presented across nine tabs; no notebook required.
 
 ---
 
@@ -51,6 +57,18 @@ pip install -r requirements.txt
 
 No compilation step is needed. The Cython conformance module from earlier versions has been replaced with pure Python.
 
+Two optional extras unlock features that most users won't need:
+
+```bash
+# Predictive Insights tab (conversion-propensity model)
+pip install "prox[ml]"
+
+# BigQuery live data source (also requires a filled-in .streamlit/secrets.toml)
+pip install "prox[bigquery]"
+```
+
+Both degrade gracefully to an on-screen message rather than crashing when their extra isn't installed.
+
 ---
 
 ## Usage
@@ -61,11 +79,13 @@ streamlit run main.py
 
 This opens the app in your browser. From there:
 
-1. **Upload** a CSV event log using the sidebar file uploader.
-2. **Configure** the discovery algorithm, noise threshold, conformance method, precision, CPU cores, and sample size in the sidebar.
-3. Click **Run Analysis**.
-4. Explore results across seven tabs: Process Maps, Variants, Bottlenecks, Conformance, Funnel, Business Insights, and Segment Comparison.
-5. **Download** a self-contained HTML report from the top of the page, or a segment comparison report from the Segment Comparison tab.
+1. **Load data** — upload a CSV, connect to BigQuery, load a previously cached incremental dataset, or generate a mock event log to try the app without any real data.
+2. **Merge into an incremental cache** (optional) if you're re-running a recurring export, so already-seen rows aren't reprocessed from scratch.
+3. **Handle outliers** (optional) by winsorizing revenue/price columns.
+4. **Configure** the discovery algorithm, noise threshold, conformance method, precision, CPU cores, event filters, and sampling (including stratification) inside the configuration form, then click **Apply Configuration**.
+5. Click **Run Analysis**.
+6. Explore results across nine tabs: Process Maps, Variants, Bottlenecks, Conformance, Funnel, Business Insights, Session Insights, Segment Comparison, and Predictive Insights.
+7. **Download** a self-contained HTML report from the top of the page, a segment comparison report from the Segment Comparison tab, or build a scoped custom PDF report from the results page.
 
 ### Using the engine directly
 
@@ -160,6 +180,10 @@ None of the above is e-commerce-only by requirement — the Funnel tab works on 
 
 Default `business_params`: `{"user_col": "user_id", "revenue_col": "event_value", "purchase_values": ["purchase", "has_purchase"]}`. Set `cart_values` (default `["add_to_cart", "add_to_basket"]`) to change cart-abandonment detection, or `funnel_steps` (default `None`, auto-derived from the data) to define an explicit, ordered funnel — the same option exposed interactively in the Funnel tab.
 
+### Outlier handling (winsorization)
+
+Winsorization of the `price`/revenue column is opt-in and UI-only (not part of `CONFIG`/`business_params`) — off by default. Two methods are available: capping at mean ± N standard deviations (N between 1 and 5, default 3.0), or capping at the [P, 100−P] percentile range (P between 0.5 and 10, default 1.0). To use it from the engine directly, call `winsorize_series()` from the `prox` package before running the pipeline.
+
 ### Data loading
 
 | Parameter | Default | Description |
@@ -192,20 +216,24 @@ Available filter types: `activity`, `crop`, `case_duration`, `endpoints`, `attri
 prox/               Engine package — import this from any Python script
 ├── __init__.py     Public API
 ├── config.py       Column mappings and default configuration
-├── data_manager.py CSV loading, cleaning, filtering, sampling
+├── data_manager.py CSV loading, cleaning, filtering, sampling, winsorization
 ├── discovery.py    Process discovery (Inductive, Heuristics Miners, DFG)
 ├── conformance.py  Fitness, precision, alignment-based trace deviations
 ├── analytics.py    Performance metrics, bottlenecks, business insights, funnel analysis
 ├── visualizer.py   BPMN and Petri net diagram generation
 ├── report.py       Self-contained HTML report export
 ├── segments.py     Segment comparison — runs the pipeline per segment, optionally in parallel
+├── incremental.py  On-disk cache for merging recurring exports across runs
+├── predictive.py   Conversion-propensity model (Predictive Insights tab, optional: prox[ml])
+├── mock_data.py    Mock GA4-style event log generator
 └── pipeline.py     Orchestrator — runs all stages in sequence
 
 main.py             Streamlit app (UI layer only)
-utility/            Standalone UI-layer tools main.py wires in - BigQuery data
-                    source (utility/bigquery_source.py) and the modular PDF
-                    report builder (utility/pdf_builder.py)
-tests/              pytest suite covering the prox/ engine
+utility/            Standalone UI-layer tools main.py wires in - BigQuery live
+                    data source (utility/bigquery_source.py, optional:
+                    prox[bigquery] + .streamlit/secrets.toml) and the modular,
+                    opt-in-sections PDF report builder (utility/pdf_builder.py)
+tests/              pytest suite covering the prox/ engine and utility/pdf_builder.py
 scripts/            Dev tooling (e.g. pipeline profiling), not part of the installable package
 docs/               Reference docs (see Documentation below) and development status
 output/             Generated PNGs and CSVs (created on first run)
