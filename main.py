@@ -43,6 +43,8 @@ from prox import (
     save_run,
     list_saved_runs,
     load_saved_run,
+    get_saved_run_manifest,
+    load_saved_results,
     delete_saved_run,
     DEFAULT_SAVED_RUNS_DIR,
     train_propensity_model,
@@ -121,6 +123,14 @@ def _describe_reference_stages(stages: list) -> str:
 # scale linearly with event count, so letting conformance scale too compounds
 # that at real volume).
 LARGE_CASE_COUNT_THRESHOLD = 2000
+
+# Session-state keys holding a run's output: the pipeline results plus each
+# tab's own follow-up analyses. Cleared together whenever that output stops
+# describing the loaded data (Clear Results, or loading a saved run).
+RESULT_STATE_KEYS = (
+    "results", "df", "segment_result", "funnel_result",
+    "funnel_segment_result", "reference_conformance_result",
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 
@@ -228,6 +238,39 @@ def _cached_merge_incremental(active_file_bytes, dataset_id, case_grouping, cach
     return merge_incremental(_raw_df, dataset_id, case_grouping, cache_dir=cache_dir)
 
 
+@st.cache_resource(show_spinner=False, max_entries=1)
+def _cached_load_cached_dataset(dataset_id, cache_dir, cache_sig):
+    """Loads an incremental-cache dataset and derives df_ready from it, once -
+    not on every rerun. Streamlit reruns the whole script on every widget
+    interaction, so calling load_cached_dataset directly re-read and re-parsed
+    the full gzip CSV each time the user touched a setting, while the previous
+    rerun's frames were still alive: on a large cache that peak ran the
+    process out of memory (ArrowMemoryError mid read_csv) while configuring
+    a run.
+
+    cache_sig (prox.cache_signature) makes this reload when the cache on disk
+    actually changes (a merge, or a clear). cache_resource rather than
+    cache_data for the same reason as _cached_merge_incremental: no pickled
+    defensive copy of a potentially very large frame on every hit.
+    """
+    df, manifest = load_cached_dataset(dataset_id, cache_dir=cache_dir)
+    if df is None:
+        return None, None, None
+    return df, manifest, _prepare_df_ready(df)
+
+
+@st.cache_resource(show_spinner=False, max_entries=1)
+def _cached_load_saved_run(run_id, save_dir, cache_dir, source_sig):
+    """Same as _cached_load_cached_dataset, for a saved run. A saved run's own
+    files never change once written, so run_id identifies its data - except a
+    cache-linked run, which reads through to its cache: source_sig is that
+    cache's signature, so the run reloads when the cache changes."""
+    df, manifest, error = load_saved_run(run_id, save_dir=save_dir, cache_dir=cache_dir)
+    if df is None:
+        return None, None, error, None
+    return df, manifest, None, _prepare_df_ready(df)
+
+
 @st.cache_resource(show_spinner=False, max_entries=2)
 def _cached_run_full_analysis(df_ready, config, output_folder="output"):
     """Runs the full pipeline. Cached on the input data + config, so re-running
@@ -304,6 +347,36 @@ def _cached_run_full_analysis(df_ready, config, output_folder="output"):
     return outcome.get("results")
 
 # ---------------------------------------------------------------------------
+# Settings restored from a saved run (Step 1 -> Load saved run), if one is
+# selected. Read here, before the sidebar renders, so the config widgets below
+# (sidebar, filter, sampling) start from the settings that run was made with
+# instead of the app defaults. Those widgets are keyed per _config_scope:
+# picking another run - or leaving saved runs - recreates them with the new
+# defaults, rather than keeping whatever was last set under the previous run.
+# ---------------------------------------------------------------------------
+restored_config = {}
+_config_scope = "default"
+if st.session_state.get("data_source_choice") == "Load saved run" and st.session_state.get("saved_run_choice"):
+    _restored_manifest = get_saved_run_manifest(st.session_state["saved_run_choice"], save_dir=DEFAULT_SAVED_RUNS_DIR)
+    if _restored_manifest and _restored_manifest.get("config"):
+        restored_config = _restored_manifest["config"]
+        _config_scope = _restored_manifest["run_id"]
+
+
+def _ck(name: str) -> str:
+    """Widget key for a config widget, scoped to the restored run (see above)."""
+    return f"cfg_{name}_{_config_scope}"
+
+
+def _restored(section: str, field: str, default):
+    return (restored_config.get(section) or {}).get(field, default)
+
+
+def _restored_filter_step(step_type: str):
+    return next((s for s in restored_config.get("filter_steps") or [] if s.get("type") == step_type), None)
+
+
+# ---------------------------------------------------------------------------
 # Sidebar - configuration
 # ---------------------------------------------------------------------------
 with st.sidebar:
@@ -312,35 +385,49 @@ with st.sidebar:
     st.divider()
 
     st.header("Discovery")
+    discovery_keys = list(DISCOVERY_ALGORITHMS.keys())
+    restored_discovery = _restored("discovery_params", "algorithm", None)
     discovery_algo = st.selectbox(
         "Algorithm",
-        list(DISCOVERY_ALGORITHMS.keys()),
+        discovery_keys,
+        index=discovery_keys.index(restored_discovery) if restored_discovery in discovery_keys else 0,
+        key=_ck("discovery_algo"),
         format_func=lambda key: DISCOVERY_ALGORITHMS[key]['label'],
         help="\n\n".join(
             f"**{v['label']}** - {v['help']}" for v in DISCOVERY_ALGORITHMS.values()
         )
     )
     noise_threshold = st.slider(
-        "Noise Threshold", 0.0, 0.8, 0.2, 0.05,
+        "Noise Threshold", 0.0, 0.8, float(_restored("discovery_params", "noise_threshold", 0.2)), 0.05,
+        key=_ck("noise_threshold"),
         help="Higher values produce a simpler model by filtering rare paths. Used by Inductive Miner only.",
         disabled=(discovery_algo != "inductive_miner")
     )
 
     st.divider()
     st.header("Conformance")
+    conformance_keys = list(CONFORMANCE_METHODS.keys())
+    restored_conformance = _restored("conformance_params", "algorithm", None)
     conformance_algo = st.selectbox(
         "Method",
-        list(CONFORMANCE_METHODS.keys()),
+        conformance_keys,
+        index=conformance_keys.index(restored_conformance) if restored_conformance in conformance_keys else 0,
+        key=_ck("conformance_algo"),
         format_func=lambda key: CONFORMANCE_METHODS[key]['label'],
         help="\n\n".join(
             f"**{v['label']}** - {v['help']}" for v in CONFORMANCE_METHODS.values()
         )
     )
-    calculate_precision = st.checkbox("Calculate Precision", value=True)
+    calculate_precision = st.checkbox(
+        "Calculate Precision", value=bool(_restored("conformance_params", "calculate_precision", True)),
+        key=_ck("calculate_precision"),
+    )
 
     cpu_count = os.cpu_count() or 1
     cores = st.number_input(
-        "CPU Cores", min_value=0, max_value=cpu_count, value=1, step=1,
+        "CPU Cores", min_value=0, max_value=cpu_count,
+        value=min(max(int(_restored("speed_params", "cores", 1)), 0), cpu_count), step=1,
+        key=_ck("cores"),
         help=(
             "Parallel alignment computation. 0 = use all available cores minus one. "
             "1 = sequential (default). Only used by State Equation A\\*, not Token Replay."
@@ -350,10 +437,7 @@ with st.sidebar:
 
     st.divider()
     if st.button("Clear Results", width='stretch'):
-        for key in (
-            "results", "df", "load_messages", "segment_result", "funnel_result",
-            "funnel_segment_result", "reference_conformance_result",
-        ):
+        for key in RESULT_STATE_KEYS + ("load_messages", "saved_results_note"):
             st.session_state.pop(key, None)
         st.rerun()
 
@@ -553,6 +637,12 @@ loaded_from_saved_run = False
 # of writing a redundant second copy. Reset each rerun; set below by
 # whichever branch actually loaded from (or merged into) a cache.
 st.session_state["active_source_dataset_id"] = None
+# Label of the saved run backing raw_df, if any - pre-fills "Save Event Log",
+# so re-saving a loaded run unchanged is recognised as a duplicate.
+st.session_state["active_saved_run_label"] = None
+if data_source != "Load saved run":
+    # Leaving saved runs means re-selecting one later should restore it again.
+    st.session_state.pop("restored_run_id", None)
 
 if data_source == "Load cached dataset":
     known_datasets = list_cached_datasets(cache_dir=DEFAULT_CACHE_DIR)
@@ -572,7 +662,10 @@ if data_source == "Load cached dataset":
     chosen_label = st.selectbox("Cached dataset", list(dataset_options.keys()))
     chosen_dataset_id = dataset_options[chosen_label]
 
-    cached_raw_df, cached_manifest = load_cached_dataset(chosen_dataset_id, cache_dir=DEFAULT_CACHE_DIR)
+    with st.spinner("Loading cached dataset..."):
+        cached_raw_df, cached_manifest, df_ready = _cached_load_cached_dataset(
+            chosen_dataset_id, DEFAULT_CACHE_DIR, cache_signature(chosen_dataset_id, cache_dir=DEFAULT_CACHE_DIR)
+        )
     if cached_raw_df is None:
         st.error(f"Could not load cached dataset '{chosen_dataset_id}'. It may have just been cleared.")
         st.stop()
@@ -580,7 +673,6 @@ if data_source == "Load cached dataset":
     raw_df = cached_raw_df
     case_grouping = cached_manifest.get("case_grouping", "user")
     has_category = "category" in raw_df.columns
-    df_ready = _prepare_df_ready(raw_df)
     load_messages = [f"Loaded cached dataset '{chosen_dataset_id}' ({len(raw_df):,} events, skipping upload/query)."]
     st.session_state["load_messages"] = load_messages
     loaded_from_cache = True
@@ -594,19 +686,30 @@ elif data_source == "Load saved run":
         )
         st.stop()
 
-    run_options = {}
+    run_labels = {}
     for m in known_runs:
         link_note = f", linked to cache '{m['source_dataset_id']}'" if m.get("source_dataset_id") else ""
-        run_options[
+        results_note = ", results saved" if m.get("has_results") else ""
+        run_labels[m.get("run_id")] = (
             f"{m.get('label')} — {m.get('n_events', 0):,} events, "
-            f"{m.get('n_cases', 0):,} cases, saved {m.get('saved_at', '?')}{link_note}"
-        ] = m.get("run_id")
-    chosen_run_label = st.selectbox("Saved run", list(run_options.keys()))
-    chosen_run_id = run_options[chosen_run_label]
-
-    saved_raw_df, saved_manifest, saved_run_error = load_saved_run(
-        chosen_run_id, save_dir=DEFAULT_SAVED_RUNS_DIR, cache_dir=DEFAULT_CACHE_DIR
+            f"{m.get('n_cases', 0):,} cases, saved {m.get('saved_at', '?')}{link_note}{results_note}"
+        )
+    chosen_run_id = st.selectbox(
+        "Saved run", list(run_labels.keys()), format_func=run_labels.get, key="saved_run_choice",
     )
+    # The config widgets (sidebar included) already rendered this run using
+    # whatever run was selected before - rerun once so they pick up this
+    # run's settings (see _config_scope above).
+    chosen_manifest = next(m for m in known_runs if m.get("run_id") == chosen_run_id)
+    if (chosen_run_id if chosen_manifest.get("config") else "default") != _config_scope:
+        st.rerun()
+
+    linked_dataset_id = chosen_manifest.get("source_dataset_id")
+    with st.spinner("Loading saved run..."):
+        saved_raw_df, saved_manifest, saved_run_error, saved_df_ready = _cached_load_saved_run(
+            chosen_run_id, DEFAULT_SAVED_RUNS_DIR, DEFAULT_CACHE_DIR,
+            cache_signature(linked_dataset_id, cache_dir=DEFAULT_CACHE_DIR) if linked_dataset_id else "standalone",
+        )
     if st.button("Delete this saved run"):
         delete_saved_run(chosen_run_id, save_dir=DEFAULT_SAVED_RUNS_DIR)
         st.rerun()
@@ -615,13 +718,46 @@ elif data_source == "Load saved run":
         st.stop()
 
     raw_df = saved_raw_df
+    df_ready = saved_df_ready
     case_grouping = saved_manifest.get("case_grouping", "user")
     has_category = "category" in raw_df.columns
-    df_ready = _prepare_df_ready(raw_df)
-    load_messages = [f"Loaded saved run '{saved_manifest.get('label')}' ({len(raw_df):,} events)."]
-    st.session_state["load_messages"] = load_messages
     loaded_from_saved_run = True
     st.session_state["active_source_dataset_id"] = saved_manifest.get("source_dataset_id")
+    st.session_state["active_saved_run_label"] = saved_manifest.get("label")
+
+    # Swap in this run's saved results (and the config they were made with)
+    # once, when it's first selected - not on every rerun, which would throw
+    # away a fresh Run Analysis the user did on top of it. Whatever the
+    # previously loaded data produced is dropped either way, since it
+    # describes a different event log.
+    if st.session_state.get("restored_run_id") != chosen_run_id:
+        st.session_state["restored_run_id"] = chosen_run_id
+        for key in RESULT_STATE_KEYS:
+            st.session_state.pop(key, None)
+        if saved_manifest.get("config"):
+            st.session_state["config"] = saved_manifest["config"]
+        saved_results, saved_results_note = load_saved_results(
+            saved_manifest, raw_df, save_dir=DEFAULT_SAVED_RUNS_DIR
+        )
+        if saved_results is not None:
+            st.session_state["results"] = saved_results
+            st.session_state["df"] = raw_df
+            saved_results_note = (
+                "success",
+                "Restored this run's saved results and settings below - no need to run the "
+                "analysis again, unless you change the settings.",
+            )
+        elif saved_results_note:
+            saved_results_note = ("warning", saved_results_note)
+        # Shown until the next Run Analysis replaces these results.
+        st.session_state["saved_results_note"] = saved_results_note
+        st.session_state["load_messages"] = [
+            f"Loaded saved run '{saved_manifest.get('label')}' ({len(raw_df):,} events)."
+        ]
+    load_messages = st.session_state.get("load_messages", [])
+    if st.session_state.get("saved_results_note"):
+        note_kind, note_text = st.session_state["saved_results_note"]
+        getattr(st, note_kind)(note_text)
 elif data_source == "Connect to BigQuery":
     active_file_bytes = render_bigquery_source()
     if active_file_bytes is None:
@@ -892,19 +1028,30 @@ with st.form("configuration_form"):
 
     filter_col1, filter_col2 = st.columns([1, 2])
     with filter_col1:
+        restored_activity_step = _restored_filter_step("activity")
         filter_mode_label = st.radio(
             "Mode",
             ["Remove selected events", "Keep only selected events"],
+            index=1 if restored_activity_step and restored_activity_step.get("mode") == "keep_events" else 0,
+            key=_ck("filter_mode"),
             help=(
                 "Remove: analyse everything except the events picked on the right. "
                 "Keep: analyse only the events picked on the right."
             )
         )
     with filter_col2:
+        if restored_config:
+            # No activity step saved means the run analysed every event - an
+            # empty selection, not the noise pre-selection.
+            restored_events = (restored_activity_step or {}).get("activities") or []
+            default_events = [a for a in restored_events if a in all_activities]
+        else:
+            default_events = default_noise_selection
         selected_events = st.multiselect(
             "Events",
             options=all_activities,
-            default=default_noise_selection,
+            default=default_events,
+            key=_ck("selected_events"),
             help=(
                 "Pre-checked with common non-process noise events (cookie banners, "
                 "scroll, JS errors, etc.) found in this log - add or remove freely."
@@ -922,10 +1069,14 @@ with st.form("configuration_form"):
         (a for a in all_activities if a.lower() in default_purchase_activities),
         endpoint_options[0],
     )
+    if restored_config:
+        restored_crop = (_restored_filter_step("crop") or {}).get("activity") or [endpoint_options[0]]
+        default_endpoint = restored_crop[0] if restored_crop[0] in endpoint_options else endpoint_options[0]
     endpoint_choice = st.selectbox(
         "Process end point",
         endpoint_options,
         index=endpoint_options.index(default_endpoint),
+        key=_ck("endpoint"),
         help=(
             "Crops every case's trace at the first occurrence of this activity - "
             "later events in the same case are dropped, and cases that never "
@@ -959,7 +1110,8 @@ with st.form("configuration_form"):
     st.divider()
     st.header("6. Sampling")
     enable_sampling = st.checkbox(
-        "Enable Sampling", value=False,
+        "Enable Sampling", value=bool(_restored("sampling_config", "enabled", False)),
+        key=_ck("enable_sampling"),
         help=(
             "Off by default: conformance checking runs on every case. Turn this "
             "on to check only a representative subset instead, which is much "
@@ -968,7 +1120,9 @@ with st.form("configuration_form"):
     )
     if enable_sampling:
         sample_size = st.number_input(
-            "Sample Size (cases)", min_value=50, max_value=1000, value=250, step=50,
+            "Sample Size (cases)", min_value=50, max_value=1000,
+            value=min(max(int(_restored("sampling_config", "total_sample_size", 250)), 50), 1000), step=50,
+            key=_ck("sample_size"),
             help="Cases used for conformance. Higher = more accurate but slower."
         )
 
@@ -993,10 +1147,15 @@ with st.form("configuration_form"):
         with strata_col1:
             strata_options = ["(none - plain random sample)"] + strata_candidates
             default_strata = next((c for c in strata_candidates if c.lower() in {"purchase", "has_purchase"}), strata_options[0])
+            restored_strata = _restored("sampling_config", "strata_col", None)
+            if restored_config and _restored("sampling_config", "enabled", False):
+                # 'case:concept:name' is the "(none)" sentinel - see strata_col below.
+                default_strata = restored_strata if restored_strata in strata_candidates else strata_options[0]
             strata_choice = st.selectbox(
                 "Prioritise a column when sampling",
                 strata_options,
                 index=strata_options.index(default_strata),
+                key=_ck("strata"),
                 help=(
                     "Stratified sampling: reserves part of the sample for cases where "
                     "this column = 1, so rare-but-important cases (e.g. purchases) "
@@ -1007,7 +1166,9 @@ with st.form("configuration_form"):
             )
         with strata_col2:
             max_priority_ratio = st.slider(
-                "Max priority share", 0.1, 1.0, 0.5, 0.05,
+                "Max priority share", 0.1, 1.0,
+                min(max(float(_restored("sampling_config", "max_priority_ratio", 0.5)), 0.1), 1.0), 0.05,
+                key=_ck("max_priority_ratio"),
                 help="Upper bound on how much of the sample can be priority cases.",
                 disabled=(strata_choice == strata_options[0]),
             )
@@ -1063,6 +1224,7 @@ if run_btn:
     st.session_state["results"] = results
     st.session_state["df"] = raw_df
     st.session_state["config"] = config
+    st.session_state.pop("saved_results_note", None)
 
 # ---------------------------------------------------------------------------
 # Display results
@@ -1130,7 +1292,7 @@ def _render_results_tabs():
                 with save_c1:
                     save_label = st.text_input(
                         "Label (e.g. client name)",
-                        value=active_source_dataset_id or "",
+                        value=st.session_state.get("active_saved_run_label") or active_source_dataset_id or "",
                         key="save_run_label",
                         label_visibility="collapsed",
                         placeholder="Label (e.g. client name)",
@@ -1146,11 +1308,19 @@ def _render_results_tabs():
                                 st.session_state.get("case_grouping", "user"),
                                 source_dataset_id=active_source_dataset_id,
                                 save_dir=DEFAULT_SAVED_RUNS_DIR,
+                                config=st.session_state.get("config"),
+                                results=results,
                             )
-                            st.success(
-                                f"Saved as '{manifest['label']}'. Load it later from "
-                                "Step 1 → **Load saved run**."
-                            )
+                            if manifest.get("already_saved"):
+                                st.info(
+                                    f"This exact run (same event log and settings) is already saved as "
+                                    f"'{manifest['label']}' ({manifest.get('saved_at', '?')}) - not adding a duplicate."
+                                )
+                            else:
+                                st.success(
+                                    f"Saved as '{manifest['label']}', with its settings and results. "
+                                    "Load it later from Step 1 → **Load saved run**."
+                                )
 
     st.divider()
 

@@ -481,6 +481,17 @@ recurring cache), a saved-run label is expected to repeat across saves
 (e.g. the same client saved every month), so each save gets its own
 `run_id` keyed by label + timestamp, never overwriting a prior entry.
 
+A save keeps the analysis, not just its input: the run's config goes in the
+manifest, and loading the entry restores it into the sidebar, filter, and
+sampling widgets; the pipeline results are pickled alongside (with the chart
+images copied out of the shared `output/` folder, which the next run
+overwrites), so the results tabs come back without clicking Run Analysis.
+Saving the same label with the same event log and config again returns the
+existing entry instead of adding a duplicate. For a cache-linked entry whose
+cache has since grown via an incremental merge, the saved results no longer
+describe the data, so only the settings are restored and the user is told
+to re-run.
+
 **Coupling with the incremental cache**: if the event log being saved is
 already sitting in an incremental-cache dataset (loaded via "Load cached
 dataset", or merged into one via Incremental Analysis), the saved-run
