@@ -25,6 +25,7 @@ from prox import (
     analyze_conversion_funnel,
     analyze_funnel_by_segment,
     check_data_quality,
+    drop_duplicate_events,
     generate_mock_csv_bytes,
     filter_event_log,
     run_conformance_checking,
@@ -165,14 +166,22 @@ if st.session_state.get("shutdown_requested"):
     st.stop()
 
 
-def _prepare_df_ready(df: pd.DataFrame) -> pd.DataFrame:
+def _prepare_df_ready(df: pd.DataFrame, remove_duplicates: bool) -> pd.DataFrame:
     """Derives the analysis-ready frame from an already-loaded/validated raw
-    log: category-dtype roundtrip, page_view label refinement, then memory
-    optimization. Shared by _cached_load_and_prepare (fresh upload) and the
-    incremental-merge step below (merged-with-cache upload), so both paths
-    produce df_ready the same way.
+    log: optional duplicate-event removal, category-dtype roundtrip, page_view
+    label refinement, then memory optimization. Shared by
+    _cached_load_and_prepare (fresh upload) and the incremental-merge step
+    below (merged-with-cache upload), so both paths produce df_ready the same
+    way.
+
+    Duplicates are dropped before label refinement, on the same raw
+    (case, activity, timestamp) key the Data Quality Check reports on and
+    raw_df is later deduplicated with, so df_ready and raw_df lose exactly
+    the same rows.
     """
     df_ready = df.copy()
+    if remove_duplicates:
+        df_ready, _ = drop_duplicate_events(df_ready)
     for col in df_ready.select_dtypes(include=["category"]).columns:
         df_ready[col] = df_ready[col].astype("object")
 
@@ -189,7 +198,7 @@ def _prepare_df_ready(df: pd.DataFrame) -> pd.DataFrame:
 # Each cap keeps the current entry (plus the previous config's results, so
 # flipping back to it stays instant); older entries are evicted.
 @st.cache_data(show_spinner=False, max_entries=1)
-def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_grouping):
+def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_grouping, remove_duplicates):
     """Loads + validates the CSV and applies label refinement/memory optimization.
     Cached on file content and loader params so re-running with the same
     upload (e.g. only sidebar options changed) skips CSV parsing entirely.
@@ -203,7 +212,7 @@ def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_gr
     if df is None:
         return None, None, messages, has_category
 
-    df_ready = _prepare_df_ready(df)
+    df_ready = _prepare_df_ready(df, remove_duplicates)
     return df, df_ready, messages, has_category
 
 
@@ -384,6 +393,18 @@ with st.sidebar:
     st.caption("Process Excavator")
     st.divider()
 
+    st.header("Data")
+    remove_duplicates = st.checkbox(
+        "Remove Duplicate Events", value=True,
+        help=(
+            "Drops events whose case, activity, and timestamp exactly match an "
+            "earlier event, keeping the first, so repeated rows don't "
+            "double-count activity frequencies and transition timings. The "
+            "Data Quality Check still reports how many were found."
+        ),
+    )
+
+    st.divider()
     st.header("Discovery")
     discovery_keys = list(DISCOVERY_ALGORITHMS.keys())
     restored_discovery = _restored("discovery_params", "algorithm", None)
@@ -673,6 +694,7 @@ if data_source == "Load cached dataset":
     raw_df = cached_raw_df
     case_grouping = cached_manifest.get("case_grouping", "user")
     has_category = "category" in raw_df.columns
+    df_ready = _prepare_df_ready(raw_df, remove_duplicates)
     load_messages = [f"Loaded cached dataset '{chosen_dataset_id}' ({len(raw_df):,} events, skipping upload/query)."]
     st.session_state["load_messages"] = load_messages
     loaded_from_cache = True
@@ -721,6 +743,9 @@ elif data_source == "Load saved run":
     df_ready = saved_df_ready
     case_grouping = saved_manifest.get("case_grouping", "user")
     has_category = "category" in raw_df.columns
+    df_ready = _prepare_df_ready(raw_df, remove_duplicates)
+    load_messages = [f"Loaded saved run '{saved_manifest.get('label')}' ({len(raw_df):,} events)."]
+    st.session_state["load_messages"] = load_messages
     loaded_from_saved_run = True
     st.session_state["active_source_dataset_id"] = saved_manifest.get("source_dataset_id")
     st.session_state["active_saved_run_label"] = saved_manifest.get("label")
@@ -840,6 +865,7 @@ else:
             loader_defaults["chunk_threshold_mb"],
             loader_defaults["chunk_size"],
             case_grouping,
+            remove_duplicates,
         )
 
     st.session_state["load_messages"] = load_messages
@@ -927,7 +953,7 @@ else:
             # for this exact upload, and that's still correct when nothing merged in
             # (a fresh seed, or a case-grouping mismatch that skipped the merge).
             if incremental_stats.get("merged"):
-                df_ready = _prepare_df_ready(raw_df)
+                df_ready = _prepare_df_ready(raw_df, remove_duplicates)
             # merge_incremental writes raw_df through to the cache for both the
             # seed and actual-merge cases - only a grouping mismatch skips that
             # write, leaving raw_df un-coupled from this dataset_id.
@@ -1010,6 +1036,19 @@ if data_quality["issues"]:
             st.warning(issue)
 else:
     st.success("No data quality issues detected.")
+
+# Checked above on the un-deduplicated log so the report reflects the source
+# data. df_ready was already deduplicated in _prepare_df_ready; raw_df is
+# deduplicated here to match, since it's what the Funnel, Segments, and
+# reference-conformance tabs and the event log download/save read.
+if remove_duplicates:
+    raw_df, n_duplicates_removed = drop_duplicate_events(raw_df)
+    if n_duplicates_removed:
+        st.info(
+            f"Removed {n_duplicates_removed:,} duplicate event(s) before analysis, keeping "
+            "the first occurrence of each. Untick **Remove Duplicate Events** in the "
+            "sidebar to keep them."
+        )
 
 # ---------------------------------------------------------------------------
 # Filter events before analysis

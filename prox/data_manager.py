@@ -332,6 +332,31 @@ def check_data_quality(df: pd.DataFrame) -> Dict[str, Any]:
     return result
 
 
+def drop_duplicate_events(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
+    """
+    Removes exact duplicate events - the same (case, activity, timestamp)
+    triple check_data_quality() flags - keeping the first occurrence of each,
+    so repeated rows don't double-count activity frequencies and transition
+    timings.
+
+    Deterministic for a given row order, so applying it separately to two
+    frames with the same rows in the same order (e.g. the raw log and its
+    analysis-ready copy) removes the same events from both.
+
+    Returns
+    -------
+    (deduplicated DataFrame, number of rows removed)
+    """
+    if df is None or df.empty:
+        return df, 0
+
+    dup_mask = df.duplicated(subset=['case:concept:name', 'concept:name', 'time:timestamp'], keep='first')
+    n_removed = int(dup_mask.sum())
+    if not n_removed:
+        return df, 0
+    return df[~dup_mask], n_removed
+
+
 def get_trace_signature(trace) -> tuple:
     """Returns a hashable tuple of activity names representing a trace variant."""
     return tuple(str(e['concept:name']) for e in trace)
