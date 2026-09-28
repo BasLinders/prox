@@ -248,7 +248,7 @@ def _cached_merge_incremental(active_file_bytes, dataset_id, case_grouping, cach
 
 
 @st.cache_resource(show_spinner=False, max_entries=1)
-def _cached_load_cached_dataset(dataset_id, cache_dir, cache_sig):
+def _cached_load_cached_dataset(dataset_id, cache_dir, cache_sig, remove_duplicates):
     """Loads an incremental-cache dataset and derives df_ready from it, once -
     not on every rerun. Streamlit reruns the whole script on every widget
     interaction, so calling load_cached_dataset directly re-read and re-parsed
@@ -265,11 +265,11 @@ def _cached_load_cached_dataset(dataset_id, cache_dir, cache_sig):
     df, manifest = load_cached_dataset(dataset_id, cache_dir=cache_dir)
     if df is None:
         return None, None, None
-    return df, manifest, _prepare_df_ready(df)
+    return df, manifest, _prepare_df_ready(df, remove_duplicates)
 
 
 @st.cache_resource(show_spinner=False, max_entries=1)
-def _cached_load_saved_run(run_id, save_dir, cache_dir, source_sig):
+def _cached_load_saved_run(run_id, save_dir, cache_dir, source_sig, remove_duplicates):
     """Same as _cached_load_cached_dataset, for a saved run. A saved run's own
     files never change once written, so run_id identifies its data - except a
     cache-linked run, which reads through to its cache: source_sig is that
@@ -277,7 +277,7 @@ def _cached_load_saved_run(run_id, save_dir, cache_dir, source_sig):
     df, manifest, error = load_saved_run(run_id, save_dir=save_dir, cache_dir=cache_dir)
     if df is None:
         return None, None, error, None
-    return df, manifest, None, _prepare_df_ready(df)
+    return df, manifest, None, _prepare_df_ready(df, remove_duplicates)
 
 
 @st.cache_resource(show_spinner=False, max_entries=2)
@@ -685,7 +685,8 @@ if data_source == "Load cached dataset":
 
     with st.spinner("Loading cached dataset..."):
         cached_raw_df, cached_manifest, df_ready = _cached_load_cached_dataset(
-            chosen_dataset_id, DEFAULT_CACHE_DIR, cache_signature(chosen_dataset_id, cache_dir=DEFAULT_CACHE_DIR)
+            chosen_dataset_id, DEFAULT_CACHE_DIR, cache_signature(chosen_dataset_id, cache_dir=DEFAULT_CACHE_DIR),
+            remove_duplicates,
         )
     if cached_raw_df is None:
         st.error(f"Could not load cached dataset '{chosen_dataset_id}'. It may have just been cleared.")
@@ -694,7 +695,6 @@ if data_source == "Load cached dataset":
     raw_df = cached_raw_df
     case_grouping = cached_manifest.get("case_grouping", "user")
     has_category = "category" in raw_df.columns
-    df_ready = _prepare_df_ready(raw_df, remove_duplicates)
     load_messages = [f"Loaded cached dataset '{chosen_dataset_id}' ({len(raw_df):,} events, skipping upload/query)."]
     st.session_state["load_messages"] = load_messages
     loaded_from_cache = True
@@ -731,6 +731,7 @@ elif data_source == "Load saved run":
         saved_raw_df, saved_manifest, saved_run_error, saved_df_ready = _cached_load_saved_run(
             chosen_run_id, DEFAULT_SAVED_RUNS_DIR, DEFAULT_CACHE_DIR,
             cache_signature(linked_dataset_id, cache_dir=DEFAULT_CACHE_DIR) if linked_dataset_id else "standalone",
+            remove_duplicates,
         )
     if st.button("Delete this saved run"):
         delete_saved_run(chosen_run_id, save_dir=DEFAULT_SAVED_RUNS_DIR)
@@ -743,7 +744,6 @@ elif data_source == "Load saved run":
     df_ready = saved_df_ready
     case_grouping = saved_manifest.get("case_grouping", "user")
     has_category = "category" in raw_df.columns
-    df_ready = _prepare_df_ready(raw_df, remove_duplicates)
     load_messages = [f"Loaded saved run '{saved_manifest.get('label')}' ({len(raw_df):,} events)."]
     st.session_state["load_messages"] = load_messages
     loaded_from_saved_run = True
