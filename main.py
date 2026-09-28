@@ -395,7 +395,8 @@ with st.sidebar:
 
     st.header("Data")
     remove_duplicates = st.checkbox(
-        "Remove Duplicate Events", value=True,
+        "Remove Duplicate Events", value=bool(_restored("data_loading", "remove_duplicates", True)),
+        key=_ck("remove_duplicates"),
         help=(
             "Drops events whose case, activity, and timestamp exactly match an "
             "earlier event, keeping the first, so repeated rows don't "
@@ -761,12 +762,19 @@ elif data_source == "Load saved run":
             st.session_state.pop(key, None)
         if saved_manifest.get("config"):
             st.session_state["config"] = saved_manifest["config"]
+        # Compared against, and restored as, the log the run was saved from -
+        # deduplicated if the option is on - not raw_df as loaded: a
+        # cache-linked run reads through to the cache, which keeps the
+        # duplicates, so raw_df's event count never matched the saved one.
+        # (raw_df itself is only deduplicated further down, after the Data
+        # Quality Check.)
+        restored_df = drop_duplicate_events(raw_df)[0] if remove_duplicates else raw_df
         saved_results, saved_results_note = load_saved_results(
-            saved_manifest, raw_df, save_dir=DEFAULT_SAVED_RUNS_DIR
+            saved_manifest, restored_df, save_dir=DEFAULT_SAVED_RUNS_DIR
         )
         if saved_results is not None:
             st.session_state["results"] = saved_results
-            st.session_state["df"] = raw_df
+            st.session_state["df"] = restored_df
             saved_results_note = (
                 "success",
                 "Restored this run's saved results and settings below - no need to run the "
@@ -1252,6 +1260,7 @@ if run_btn:
         strata_col=strata_col,
         max_priority_ratio=float(max_priority_ratio),
         filter_steps=filter_steps,
+        remove_duplicates=remove_duplicates,
     )
 
     results = _cached_run_full_analysis(df_ready, config)

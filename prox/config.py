@@ -37,6 +37,7 @@ CONFIG = {
     "data_loading": {
         "chunk_threshold_mb": 50,
         "chunk_size": 50000,
+        "remove_duplicates": True,
     },
 
     "speed_params": {
@@ -133,6 +134,7 @@ def create_analysis_config(
     business_params: dict = None,
     chunk_threshold_mb: int = 50,
     chunk_size: int = 50000,
+    remove_duplicates: bool = True,
 ) -> Dict[str, Any]:
     return {
         "app_name": "PRoX",
@@ -141,6 +143,7 @@ def create_analysis_config(
         "data_loading": {
             "chunk_threshold_mb": chunk_threshold_mb,
             "chunk_size": chunk_size,
+            "remove_duplicates": remove_duplicates,
         },
 
         "speed_params": {
