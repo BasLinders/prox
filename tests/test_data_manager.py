@@ -10,6 +10,7 @@ from prox.data_manager import (
     optimize_dataframe_memory,
     refine_activity_labels,
     check_data_quality,
+    drop_duplicate_events,
     winsorize_series,
 )
 
@@ -364,6 +365,65 @@ def test_check_data_quality_empty_df_returns_no_issues():
     result = check_data_quality(pd.DataFrame())
     assert result['issues'] == []
     assert result['duplicate_events'] == 0
+
+
+# --- drop_duplicate_events ---
+
+def test_drop_duplicate_events_keeps_first_occurrence():
+    df = make_event_log([
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),  # exact duplicate of the row above
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),  # and another
+        ('c1', 'b', pd.Timestamp('2024-01-01 00:01:00')),
+    ])
+    df['price'] = [1.0, 2.0, 3.0, 4.0]
+    result, n_removed = drop_duplicate_events(df)
+    assert n_removed == 2
+    assert len(result) == 2
+    assert result['price'].tolist() == [1.0, 4.0]
+
+
+def test_drop_duplicate_events_same_activity_different_timestamp_is_kept():
+    df = make_event_log([
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:01')),
+        ('c2', 'a', pd.Timestamp('2024-01-01 00:00:00')),  # same activity/time, other case
+    ])
+    result, n_removed = drop_duplicate_events(df)
+    assert n_removed == 0
+    assert len(result) == 3
+
+
+def test_drop_duplicate_events_matches_check_data_quality():
+    """Every flagged duplicate group collapses to one event, and a
+    deduplicated log comes back clean."""
+    df = make_event_log([
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),
+        ('c1', 'b', pd.Timestamp('2024-01-01 00:01:00')),
+    ])
+    assert check_data_quality(df)['duplicate_events'] == 2
+    result, n_removed = drop_duplicate_events(df)
+    assert n_removed == 1
+    assert check_data_quality(result)['duplicate_events'] == 0
+
+
+def test_drop_duplicate_events_same_rows_removed_from_copies():
+    """raw_df and df_ready are deduplicated separately - both must lose the same rows."""
+    df = make_event_log([
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),
+        ('c1', 'b', pd.Timestamp('2024-01-01 00:01:00')),
+        ('c1', 'a', pd.Timestamp('2024-01-01 00:00:00')),
+    ])
+    first, _ = drop_duplicate_events(df)
+    second, _ = drop_duplicate_events(df.copy())
+    assert first.index.tolist() == second.index.tolist() == [0, 1]
+
+
+def test_drop_duplicate_events_empty_df():
+    result, n_removed = drop_duplicate_events(pd.DataFrame())
+    assert n_removed == 0
+    assert result.empty
 
 
 # --- winsorize_series ---

@@ -626,7 +626,10 @@ sequenced yet.
   `prox/data_manager.py` flags exact duplicate events, single-event cases
   (no transitions to analyse), and events logged out of chronological order
   within a case - the log-shape problems `load_and_validate_csv()`'s own
-  null/timestamp checks don't catch.
+  null/timestamp checks don't catch. Flagged duplicates are then removed
+  before analysis by `drop_duplicate_events()` (keeping the first of each),
+  controlled by the on-by-default **Remove Duplicate Events** sidebar
+  option.
 
 **Still open:**
 - **Config presets.** Save/load the sidebar configuration (discovery algo,
