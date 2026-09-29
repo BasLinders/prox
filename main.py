@@ -646,11 +646,27 @@ ORDER BY
         language="sql",
     )
 
-st.header("1. Load Data")
-data_source = st.radio(
-    "Data source", ["Load cached dataset", "Load saved run", "Upload CSV", "Connect to BigQuery"],
-    horizontal=True, key="data_source_choice",
-)
+with st.form("load_data_form"):
+    st.divider()
+    st.header("1. Load Data")
+    st.caption(
+        "Choose your data source: upload a CSV or connect to BigQuery. Alternatively, you can select a cached dataset or a prior completed mining run for further analysis."
+    )
+    pending_data_source = st.radio(
+        "Data source", ["Load cached dataset", "Load saved run", "Upload CSV", "Connect to BigQuery"],
+        horizontal=True, key="data_source_pending",
+    )
+    # Only a confirmed choice is loaded, and it's kept in session state so it
+    # survives the reruns that the widgets below (uploader, selectboxes,
+    # buttons) trigger - nothing is loaded at startup, which on low-memory
+    # machines used to mean pulling in the first cached dataset by default.
+    if st.form_submit_button("Confirm data source", width="stretch"):
+        st.session_state["data_source_choice"] = pending_data_source
+
+data_source = st.session_state.get("data_source_choice")
+if data_source is None:
+    st.info("Pick a data source above and click **Confirm data source** to load data.")
+    st.stop()
 
 loaded_from_cache = False
 loaded_from_saved_run = False
@@ -1238,7 +1254,7 @@ with st.form("configuration_form"):
                 "or switching to Token Replay in the sidebar."
             )
 
-    applied = st.form_submit_button("Apply Configuration", type="primary", width='stretch')
+    applied = st.form_submit_button("Apply Configuration", type="secondary", width='stretch')
 if applied:
     st.success("Configuration applied.")
 
@@ -1714,7 +1730,7 @@ def _render_results_tabs():
                 else:
                     ref_uploaded_bpmn = st.file_uploader("BPMN file", type=["bpmn", "xml"], key="ref_bpmn_upload")
 
-                run_ref_btn = st.form_submit_button("Check Conformance Against Reference Model", width='stretch')
+                run_ref_btn = st.form_submit_button("Check Conformance Against Reference Model", type="secondary", width='stretch')
 
             if run_ref_btn:
                 ref_model = None
