@@ -68,12 +68,25 @@ KNOWN_NOISE_ACTIVITIES = {
     "session_start", "first_visit",
 }
 
-def _apply_filter_steps(raw_df: pd.DataFrame, config: dict) -> pd.DataFrame:
-    """Applies the main analysis's filter_steps to raw_df, for standalone tabs
-    (Funnel, Reference Model) that otherwise operate on the unfiltered log, so
-    activities removed as noise (e.g. session_start) don't reappear there."""
+# Streamlit reruns the whole script on every widget interaction (and the whole
+# results fragment on every tab switch), so anything derived from the event
+# log here is cached rather than recomputed per click. These caches are keyed
+# on DataFrame *identity*, not content: hashing a multi-million-row frame's
+# content every rerun is exactly the cost being avoided, and Streamlit's own
+# DataFrame hash only samples 10k rows, so it would miss e.g. a handful of
+# winsorized prices. Identity works as a key because the frames passed in come
+# from the cache_resource loaders (or earlier identity-cached steps), so they
+# are the same object on every rerun until the data actually changes. Each
+# cached function also returns its input frame(s), so the cache entry keeps
+# them alive - otherwise a freed frame's id() could be reused by a new frame
+# and hit a stale entry.
+_BY_IDENTITY = {pd.DataFrame: id}
+
+
+@st.cache_resource(show_spinner=False, max_entries=2, hash_funcs=_BY_IDENTITY)
+def _cached_filter_steps(raw_df: pd.DataFrame, filter_steps: list):
     df = raw_df
-    for step_config in (config or {}).get("filter_steps") or []:
+    for step_config in filter_steps:
         params = step_config.copy()
         f_type = params.pop("type", None)
         if f_type is None:
@@ -81,7 +94,21 @@ def _apply_filter_steps(raw_df: pd.DataFrame, config: dict) -> pd.DataFrame:
         filtered_df, _ = filter_event_log(df, filter_type=f_type, **params)
         if filtered_df is not None and not filtered_df.empty:
             df = filtered_df
-    return df
+    return raw_df, df
+
+
+def _apply_filter_steps(raw_df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Applies the main analysis's filter_steps to raw_df, for standalone tabs
+    (Funnel, Reference Model) that otherwise operate on the unfiltered log, so
+    activities removed as noise (e.g. session_start) don't reappear there."""
+    return _cached_filter_steps(raw_df, (config or {}).get("filter_steps") or [])[1]
+
+
+@st.cache_resource(show_spinner=False, max_entries=2, hash_funcs=_BY_IDENTITY)
+def _cached_column_nunique(df: pd.DataFrame):
+    """Distinct non-null values per column - what the sampling-strata and
+    segment-column pickers filter candidate columns on."""
+    return df, df.nunique(dropna=True).to_dict()
 
 
 def _analyzed_activities(raw_df: pd.DataFrame, config: dict) -> list:
@@ -209,11 +236,15 @@ def _prepare_df_ready(df: pd.DataFrame, remove_duplicates: bool) -> pd.DataFrame
 # memory for the life of the server process, which only grows until restart.
 # Each cap keeps the current entry (plus the previous config's results, so
 # flipping back to it stays instant); older entries are evicted.
-@st.cache_data(show_spinner=False, max_entries=1)
+@st.cache_resource(show_spinner=False, max_entries=1)
 def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_grouping, remove_duplicates):
     """Loads + validates the CSV and applies label refinement/memory optimization.
     Cached on file content and loader params so re-running with the same
     upload (e.g. only sidebar options changed) skips CSV parsing entirely.
+
+    cache_resource, like the loaders below: cache_data would unpickle a fresh
+    copy of both frames on every rerun, and a fresh object each rerun would
+    also defeat the identity-keyed caches downstream (see _BY_IDENTITY).
     """
     df, messages, has_category = load_and_validate_csv(
         io.BytesIO(file_bytes),
@@ -292,11 +323,44 @@ def _cached_load_saved_run(run_id, save_dir, cache_dir, source_sig, remove_dupli
     return df, manifest, None, _prepare_df_ready(df, remove_duplicates)
 
 
-@st.cache_resource(show_spinner=False, max_entries=2)
+@st.cache_resource(show_spinner=False, max_entries=1, hash_funcs=_BY_IDENTITY)
+def _cached_prepare_df_ready(raw_df, remove_duplicates):
+    """_prepare_df_ready for a merged-with-cache upload, once per merge result."""
+    return raw_df, _prepare_df_ready(raw_df, remove_duplicates)
+
+
+@st.cache_resource(show_spinner=False, max_entries=1, hash_funcs=_BY_IDENTITY)
+def _cached_winsorize(raw_df, df_ready, method, param):
+    """Caps 'price' in both frames. Returns copies - the inputs are shared,
+    cached frames and must not be modified in place."""
+    clipped, lower, upper = winsorize_series(raw_df["price"], method=method, param=param)
+    n_capped = int(((raw_df["price"] < lower) | (raw_df["price"] > upper)).sum())
+    capped_raw_df = raw_df.copy()
+    capped_df_ready = df_ready.copy()
+    capped_raw_df["price"] = clipped
+    capped_df_ready["price"] = df_ready["price"].clip(lower, upper)
+    return (raw_df, df_ready), capped_raw_df, capped_df_ready, n_capped, lower, upper
+
+
+@st.cache_resource(show_spinner=False, max_entries=1, hash_funcs=_BY_IDENTITY)
+def _cached_quality_and_dedup(raw_df, remove_duplicates):
+    """Data Quality Check on raw_df, then (if enabled) its deduplicated copy."""
+    data_quality = check_data_quality(raw_df)
+    deduped_df, n_duplicates_removed = drop_duplicate_events(raw_df) if remove_duplicates else (raw_df, 0)
+    return raw_df, data_quality, deduped_df, n_duplicates_removed
+
+
+@st.cache_resource(show_spinner=False, max_entries=2, hash_funcs=_BY_IDENTITY)
 def _cached_run_full_analysis(df_ready, config, output_folder="output"):
     """Runs the full pipeline. Cached on the input data + config, so re-running
     with identical settings (e.g. clicking Run Analysis again) is instant
     instead of redoing filtering, discovery, conformance, etc. from scratch.
+
+    Keyed on df_ready's identity (see _BY_IDENTITY) and returns it alongside
+    the results, like the other identity-keyed caches. A content hash only
+    samples 10k rows, so a log that differs in a few rows - e.g. winsorizing
+    that caps a handful of outliers - got the same key and returned the
+    previous, uncapped results.
 
     The progress bar is created *inside* this function - not passed in from
     the caller - because Streamlit's caching machinery records every element
@@ -365,7 +429,7 @@ def _cached_run_full_analysis(df_ready, config, output_folder="output"):
 
     progress_bar.progress(1.0, text="Done - 100%")
     progress_bar.empty()
-    return outcome.get("results")
+    return df_ready, outcome.get("results")
 
 # ---------------------------------------------------------------------------
 # Settings restored from a saved run (Step 1 -> Load saved run), if one is
@@ -1010,7 +1074,7 @@ else:
             # for this exact upload, and that's still correct when nothing merged in
             # (a fresh seed, or a case-grouping mismatch that skipped the merge).
             if incremental_stats.get("merged"):
-                df_ready = _prepare_df_ready(raw_df, remove_duplicates)
+                df_ready = _cached_prepare_df_ready(raw_df, remove_duplicates)[1]
             # merge_incremental writes raw_df through to the cache for both the
             # seed and actual-merge cases - only a grouping mismatch skips that
             # write, leaving raw_df un-coupled from this dataset_id.
@@ -1067,13 +1131,9 @@ else:
                 )
 
         winsorize_method = "std" if winsorize_method_label == "Standard Deviation" else "percentile"
-        clipped, lower, upper = winsorize_series(raw_df["price"], method=winsorize_method, param=winsorize_param)
-        n_capped = int(((raw_df["price"] < lower) | (raw_df["price"] > upper)).sum())
-
-        raw_df = raw_df.copy()
-        df_ready = df_ready.copy()
-        raw_df["price"] = clipped
-        df_ready["price"] = df_ready["price"].clip(lower, upper)
+        _, raw_df, df_ready, n_capped, lower, upper = _cached_winsorize(
+            raw_df, df_ready, winsorize_method, winsorize_param
+        )
 
         if n_capped > 0:
             st.info(f"Capped {n_capped:,} value(s) to the range [{lower:,.2f}, {upper:,.2f}].")
@@ -1086,7 +1146,7 @@ else:
 # ---------------------------------------------------------------------------
 st.divider()
 st.header("4. Data Quality Check")
-data_quality = check_data_quality(raw_df)
+_, data_quality, deduped_raw_df, n_duplicates_removed = _cached_quality_and_dedup(raw_df, remove_duplicates)
 if data_quality["issues"]:
     with st.expander(f"{len(data_quality['issues'])} data quality issue(s) found", expanded=True):
         for issue in data_quality["issues"]:
@@ -1098,14 +1158,13 @@ else:
 # data. df_ready was already deduplicated in _prepare_df_ready; raw_df is
 # deduplicated here to match, since it's what the Funnel, Segments, and
 # reference-conformance tabs and the event log download/save read.
-if remove_duplicates:
-    raw_df, n_duplicates_removed = drop_duplicate_events(raw_df)
-    if n_duplicates_removed:
-        st.info(
-            f"Removed {n_duplicates_removed:,} duplicate event(s) before analysis, keeping "
-            "the first occurrence of each. Untick **Remove Duplicate Events** in the "
-            "sidebar to keep them."
-        )
+raw_df = deduped_raw_df
+if n_duplicates_removed:
+    st.info(
+        f"Removed {n_duplicates_removed:,} duplicate event(s) before analysis, keeping "
+        "the first occurrence of each. Untick **Remove Duplicate Events** in the "
+        "sidebar to keep them."
+    )
 
 # ---------------------------------------------------------------------------
 # Filter events before analysis
@@ -1184,13 +1243,7 @@ with st.form("configuration_form"):
     if endpoint_choice != endpoint_options[0]:
         filter_steps.append({"type": "crop", "activity": [endpoint_choice]})
 
-    preview_df = raw_df
-    for _step in filter_steps:
-        _params = _step.copy()
-        _f_type = _params.pop("type")
-        _filtered, _ = filter_event_log(preview_df, filter_type=_f_type, **_params)
-        if _filtered is not None and not _filtered.empty:
-            preview_df = _filtered
+    preview_df = _apply_filter_steps(raw_df, {"filter_steps": filter_steps})
 
     post_cases = preview_df["case:concept:name"].nunique() if preview_df is not None and not preview_df.empty else 0
     post_events = len(preview_df) if preview_df is not None else 0
@@ -1234,9 +1287,10 @@ with st.form("configuration_form"):
             except Exception:
                 return False
 
+        raw_nunique = _cached_column_nunique(raw_df)[1]
         strata_candidates = [
             c for c in raw_df.columns
-            if c not in exclude_cols and raw_df[c].nunique(dropna=True) == 2 and _has_priority_value(raw_df[c])
+            if c not in exclude_cols and raw_nunique[c] == 2 and _has_priority_value(raw_df[c])
         ]
 
         strata_col1, strata_col2 = st.columns([2, 1])
@@ -1312,7 +1366,7 @@ if run_btn:
         remove_duplicates=remove_duplicates,
     )
 
-    results = _cached_run_full_analysis(df_ready, config)
+    _, results = _cached_run_full_analysis(df_ready, config)
 
     if results is None:
         st.error("Analysis failed. Check the application logs for details.")
@@ -1497,23 +1551,29 @@ def _render_results_tabs():
         c2.metric("Events", f"{summary.get('Number of Events', 0):,}")
         c3.metric("Activities", summary.get("Number of Unique Activities", 0))
         c4.metric("Duration (days)", summary.get("Total Duration (Days)", 0))
+        # Both downloads are built only when clicked (data=callable), not on every
+        # rerun of this fragment - serializing the full event log to CSV is the
+        # slowest thing a tab switch would otherwise do on a large log.
+        # on_click="ignore": downloading doesn't need a rerun either.
         with c5:
             st.download_button(
                 "Download Full Report",
-                data=generate_html_report(results),
+                data=lambda: generate_html_report(results),
                 file_name="prox_report.html",
                 mime="text/html",
                 width='stretch',
+                on_click="ignore",
             )
         with c6:
             event_log_df = st.session_state.get("df")
             if event_log_df is not None:
                 st.download_button(
                     "Download Event Log",
-                    data=event_log_df.to_csv(index=False).encode("utf-8"),
+                    data=lambda: event_log_df.to_csv(index=False).encode("utf-8"),
                     file_name="prox_event_log.csv",
                     mime="text/csv",
                     width='stretch',
+                    on_click="ignore",
                     help="Download the event log used for this run as a CSV, for a "
                          "one-off copy. To pick it back up in-app later, use "
                          "'Save Event Log to Library' below instead.",
@@ -2119,9 +2179,10 @@ def _render_results_tabs():
                     st.caption("Funnel order: " + " → ".join(funnel_steps))
 
             funnel_exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id"}
+            funnel_nunique = _cached_column_nunique(funnel_df)[1]
             funnel_segment_candidates = [
                 c for c in funnel_df.columns
-                if c not in funnel_exclude_cols and 2 <= funnel_df[c].nunique(dropna=True) <= 20
+                if c not in funnel_exclude_cols and 2 <= funnel_nunique[c] <= 20
             ]
             funnel_segment_col = None
             if funnel_segment_candidates:
@@ -2358,9 +2419,10 @@ def _render_results_tabs():
         saved_config = st.session_state.get("config", {})
 
         exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id", "session_id"}
+        segment_nunique = _cached_column_nunique(raw_df)[1] if raw_df is not None else {}
         segment_candidates = [
             c for c in raw_df.columns
-            if c not in exclude_cols and 2 <= raw_df[c].nunique(dropna=True) <= 20
+            if c not in exclude_cols and 2 <= segment_nunique[c] <= 20
         ] if raw_df is not None else []
 
         if not segment_candidates:
