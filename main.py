@@ -650,254 +650,262 @@ with st.form("load_data_form"):
     st.divider()
     st.header("1. Load Data")
     st.caption(
-        "Choose your data source: a CSV or connect to BigQuery. Alternatively, you can select a cached dataset or a prior completed mining run for further analysis."
+        "Choose your data source: upload a CSV or connect to BigQuery. Alternatively, you can select a cached dataset or a prior completed mining run for further analysis."
     )
-    data_source = st.radio(
+    pending_data_source = st.radio(
         "Data source", ["Load cached dataset", "Load saved run", "Upload CSV", "Connect to BigQuery"],
-        horizontal=True, key="data_source_choice",
+        horizontal=True, key="data_source_pending",
     )
-    
-run_data_source = st.form_submit_button("Confirm data source", type="secondary", width="stretch")
+    # Only a confirmed choice is loaded, and it's kept in session state so it
+    # survives the reruns that the widgets below (uploader, selectboxes,
+    # buttons) trigger - nothing is loaded at startup, which on low-memory
+    # machines used to mean pulling in the first cached dataset by default.
+    if st.form_submit_button("Confirm data source", width="stretch"):
+        st.session_state["data_source_choice"] = pending_data_source
 
-if run_data_source:
-    loaded_from_cache = False
-    loaded_from_saved_run = False
-    # Which incremental-cache dataset_id (if any) backs the currently loaded
-    # raw_df - used to couple a later "Save Event Log" with that cache instead
-    # of writing a redundant second copy. Reset each rerun; set below by
-    # whichever branch actually loaded from (or merged into) a cache.
-    st.session_state["active_source_dataset_id"] = None
-    # Label of the saved run backing raw_df, if any - pre-fills "Save Event Log",
-    # so re-saving a loaded run unchanged is recognised as a duplicate.
-    st.session_state["active_saved_run_label"] = None
-    if data_source != "Load saved run":
-        # Leaving saved runs means re-selecting one later should restore it again.
-        st.session_state.pop("restored_run_id", None)
-    
-    if data_source == "Load cached dataset":
-        known_datasets = list_cached_datasets(cache_dir=DEFAULT_CACHE_DIR)
-        if not known_datasets:
-            st.info(
-                "No cached datasets yet. Upload a CSV or connect to BigQuery first, "
-                "then enable incremental analysis below with a Dataset ID to start one."
-            )
-            st.stop()
-    
-        dataset_options = {
-            f"{m.get('dataset_id')} — {m.get('n_events', 0):,} events, "
-            f"{m.get('n_cases', 0):,} cases, grouping={m.get('case_grouping')}, "
-            f"last updated {m.get('last_updated', '?')}": m.get("dataset_id")
-            for m in known_datasets
-        }
-        chosen_label = st.selectbox("Cached dataset", list(dataset_options.keys()))
-        chosen_dataset_id = dataset_options[chosen_label]
-    
-        with st.spinner("Loading cached dataset..."):
-            cached_raw_df, cached_manifest, df_ready = _cached_load_cached_dataset(
-                chosen_dataset_id, DEFAULT_CACHE_DIR, cache_signature(chosen_dataset_id, cache_dir=DEFAULT_CACHE_DIR),
-                remove_duplicates,
-            )
-        if cached_raw_df is None:
-            st.error(f"Could not load cached dataset '{chosen_dataset_id}'. It may have just been cleared.")
-            st.stop()
-    
-        raw_df = cached_raw_df
-        case_grouping = cached_manifest.get("case_grouping", "user")
-        has_category = "category" in raw_df.columns
-        load_messages = [f"Loaded cached dataset '{chosen_dataset_id}' ({len(raw_df):,} events, skipping upload/query)."]
-        st.session_state["load_messages"] = load_messages
-        loaded_from_cache = True
-        st.session_state["active_source_dataset_id"] = chosen_dataset_id
-    elif data_source == "Load saved run":
-        known_runs = list_saved_runs(save_dir=DEFAULT_SAVED_RUNS_DIR)
-        if not known_runs:
-            st.info(
-                "No saved runs yet. Run an analysis, then use **Save Event Log** "
-                "next to the results to add one here for later."
-            )
-            st.stop()
-    
-        run_labels = {}
-        for m in known_runs:
-            link_note = f", linked to cache '{m['source_dataset_id']}'" if m.get("source_dataset_id") else ""
-            results_note = ", results saved" if m.get("has_results") else ""
-            run_labels[m.get("run_id")] = (
-                f"{m.get('label')} — {m.get('n_events', 0):,} events, "
-                f"{m.get('n_cases', 0):,} cases, saved {m.get('saved_at', '?')}{link_note}{results_note}"
-            )
-        chosen_run_id = st.selectbox(
-            "Saved run", list(run_labels.keys()), format_func=run_labels.get, key="saved_run_choice",
+data_source = st.session_state.get("data_source_choice")
+if data_source is None:
+    st.info("Pick a data source above and click **Confirm data source** to load data.")
+    st.stop()
+
+loaded_from_cache = False
+loaded_from_saved_run = False
+# Which incremental-cache dataset_id (if any) backs the currently loaded
+# raw_df - used to couple a later "Save Event Log" with that cache instead
+# of writing a redundant second copy. Reset each rerun; set below by
+# whichever branch actually loaded from (or merged into) a cache.
+st.session_state["active_source_dataset_id"] = None
+# Label of the saved run backing raw_df, if any - pre-fills "Save Event Log",
+# so re-saving a loaded run unchanged is recognised as a duplicate.
+st.session_state["active_saved_run_label"] = None
+if data_source != "Load saved run":
+    # Leaving saved runs means re-selecting one later should restore it again.
+    st.session_state.pop("restored_run_id", None)
+
+if data_source == "Load cached dataset":
+    known_datasets = list_cached_datasets(cache_dir=DEFAULT_CACHE_DIR)
+    if not known_datasets:
+        st.info(
+            "No cached datasets yet. Upload a CSV or connect to BigQuery first, "
+            "then enable incremental analysis below with a Dataset ID to start one."
         )
-        # The config widgets (sidebar included) already rendered this run using
-        # whatever run was selected before - rerun once so they pick up this
-        # run's settings (see _config_scope above).
-        chosen_manifest = next(m for m in known_runs if m.get("run_id") == chosen_run_id)
-        if (chosen_run_id if chosen_manifest.get("config") else "default") != _config_scope:
-            st.rerun()
-    
-        linked_dataset_id = chosen_manifest.get("source_dataset_id")
-        with st.spinner("Loading saved run..."):
-            saved_raw_df, saved_manifest, saved_run_error, saved_df_ready = _cached_load_saved_run(
-                chosen_run_id, DEFAULT_SAVED_RUNS_DIR, DEFAULT_CACHE_DIR,
-                cache_signature(linked_dataset_id, cache_dir=DEFAULT_CACHE_DIR) if linked_dataset_id else "standalone",
-                remove_duplicates,
-            )
-        if st.button("Delete this saved run"):
-            delete_saved_run(chosen_run_id, save_dir=DEFAULT_SAVED_RUNS_DIR)
-            st.rerun()
-        if saved_raw_df is None:
-            st.error(saved_run_error)
-            st.stop()
-    
-        raw_df = saved_raw_df
-        df_ready = saved_df_ready
-        case_grouping = saved_manifest.get("case_grouping", "user")
-        has_category = "category" in raw_df.columns
-        load_messages = [f"Loaded saved run '{saved_manifest.get('label')}' ({len(raw_df):,} events)."]
-        st.session_state["load_messages"] = load_messages
-        loaded_from_saved_run = True
-        st.session_state["active_source_dataset_id"] = saved_manifest.get("source_dataset_id")
-        st.session_state["active_saved_run_label"] = saved_manifest.get("label")
-    
-        # Swap in this run's saved results (and the config they were made with)
-        # once, when it's first selected - not on every rerun, which would throw
-        # away a fresh Run Analysis the user did on top of it. Whatever the
-        # previously loaded data produced is dropped either way, since it
-        # describes a different event log.
-        if st.session_state.get("restored_run_id") != chosen_run_id:
-            st.session_state["restored_run_id"] = chosen_run_id
-            for key in RESULT_STATE_KEYS:
-                st.session_state.pop(key, None)
-            if saved_manifest.get("config"):
-                st.session_state["config"] = saved_manifest["config"]
-            # Compared against, and restored as, the log the run was saved from -
-            # deduplicated if the option is on - not raw_df as loaded: a
-            # cache-linked run reads through to the cache, which keeps the
-            # duplicates, so raw_df's event count never matched the saved one.
-            # (raw_df itself is only deduplicated further down, after the Data
-            # Quality Check.)
-            restored_df = drop_duplicate_events(raw_df)[0] if remove_duplicates else raw_df
-            saved_results, saved_results_note = load_saved_results(
-                saved_manifest, restored_df, save_dir=DEFAULT_SAVED_RUNS_DIR
-            )
-            if saved_results is not None:
-                st.session_state["results"] = saved_results
-                st.session_state["df"] = restored_df
-                saved_results_note = (
-                    "success",
-                    "Restored this run's saved results and settings below - no need to run the "
-                    "analysis again, unless you change the settings.",
-                )
-            elif saved_results_note:
-                saved_results_note = ("warning", saved_results_note)
-            # Shown until the next Run Analysis replaces these results.
-            st.session_state["saved_results_note"] = saved_results_note
-            st.session_state["load_messages"] = [
-                f"Loaded saved run '{saved_manifest.get('label')}' ({len(raw_df):,} events)."
-            ]
-        load_messages = st.session_state.get("load_messages", [])
-        if st.session_state.get("saved_results_note"):
-            note_kind, note_text = st.session_state["saved_results_note"]
-            getattr(st, note_kind)(note_text)
-    elif data_source == "Connect to BigQuery":
-        active_file_bytes = render_bigquery_source()
-        if active_file_bytes is None:
-            st.stop()
-    else:
-        uploaded_file = st.file_uploader("Upload Event Log (CSV)", type=["csv"])
-    
-        with st.expander("No data? Generate a mock event log"):
-            st.caption(
-                "Creates a synthetic e-commerce clickstream (funnel drop-off, "
-                "repeat buyers, categories, revenue, device/traffic segments) "
-                "so you can try PRoX without your own data."
-            )
-            mock_sessions = st.number_input(
-                "Sessions", min_value=50, max_value=5000, value=400, step=50, key="mock_sessions"
-            )
-            mock_seed = st.number_input(
-                "Seed", min_value=0, value=42, step=1, key="mock_seed",
-                help="Same seed + session count always reproduces the same data."
-            )
-            if st.button("Generate Mock Data", width='stretch'):
-                st.session_state["mock_csv_bytes"] = generate_mock_csv_bytes(
-                    n_sessions=int(mock_sessions), seed=int(mock_seed)
-                )
-                st.session_state["mock_csv_label"] = f"mock_event_log_{int(mock_sessions)}s_seed{int(mock_seed)}.csv"
-    
-            mock_csv_bytes = st.session_state.get("mock_csv_bytes")
-            if mock_csv_bytes:
-                st.success(f"Mock data ready: {st.session_state['mock_csv_label']}")
-                dl_col, clear_col = st.columns(2)
-                with dl_col:
-                    st.download_button(
-                        "Download CSV", data=mock_csv_bytes,
-                        file_name=st.session_state["mock_csv_label"], mime="text/csv",
-                        width='stretch',
-                    )
-                with clear_col:
-                    if st.button("Clear", width='stretch'):
-                        st.session_state.pop("mock_csv_bytes", None)
-                        st.session_state.pop("mock_csv_label", None)
-                        st.rerun()
-                if uploaded_file is None:
-                    st.caption("Will be used for analysis (no file uploaded above).")
-                else:
-                    st.caption("Uploaded file takes priority - remove it to use mock data instead.")
-    
-        active_file_bytes = uploaded_file.getvalue() if uploaded_file else st.session_state.get("mock_csv_bytes")
-    
-        if active_file_bytes is None:
-            st.info("Upload a CSV event log above to get started, or generate a mock one.")
-            st.stop()
-    
-    if loaded_from_cache or loaded_from_saved_run:
-        source_desc = "this cache" if loaded_from_cache else "this saved run"
-        st.caption(
-            f"Case grouping is fixed to how {source_desc} was built: "
-            f"**{'By user' if case_grouping == 'user' else 'By session'}**. "
-            "Load a fresh upload/query to change it."
-        )
-    else:
-        case_grouping_label = st.radio(
-            "Case grouping",
-            ["By user (recommended)", "By session"],
-            horizontal=True,
-            help=(
-                "By user: one case spans everything a user did across all their "
-                "sessions - needed to see a user's sequence of sessions (e.g. a "
-                "browsing session followed by a buying session) in the Session "
-                "Insights tab. By session: one case per session, as before - use "
-                "this if you want process discovery/conformance scoped to a single "
-                "session instead of a user's full history."
-            ),
-        )
-        case_grouping = "user" if case_grouping_label.startswith("By user") else "session"
-    
-        loader_defaults = create_analysis_config()["data_loading"]
-        with st.spinner("Loading and validating data..."):
-            raw_df, df_ready, load_messages, has_category = _cached_load_and_prepare(
-                active_file_bytes,
-                loader_defaults["chunk_threshold_mb"],
-                loader_defaults["chunk_size"],
-                case_grouping,
-                remove_duplicates,
-            )
-    
-        st.session_state["load_messages"] = load_messages
-    
-    if raw_df is None:
-        st.error("Failed to load data. See messages below.")
-        for msg in load_messages:
-            if "Critical" in msg or "Error" in msg:
-                st.error(msg)
-            else:
-                st.warning(msg)
         st.stop()
-    
-    # Needed later if the user clicks "Save Event Log" after a run - saved runs
-    # record the case grouping they were built with, same as the cache manifest.
-    st.session_state["case_grouping"] = case_grouping
+
+    dataset_options = {
+        f"{m.get('dataset_id')} — {m.get('n_events', 0):,} events, "
+        f"{m.get('n_cases', 0):,} cases, grouping={m.get('case_grouping')}, "
+        f"last updated {m.get('last_updated', '?')}": m.get("dataset_id")
+        for m in known_datasets
+    }
+    chosen_label = st.selectbox("Cached dataset", list(dataset_options.keys()))
+    chosen_dataset_id = dataset_options[chosen_label]
+
+    with st.spinner("Loading cached dataset..."):
+        cached_raw_df, cached_manifest, df_ready = _cached_load_cached_dataset(
+            chosen_dataset_id, DEFAULT_CACHE_DIR, cache_signature(chosen_dataset_id, cache_dir=DEFAULT_CACHE_DIR),
+            remove_duplicates,
+        )
+    if cached_raw_df is None:
+        st.error(f"Could not load cached dataset '{chosen_dataset_id}'. It may have just been cleared.")
+        st.stop()
+
+    raw_df = cached_raw_df
+    case_grouping = cached_manifest.get("case_grouping", "user")
+    has_category = "category" in raw_df.columns
+    load_messages = [f"Loaded cached dataset '{chosen_dataset_id}' ({len(raw_df):,} events, skipping upload/query)."]
+    st.session_state["load_messages"] = load_messages
+    loaded_from_cache = True
+    st.session_state["active_source_dataset_id"] = chosen_dataset_id
+elif data_source == "Load saved run":
+    known_runs = list_saved_runs(save_dir=DEFAULT_SAVED_RUNS_DIR)
+    if not known_runs:
+        st.info(
+            "No saved runs yet. Run an analysis, then use **Save Event Log** "
+            "next to the results to add one here for later."
+        )
+        st.stop()
+
+    run_labels = {}
+    for m in known_runs:
+        link_note = f", linked to cache '{m['source_dataset_id']}'" if m.get("source_dataset_id") else ""
+        results_note = ", results saved" if m.get("has_results") else ""
+        run_labels[m.get("run_id")] = (
+            f"{m.get('label')} — {m.get('n_events', 0):,} events, "
+            f"{m.get('n_cases', 0):,} cases, saved {m.get('saved_at', '?')}{link_note}{results_note}"
+        )
+    chosen_run_id = st.selectbox(
+        "Saved run", list(run_labels.keys()), format_func=run_labels.get, key="saved_run_choice",
+    )
+    # The config widgets (sidebar included) already rendered this run using
+    # whatever run was selected before - rerun once so they pick up this
+    # run's settings (see _config_scope above).
+    chosen_manifest = next(m for m in known_runs if m.get("run_id") == chosen_run_id)
+    if (chosen_run_id if chosen_manifest.get("config") else "default") != _config_scope:
+        st.rerun()
+
+    linked_dataset_id = chosen_manifest.get("source_dataset_id")
+    with st.spinner("Loading saved run..."):
+        saved_raw_df, saved_manifest, saved_run_error, saved_df_ready = _cached_load_saved_run(
+            chosen_run_id, DEFAULT_SAVED_RUNS_DIR, DEFAULT_CACHE_DIR,
+            cache_signature(linked_dataset_id, cache_dir=DEFAULT_CACHE_DIR) if linked_dataset_id else "standalone",
+            remove_duplicates,
+        )
+    if st.button("Delete this saved run"):
+        delete_saved_run(chosen_run_id, save_dir=DEFAULT_SAVED_RUNS_DIR)
+        st.rerun()
+    if saved_raw_df is None:
+        st.error(saved_run_error)
+        st.stop()
+
+    raw_df = saved_raw_df
+    df_ready = saved_df_ready
+    case_grouping = saved_manifest.get("case_grouping", "user")
+    has_category = "category" in raw_df.columns
+    load_messages = [f"Loaded saved run '{saved_manifest.get('label')}' ({len(raw_df):,} events)."]
+    st.session_state["load_messages"] = load_messages
+    loaded_from_saved_run = True
+    st.session_state["active_source_dataset_id"] = saved_manifest.get("source_dataset_id")
+    st.session_state["active_saved_run_label"] = saved_manifest.get("label")
+
+    # Swap in this run's saved results (and the config they were made with)
+    # once, when it's first selected - not on every rerun, which would throw
+    # away a fresh Run Analysis the user did on top of it. Whatever the
+    # previously loaded data produced is dropped either way, since it
+    # describes a different event log.
+    if st.session_state.get("restored_run_id") != chosen_run_id:
+        st.session_state["restored_run_id"] = chosen_run_id
+        for key in RESULT_STATE_KEYS:
+            st.session_state.pop(key, None)
+        if saved_manifest.get("config"):
+            st.session_state["config"] = saved_manifest["config"]
+        # Compared against, and restored as, the log the run was saved from -
+        # deduplicated if the option is on - not raw_df as loaded: a
+        # cache-linked run reads through to the cache, which keeps the
+        # duplicates, so raw_df's event count never matched the saved one.
+        # (raw_df itself is only deduplicated further down, after the Data
+        # Quality Check.)
+        restored_df = drop_duplicate_events(raw_df)[0] if remove_duplicates else raw_df
+        saved_results, saved_results_note = load_saved_results(
+            saved_manifest, restored_df, save_dir=DEFAULT_SAVED_RUNS_DIR
+        )
+        if saved_results is not None:
+            st.session_state["results"] = saved_results
+            st.session_state["df"] = restored_df
+            saved_results_note = (
+                "success",
+                "Restored this run's saved results and settings below - no need to run the "
+                "analysis again, unless you change the settings.",
+            )
+        elif saved_results_note:
+            saved_results_note = ("warning", saved_results_note)
+        # Shown until the next Run Analysis replaces these results.
+        st.session_state["saved_results_note"] = saved_results_note
+        st.session_state["load_messages"] = [
+            f"Loaded saved run '{saved_manifest.get('label')}' ({len(raw_df):,} events)."
+        ]
+    load_messages = st.session_state.get("load_messages", [])
+    if st.session_state.get("saved_results_note"):
+        note_kind, note_text = st.session_state["saved_results_note"]
+        getattr(st, note_kind)(note_text)
+elif data_source == "Connect to BigQuery":
+    active_file_bytes = render_bigquery_source()
+    if active_file_bytes is None:
+        st.stop()
+else:
+    uploaded_file = st.file_uploader("Upload Event Log (CSV)", type=["csv"])
+
+    with st.expander("No data? Generate a mock event log"):
+        st.caption(
+            "Creates a synthetic e-commerce clickstream (funnel drop-off, "
+            "repeat buyers, categories, revenue, device/traffic segments) "
+            "so you can try PRoX without your own data."
+        )
+        mock_sessions = st.number_input(
+            "Sessions", min_value=50, max_value=5000, value=400, step=50, key="mock_sessions"
+        )
+        mock_seed = st.number_input(
+            "Seed", min_value=0, value=42, step=1, key="mock_seed",
+            help="Same seed + session count always reproduces the same data."
+        )
+        if st.button("Generate Mock Data", width='stretch'):
+            st.session_state["mock_csv_bytes"] = generate_mock_csv_bytes(
+                n_sessions=int(mock_sessions), seed=int(mock_seed)
+            )
+            st.session_state["mock_csv_label"] = f"mock_event_log_{int(mock_sessions)}s_seed{int(mock_seed)}.csv"
+
+        mock_csv_bytes = st.session_state.get("mock_csv_bytes")
+        if mock_csv_bytes:
+            st.success(f"Mock data ready: {st.session_state['mock_csv_label']}")
+            dl_col, clear_col = st.columns(2)
+            with dl_col:
+                st.download_button(
+                    "Download CSV", data=mock_csv_bytes,
+                    file_name=st.session_state["mock_csv_label"], mime="text/csv",
+                    width='stretch',
+                )
+            with clear_col:
+                if st.button("Clear", width='stretch'):
+                    st.session_state.pop("mock_csv_bytes", None)
+                    st.session_state.pop("mock_csv_label", None)
+                    st.rerun()
+            if uploaded_file is None:
+                st.caption("Will be used for analysis (no file uploaded above).")
+            else:
+                st.caption("Uploaded file takes priority - remove it to use mock data instead.")
+
+    active_file_bytes = uploaded_file.getvalue() if uploaded_file else st.session_state.get("mock_csv_bytes")
+
+    if active_file_bytes is None:
+        st.info("Upload a CSV event log above to get started, or generate a mock one.")
+        st.stop()
+
+if loaded_from_cache or loaded_from_saved_run:
+    source_desc = "this cache" if loaded_from_cache else "this saved run"
+    st.caption(
+        f"Case grouping is fixed to how {source_desc} was built: "
+        f"**{'By user' if case_grouping == 'user' else 'By session'}**. "
+        "Load a fresh upload/query to change it."
+    )
+else:
+    case_grouping_label = st.radio(
+        "Case grouping",
+        ["By user (recommended)", "By session"],
+        horizontal=True,
+        help=(
+            "By user: one case spans everything a user did across all their "
+            "sessions - needed to see a user's sequence of sessions (e.g. a "
+            "browsing session followed by a buying session) in the Session "
+            "Insights tab. By session: one case per session, as before - use "
+            "this if you want process discovery/conformance scoped to a single "
+            "session instead of a user's full history."
+        ),
+    )
+    case_grouping = "user" if case_grouping_label.startswith("By user") else "session"
+
+    loader_defaults = create_analysis_config()["data_loading"]
+    with st.spinner("Loading and validating data..."):
+        raw_df, df_ready, load_messages, has_category = _cached_load_and_prepare(
+            active_file_bytes,
+            loader_defaults["chunk_threshold_mb"],
+            loader_defaults["chunk_size"],
+            case_grouping,
+            remove_duplicates,
+        )
+
+    st.session_state["load_messages"] = load_messages
+
+if raw_df is None:
+    st.error("Failed to load data. See messages below.")
+    for msg in load_messages:
+        if "Critical" in msg or "Error" in msg:
+            st.error(msg)
+        else:
+            st.warning(msg)
+    st.stop()
+
+# Needed later if the user clicks "Save Event Log" after a run - saved runs
+# record the case grouping they were built with, same as the cache manifest.
+st.session_state["case_grouping"] = case_grouping
 
 # ---------------------------------------------------------------------------
 # Incremental analysis - opt-in, applied right after a fresh upload is
