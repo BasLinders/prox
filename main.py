@@ -2091,7 +2091,10 @@ def _render_results_tabs():
             if "funnel_result" not in st.session_state:
                 st.session_state["funnel_result"] = results.get("funnel_analysis")
 
-            activities = _analyzed_activities(raw_df, st.session_state.get("config", {}))
+            # Filtered so the activity choices and the funnel itself describe the
+            # same log the main analysis used, not the raw one with noise events.
+            funnel_df = _apply_filter_steps(raw_df, st.session_state.get("config", {}))
+            activities = sorted(funnel_df["concept:name"].dropna().astype(str).unique().tolist())
 
             mode = st.radio(
                 "Funnel definition",
@@ -2117,8 +2120,8 @@ def _render_results_tabs():
 
             funnel_exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id"}
             funnel_segment_candidates = [
-                c for c in raw_df.columns
-                if c not in funnel_exclude_cols and 2 <= raw_df[c].nunique(dropna=True) <= 20
+                c for c in funnel_df.columns
+                if c not in funnel_exclude_cols and 2 <= funnel_df[c].nunique(dropna=True) <= 20
             ]
             funnel_segment_col = None
             if funnel_segment_candidates:
@@ -2144,13 +2147,13 @@ def _render_results_tabs():
                     with st.spinner("Computing funnel..."):
                         if funnel_segment_col:
                             combined = analyze_funnel_by_segment(
-                                raw_df, segment_col=funnel_segment_col, funnel_steps=funnel_steps
+                                funnel_df, segment_col=funnel_segment_col, funnel_steps=funnel_steps
                             )
                             st.session_state["funnel_result"] = combined["overall"]
                             st.session_state["funnel_segment_result"] = {**combined, "segment_col": funnel_segment_col}
                         else:
                             st.session_state["funnel_result"] = analyze_conversion_funnel(
-                                raw_df, funnel_steps=funnel_steps
+                                funnel_df, funnel_steps=funnel_steps
                             )
                             st.session_state.pop("funnel_segment_result", None)
 
@@ -2486,12 +2489,13 @@ def _render_results_tabs():
         # describe (see pipeline.py's Step 1b), not the raw unfiltered/
         # unsampled log - otherwise a propensity model trained here would
         # silently disagree with the sampled conformance/business-insight
-        # numbers shown in the other tabs. Falls back to the raw log only for
-        # results computed before 'processed_log' existed.
-        analysis_df = results.get("processed_log")
-        if analysis_df is None:
-            analysis_df = st.session_state.get("df")
+        # numbers shown in the other tabs. Falls back to the raw log, with the
+        # same filter_steps applied, only for results computed before
+        # 'processed_log' existed.
         saved_config = st.session_state.get("config", {})
+        analysis_df = results.get("processed_log")
+        if analysis_df is None and st.session_state.get("df") is not None:
+            analysis_df = _apply_filter_steps(st.session_state["df"], saved_config)
 
         if analysis_df is None or "concept:name" not in analysis_df.columns:
             st.info("Run an analysis first to enable predictive insights.")
