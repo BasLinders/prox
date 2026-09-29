@@ -9,7 +9,7 @@ create_analysis_config  Build a config dict for run_full_analysis
 CONFIG                  Default configuration
 merge_incremental       Merge a freshly-loaded log with a cached recurring dataset
 train_propensity_model  Train a conversion-propensity classifier (optional
-                         extra: pip install prox[ml])
+                         extra: pip install -e ".[ml]")
 """
 
 from .pipeline import run_full_analysis

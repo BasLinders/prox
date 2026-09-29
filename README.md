@@ -28,7 +28,7 @@ A modular process mining tool for analysing customer journeys from any event log
 - **Business Insights** - Repeat buyer detection, inter-purchase timing, revenue multiplier (repeat vs. one-time buyers), average order value, cart abandonment rate, category-level revenue breakdown, and revenue-over-time trend.
 - **Funnel Analysis** - Conversion/drop-off rate across any sequence of activities you define, for any process in any industry — or let PRoX auto-derive a likely order from the data as a starting point.
 - **Segment Comparison** - Split the log by any low-cardinality column (e.g. device, traffic source) and compare health score, fitness, precision, repeat rate, and happy path side by side, optionally run in parallel across CPU cores.
-- **Predictive Insights** - Train a conversion-propensity classifier (logistic regression, k-fold cross-validated) on in-progress cases to estimate their likelihood of reaching a chosen "success" activity, and surface the activities most associated with converting vs. not. Aggregate/driver-level only — no per-case scoring. Optional extra: `pip install prox[ml]`.
+- **Predictive Insights** - Train a conversion-propensity classifier (logistic regression, k-fold cross-validated) on in-progress cases to estimate their likelihood of reaching a chosen "success" activity, and surface the activities most associated with converting vs. not. Aggregate/driver-level only — no per-case scoring. Optional extra: `pip install -e ".[ml]"`.
 - **Incremental Analysis** - Merge a freshly-loaded export into a named, on-disk cached dataset instead of reprocessing a recurring log from scratch each time; pick up a previously cached dataset on a later run.
 - **Outlier Handling** - Opt-in winsorization of revenue/price outliers, capping by standard deviation or percentile, before discovery and analysis run.
 - **BigQuery Live Data Source** - Connect directly to BigQuery and extract a GA4-style event log instead of uploading a CSV. Optional extra: `pip install --upgrade --force-reinstall "foe[bigquery] @ git+https://github.com/BasLinders/first-order-engine.git"` (the `--upgrade --force-reinstall` matters for reinstalls too - `foe`'s version string never bumps, so a plain `pip install` of the same URL won't pick up upstream changes), plus a `.streamlit/secrets.toml`.
@@ -57,17 +57,20 @@ pip install -r requirements.txt
 
 No compilation step is needed. The Cython conformance module from earlier versions has been replaced with pure Python.
 
-Two optional extras unlock features that most users won't need:
+Three optional extras unlock features that most users won't need:
 
 ```bash
 # Predictive Insights tab (conversion-propensity model)
-pip install "prox[ml]"
+pip install -e ".[ml]"
 
 # BigQuery live data source (also requires a filled-in .streamlit/secrets.toml)
-pip install "prox[bigquery]"
+pip install -e ".[bigquery]"
+
+# AI conclusion (Gemini summary; also requires GEMINI_API_KEY in .streamlit/secrets.toml)
+pip install -e ".[ai]"
 ```
 
-Both degrade gracefully to an on-screen message rather than crashing when their extra isn't installed.
+All three degrade gracefully to an on-screen message rather than crashing when their extra isn't installed.
 
 ---
 

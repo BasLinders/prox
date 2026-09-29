@@ -105,7 +105,7 @@ prose.
 ### Dependencies and scope
 
 - New dependency: `google-generativeai` (Gemini SDK). Optional extra
-  (e.g. `pip install prox[ai]`), not a hard requirement — consistent with
+  (e.g. `pip install -e ".[ai]"`), not a hard requirement — consistent with
   how `ML_roadmap.md`'s scikit-learn dependency and `dev_roadmap.md`'s
   BigQuery dependency are both scoped as opt-in.
 - Cost transparency: Gemini API calls cost money (a free tier exists but

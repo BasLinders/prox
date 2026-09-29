@@ -510,7 +510,7 @@ scoped in `ML_roadmap.md`: `train_propensity_model()`,
 `analyze_propensity_drivers()`, `summarize_propensity_scores()`, and the
 completed/in-progress case split (`split_completed_in_progress()`) it all
 sits on. No `main.py`/UI changes - that's a deliberately separate follow-up.
-Optional dependency (`pip install prox[ml]`, scikit-learn), same pattern as
+Optional dependency (`pip install -e ".[ml]"`, scikit-learn), same pattern as
 the BigQuery extra above.
 
 Deviates from `ML_roadmap.md`'s original framing in three ways, decided

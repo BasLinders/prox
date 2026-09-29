@@ -9,7 +9,7 @@ predictive process monitoring, applied to PM4Py-standard event logs
 (columns: case:concept:name, concept:name, time:timestamp, plus whatever
 optional case attribute/revenue columns the log has).
 
-Optional dependency: requires scikit-learn (`pip install prox[ml]`).
+Optional dependency: requires scikit-learn (`pip install -e ".[ml]"`).
 split_completed_in_progress() works with pandas/numpy alone, so a caller can
 inspect "how many completed/in-progress cases do I have" without the [ml]
 extra installed. train_propensity_model() (and, transitively,
@@ -80,7 +80,7 @@ except ImportError:
 
 _SKLEARN_INSTALL_MSG = (
     "scikit-learn is required for predictive modelling but isn't installed. "
-    "Install it with: pip install prox[ml]"
+    "Install it with: pip install -e '.[ml]'"
 )
 
 _TOP_K_ACTIVITIES = 20
