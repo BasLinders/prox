@@ -62,11 +62,10 @@ KNOWN_NOISE_ACTIVITIES = {
     "session_start", "first_visit",
 }
 
-def _analyzed_activities(raw_df: pd.DataFrame, config: dict) -> list:
-    """Activity choices for standalone tabs (Funnel, Reference Model): applies
-    the same event filter used in the main analysis to raw_df first, so
-    activities removed as noise (e.g. session_start) don't reappear as
-    selectable steps just because these tabs otherwise operate on raw_df."""
+def _apply_filter_steps(raw_df: pd.DataFrame, config: dict) -> pd.DataFrame:
+    """Applies the main analysis's filter_steps to raw_df, for standalone tabs
+    (Funnel, Reference Model) that otherwise operate on the unfiltered log, so
+    activities removed as noise (e.g. session_start) don't reappear there."""
     df = raw_df
     for step_config in (config or {}).get("filter_steps") or []:
         params = step_config.copy()
@@ -76,6 +75,12 @@ def _analyzed_activities(raw_df: pd.DataFrame, config: dict) -> list:
         filtered_df, _ = filter_event_log(df, filter_type=f_type, **params)
         if filtered_df is not None and not filtered_df.empty:
             df = filtered_df
+    return df
+
+
+def _analyzed_activities(raw_df: pd.DataFrame, config: dict) -> list:
+    """Activity choices for standalone tabs, taken from the filtered log."""
+    df = _apply_filter_steps(raw_df, config)
     return sorted(df["concept:name"].dropna().astype(str).unique().tolist())
 
 
@@ -1692,6 +1697,9 @@ def _render_results_tabs():
         if ref_raw_df is None or "concept:name" not in ref_raw_df.columns:
             st.info("Run an analysis first to enable reference-model conformance checking.")
         else:
+            # Filtered once here so the activity choices, the conformance run and
+            # the coverage diff all describe the same log the main analysis used.
+            ref_df = _apply_filter_steps(ref_raw_df, st.session_state.get("config", {}))
             with st.form("reference_model_form"):
                 ref_mode = st.radio(
                     "Reference model source",
@@ -1704,7 +1712,7 @@ def _render_results_tabs():
                 ref_uploaded_bpmn = None
 
                 if ref_mode == "Define expected path":
-                    ref_activities = _analyzed_activities(ref_raw_df, st.session_state.get("config", {}))
+                    ref_activities = sorted(ref_df["concept:name"].dropna().astype(str).unique().tolist())
                     ref_selected_activities = st.multiselect(
                         "Expected activities, in order",
                         options=ref_activities,
@@ -1782,7 +1790,7 @@ def _render_results_tabs():
 
                     with st.spinner("Checking conformance against the reference model..."):
                         ref_conf_result = run_conformance_checking(
-                            ref_raw_df, ref_net, ref_im, ref_fm,
+                            ref_df, ref_net, ref_im, ref_fm,
                             max_align=ref_speed.get("max_align", 250),
                             max_prec_cases=ref_speed.get("max_prec_traces", 250),
                             cores=ref_speed.get("cores", 1),
@@ -1798,7 +1806,7 @@ def _render_results_tabs():
                         ref_net, ref_im, ref_fm, os.path.join("output", "reference_model.png")
                     )
                     discovered_img_path = results.get("visualizations", {}).get("happy_path")
-                    coverage_diff = diff_reference_model_coverage(ref_net, ref_raw_df)
+                    coverage_diff = diff_reference_model_coverage(ref_net, ref_df)
 
                     st.session_state["reference_conformance_result"] = {
                         "conformance_result": ref_conf_result,
