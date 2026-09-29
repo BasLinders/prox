@@ -24,6 +24,11 @@ setup(
         "ml": [
             "scikit-learn>=1.3.0,<2.0.0",
         ],
+        # Optional AI conclusion step (utility/ai_client.py). 1.51 is the first
+        # release with ThinkingConfig.thinking_level.
+        "ai": [
+            "google-genai>=1.51.0,<3.0.0",
+        ],
     },
     python_requires=">=3.9",
 )

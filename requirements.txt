@@ -22,3 +22,9 @@ google-cloud-bigquery-storage
 # without the ML layer. Adds scikit-learn (pure Python + numpy/scipy, no
 # GPU/compiled deps). Install with:
 #   pip install prox[ml]
+
+# Optional: AI conclusion (utility/ai_client.py) - a Gemini-written summary
+# and next steps for a finished analysis, also offered in the PDF report.
+# Not installed by default. Install with:
+#   pip install prox[ai]
+# and add GEMINI_API_KEY to .streamlit/secrets.toml.

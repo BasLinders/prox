@@ -107,3 +107,63 @@ def test_saved_run_is_only_loaded_once_picked(app):
     assert _data_loaded(app)
     assert app.selectbox[0].value == configured["run_id"]
     assert app.session_state["restored_run_id"] == configured["run_id"]
+
+
+def _run_mock_analysis(app):
+    app.run()
+    app.radio(key="data_source_choice").set_value("Upload CSV").run()
+    app.number_input(key="mock_sessions").set_value(50)
+    next(b for b in app.button if b.label == "Generate Mock Data").click().run()
+    next(b for b in app.button if b.label == "Run Analysis").click().run()
+    assert not app.exception
+
+
+def test_ai_conclusion_and_pdf_expanders_follow_the_results(app):
+    _run_mock_analysis(app)
+
+    expander_labels = [e.label for e in app.expander]
+    assert "AI Conclusion" in expander_labels
+    assert "Build a Custom PDF Report" in expander_labels
+    # No GEMINI_API_KEY in this empty working directory's secrets.
+    generate = next(b for b in app.button if b.label == "Generate AI Conclusion")
+    assert generate.disabled
+
+
+def test_generated_ai_conclusion_is_shown_and_offered_in_the_pdf(app, monkeypatch):
+    from utility import ai_client
+
+    sent = {}
+
+    def fake_generate_conclusion(data, language, on_progress=None, **kwargs):
+        sent["data"], sent["language"] = data, language
+        return {
+            "ok": True, "error": None, "error_kind": None, "model_used": None,
+            "model_requested": "fake-model", "models_tried": ["fake-model"],
+            "text": '{"summary": "All good.", "key_findings": ["F1"], "next_steps": ["Fix view_item_list"]}',
+        }
+
+    monkeypatch.setattr(ai_client, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_client, "generate_conclusion", fake_generate_conclusion)
+    _run_mock_analysis(app)
+
+    next(b for b in app.button if b.label == "Generate AI Conclusion").click().run()
+    assert not app.exception
+
+    assert sent["language"] == ai_client.DEFAULT_LANGUAGE
+    assert sent["data"]["log_summary"]["cases"] > 0
+    assert app.session_state["ai_conclusion"]["next_steps"] == ["Fix view_item_list"]
+    # Underscores escaped, so activity names don't render as italics.
+    assert any("view\\_item\\_list" in m.value for m in app.markdown)
+    assert any(c.label == "AI Summary & Next Steps" for c in app.checkbox)
+
+    # A follow-up analysis changes the payload: the conclusion is flagged as
+    # out of date and no longer offered in the PDF.
+    app.session_state["segment_result"] = {
+        "segment_col": "device", "segments": {}, "errors": [],
+        "comparison_table": {"mobile": {"cases": 5, "health_score": 50.0, "fitness_score": 0.9,
+                                        "precision_score": 0.8, "repeat_rate": 0.0, "top_variant": "a"}},
+    }
+    app.run()
+    assert not app.exception
+    assert any("changed since this conclusion" in w.value for w in app.warning)
+    assert not any(c.label == "AI Summary & Next Steps" for c in app.checkbox)
