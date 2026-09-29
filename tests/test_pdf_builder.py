@@ -2,7 +2,9 @@ import pandas as pd
 import pytest
 
 from utility.pdf_builder import (
+    AI_CONCLUSION_KEY,
     _available_sections,
+    _section_ai_conclusion,
     _section_business,
     _section_sessions,
     _section_variants,
@@ -108,4 +110,36 @@ def test_build_pdf_report_only_includes_requested_sections(tmp_path):
 def test_build_pdf_report_ignores_unknown_section_keys(tmp_path):
     results = make_results_with_business_and_sessions(tmp_path)
     pdf_bytes = build_pdf_report(results, ['sessions', 'does_not_exist'])
+    assert pdf_bytes.startswith(b'%PDF')
+
+
+_AI_CONCLUSION = {
+    'summary': 'The process is healthy.\n\nCheckout <leaks> & needs work.',
+    'key_findings': ['51% of carts are abandoned.'],
+    'next_steps': ['Simplify checkout.', 'Re-run the funnel by device.'],
+    'model': 'gemini-test',
+    'generated_at': '2026-01-01 12:00',
+}
+
+
+def test_section_ai_conclusion_renders_summary_findings_and_steps():
+    story = _section_ai_conclusion(_AI_CONCLUSION, _styles())
+    text = ' '.join(getattr(f, 'text', '') for f in story)
+    assert 'Key Findings' in text
+    assert 'Next Steps' in text
+    # Model output is escaped, not parsed as reportlab markup.
+    assert '&lt;leaks&gt; &amp;' in text
+
+
+def test_build_pdf_report_includes_ai_conclusion_only_when_selected(tmp_path):
+    results = make_results_with_business_and_sessions(tmp_path)
+    without = build_pdf_report(results, ['sessions'], ai_conclusion=_AI_CONCLUSION)
+    with_ai = build_pdf_report(results, ['sessions', AI_CONCLUSION_KEY], ai_conclusion=_AI_CONCLUSION)
+    assert with_ai.startswith(b'%PDF')
+    assert len(with_ai) > len(without)
+
+
+def test_build_pdf_report_skips_ai_key_without_a_conclusion(tmp_path):
+    results = make_results_with_business_and_sessions(tmp_path)
+    pdf_bytes = build_pdf_report(results, ['sessions', AI_CONCLUSION_KEY])
     assert pdf_bytes.startswith(b'%PDF')

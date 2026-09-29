@@ -1,13 +1,19 @@
+import hashlib
 import io
+import json
 import logging
 import math
 import os
+import re
 import threading
 import time
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
+from utility import ai_client
+from utility.ai_payload import SECTION_LABELS as AI_PAYLOAD_SECTION_LABELS, build_ai_payload
 from utility.bigquery_source import render_bigquery_source
 from utility.pdf_builder import render_pdf_builder
 from prox import (
@@ -131,6 +137,7 @@ LARGE_CASE_COUNT_THRESHOLD = 2000
 RESULT_STATE_KEYS = (
     "results", "df", "segment_result", "funnel_result",
     "funnel_segment_result", "reference_conformance_result",
+    "propensity_model", "propensity_insights", "ai_conclusion", "ai_conclusion_error",
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
@@ -1312,6 +1319,155 @@ if run_btn:
     st.session_state.pop("saved_results_note", None)
 
 # ---------------------------------------------------------------------------
+# AI conclusion helpers
+# ---------------------------------------------------------------------------
+# Friendly headline per ai_client.generate_conclusion() error_kind; the raw
+# error goes underneath as a caption.
+_AI_ERROR_HEADLINES = {
+    "not_configured": "No Gemini API key is configured.",
+    "sdk_missing": "The google-genai package isn't installed. Install it with `pip install prox[ai]`.",
+    "quota_exhausted": "The Gemini quota for this API key is used up. Try again later, or use a key with more quota.",
+    "server_busy": "Gemini is busy right now. Try again in a minute.",
+    "empty_response": "Gemini returned an empty answer. Try again.",
+    "client_error": "Gemini rejected the request. Check the API key and the model name.",
+    "other": "The AI conclusion couldn't be generated.",
+}
+
+# Characters Streamlit's markdown would turn into formatting - an activity
+# name like view_item_list otherwise renders as italics.
+_MARKDOWN_SPECIAL_CHARS = re.compile(r"([\\`*_\[\]<>#|~$])")
+
+
+def _md_escape(text: str) -> str:
+    return _MARKDOWN_SPECIAL_CHARS.sub(r"\\\1", text)
+
+
+def _propensity_insights(analysis_df: pd.DataFrame, model_bundle: dict) -> tuple:
+    """(drivers, score summary) for a trained propensity model, computed once
+    per model/dataset and reused on later reruns - scoring every in-progress
+    case again on each rerun would slow down every widget in the results
+    fragment once the AI payload needs it too."""
+    cached = st.session_state.get("propensity_insights")
+    if cached and cached["model_bundle"] is model_bundle and cached["analysis_df"] is analysis_df:
+        return cached["drivers"], cached["summary"]
+    drivers = analyze_propensity_drivers(model_bundle)
+    summary = summarize_propensity_scores(analysis_df, model_bundle)
+    st.session_state["propensity_insights"] = {
+        "model_bundle": model_bundle, "analysis_df": analysis_df,
+        "drivers": drivers, "summary": summary,
+    }
+    return drivers, summary
+
+
+def _collect_ai_payload(results: dict) -> dict:
+    """build_ai_payload() over this run's results and whichever follow-up
+    analyses the tabs have in session state."""
+    model_bundle = st.session_state.get("propensity_model")
+    drivers, score_summary = None, None
+    if model_bundle and model_bundle.get("model") is not None:
+        # Same dataset the Predictive Insights tab trains and scores on.
+        analysis_df = results.get("processed_log")
+        if analysis_df is None:
+            analysis_df = st.session_state.get("df")
+        drivers, score_summary = _propensity_insights(analysis_df, model_bundle)
+
+    return build_ai_payload(
+        results,
+        config=st.session_state.get("config"),
+        case_grouping=st.session_state.get("case_grouping"),
+        reference_conformance=st.session_state.get("reference_conformance_result"),
+        funnel_result=st.session_state.get("funnel_result"),
+        funnel_segment_result=st.session_state.get("funnel_segment_result"),
+        segment_result=st.session_state.get("segment_result"),
+        propensity_model=model_bundle,
+        propensity_drivers=drivers,
+        propensity_summary=score_summary,
+    )
+
+
+def _ai_payload_fingerprint(payload: dict) -> str:
+    """Identifies the data a conclusion was generated from, so it can be
+    flagged as out of date once any analysis behind it changes."""
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def _render_ai_conclusion(payload: dict, fingerprint: str) -> None:
+    st.caption(
+        "Sends a digest of this run's results to Gemini and asks for a plain-language "
+        "summary, key findings and next steps. The digest holds the aggregate metrics "
+        "shown in the tabs above - never case, user or session IDs. Follow-up analyses "
+        "(reference-model conformance, funnel by segment, segment comparison, the "
+        "predictive model) are included once you've run them in their tab."
+    )
+    included = [label for key, label in AI_PAYLOAD_SECTION_LABELS.items() if key in payload]
+    not_included = [AI_PAYLOAD_SECTION_LABELS[key] for key in payload.get("not_run", [])]
+    st.caption("**Included:** " + (", ".join(included) or "nothing yet"))
+    if not_included:
+        st.caption("**Not run or not available:** " + ", ".join(not_included))
+
+    configured = ai_client.is_configured()
+    if not configured:
+        st.info("Add a `GEMINI_API_KEY` to `.streamlit/secrets.toml` to generate AI conclusions.")
+
+    language = st.radio(
+        "Language",
+        options=list(ai_client.LANGUAGES),
+        format_func=ai_client.LANGUAGES.get,
+        horizontal=True,
+        key="ai_language",
+    )
+    if st.button("Generate AI Conclusion", type="primary", width='stretch', disabled=not configured):
+        progress = st.empty()
+        with st.spinner("Asking the AI model..."):
+            result = ai_client.generate_conclusion(
+                payload, language=language, on_progress=lambda message: progress.caption(message),
+            )
+        progress.empty()
+        if result["ok"]:
+            st.session_state["ai_conclusion"] = {
+                **ai_client.parse_conclusion(result["text"]),
+                "language": language,
+                "model": result["model_used"] or result["model_requested"],
+                "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "fingerprint": fingerprint,
+            }
+            st.session_state.pop("ai_conclusion_error", None)
+        else:
+            st.session_state["ai_conclusion_error"] = result
+
+    error = st.session_state.get("ai_conclusion_error")
+    if error:
+        st.error(_AI_ERROR_HEADLINES.get(error["error_kind"], _AI_ERROR_HEADLINES["other"]))
+        details = error.get("error") or ""
+        if error.get("models_tried"):
+            details += f" (tried: {', '.join(error['models_tried'])})"
+        st.caption(f"Details: {details}")
+
+    conclusion = st.session_state.get("ai_conclusion")
+    if conclusion:
+        if conclusion["fingerprint"] != fingerprint:
+            st.warning(
+                "The results have changed since this conclusion was generated. Generate "
+                "it again to match them - until then, it's left out of the PDF."
+            )
+        st.markdown("**Summary**")
+        for paragraph in conclusion["summary"].split("\n\n"):
+            if paragraph.strip():
+                st.markdown(_md_escape(paragraph.strip()))
+        if conclusion["key_findings"]:
+            st.markdown("**Key findings**")
+            st.markdown("\n".join(f"- {_md_escape(f)}" for f in conclusion["key_findings"]))
+        if conclusion["next_steps"]:
+            st.markdown("**Next steps**")
+            st.markdown("\n".join(f"{i}. {_md_escape(s)}" for i, s in enumerate(conclusion["next_steps"], start=1)))
+        st.caption(
+            f"Generated by {conclusion['model']} on {conclusion['generated_at']}, in "
+            f"{ai_client.LANGUAGES.get(conclusion['language'], conclusion['language'])}. "
+            "AI-generated - check it against the tabs above before sharing it."
+        )
+
+
+# ---------------------------------------------------------------------------
 # Display results
 # ---------------------------------------------------------------------------
 @st.fragment
@@ -1756,6 +1912,7 @@ def _render_results_tabs():
             if run_ref_btn:
                 ref_model = None
                 ref_build_errors = []
+                ref_description = None
 
                 if ref_mode == "Define expected path":
                     if len(ref_stages) < 2:
@@ -1763,12 +1920,14 @@ def _render_results_tabs():
                     else:
                         with st.spinner("Building reference model..."):
                             ref_model, ref_build_errors = build_structured_reference_model(ref_stages)
+                        ref_description = _describe_reference_stages(ref_stages)
                 else:
                     if not ref_uploaded_bpmn:
                         st.warning("Upload a BPMN file first.")
                     else:
                         with st.spinner("Importing BPMN reference model..."):
                             ref_model, ref_build_errors = import_reference_model_bpmn(ref_uploaded_bpmn.getvalue())
+                        ref_description = f"Imported BPMN model ({ref_uploaded_bpmn.name})"
 
                 for err in ref_build_errors:
                     st.error(err)
@@ -1805,6 +1964,7 @@ def _render_results_tabs():
                         "discovered_img": discovered_img_path,
                         "reference_img": ref_img_path,
                         "coverage_diff": coverage_diff,
+                        "description": ref_description,
                     }
 
             ref_state = st.session_state.get("reference_conformance_result")
@@ -1979,7 +2139,7 @@ def _render_results_tabs():
                                 raw_df, segment_col=funnel_segment_col, funnel_steps=funnel_steps
                             )
                             st.session_state["funnel_result"] = combined["overall"]
-                            st.session_state["funnel_segment_result"] = combined
+                            st.session_state["funnel_segment_result"] = {**combined, "segment_col": funnel_segment_col}
                         else:
                             st.session_state["funnel_result"] = analyze_conversion_funnel(
                                 raw_df, funnel_steps=funnel_steps
@@ -2225,7 +2385,7 @@ def _render_results_tabs():
                         raw_df, segment_col=segment_col, config=saved_config,
                         top_n_segments=int(top_n_segments), parallel=run_parallel
                     )
-                st.session_state["segment_result"] = segment_result
+                st.session_state["segment_result"] = {**segment_result, "segment_col": segment_col}
 
             segment_result = st.session_state.get("segment_result")
             if segment_result:
@@ -2423,7 +2583,7 @@ def _render_results_tabs():
 
                     st.subheader("Top Drivers")
                     st.caption("Associative, not causal - what tends to go together with reaching the outcome.")
-                    drivers = analyze_propensity_drivers(model_bundle)
+                    drivers, summary = _propensity_insights(analysis_df, model_bundle)
                     if drivers:
                         for sentence in drivers:
                             st.markdown(f"- {sentence}")
@@ -2431,7 +2591,6 @@ def _render_results_tabs():
                         st.info("No drivers to report.")
 
                     st.subheader("In-Progress Cases")
-                    summary = summarize_propensity_scores(analysis_df, model_bundle)
                     if summary["n_scored"]:
                         s1, s2, s3 = st.columns(3)
                         s1.metric("In-Progress Cases Scored", f"{summary['n_scored']:,}")
@@ -2453,11 +2612,36 @@ def _render_results_tabs():
                 st.info("Choose an outcome activity above and click **Train Propensity Model**.")
 
     # ---------------------------------------------------------------------------
-    # Export: Build a Custom PDF Report
+    # AI conclusion + PDF export
     # ---------------------------------------------------------------------------
     st.divider()
-    st.header("7. Build a Custom PDF Report")
-    render_pdf_builder(results, segment_result=st.session_state.get("segment_result"))
+    ai_payload = _collect_ai_payload(results)
+    ai_fingerprint = _ai_payload_fingerprint(ai_payload)
+
+    with st.expander("AI Conclusion"):
+        _render_ai_conclusion(ai_payload, ai_fingerprint)
+
+    # Read after the AI expander, so a conclusion generated on this very
+    # rerun is offered in the PDF straight away.
+    ai_conclusion = st.session_state.get("ai_conclusion")
+    fresh_ai_conclusion = ai_conclusion if ai_conclusion and ai_conclusion["fingerprint"] == ai_fingerprint else None
+
+    with st.expander("Build a Custom PDF Report"):
+        if ai_conclusion and not fresh_ai_conclusion:
+            st.caption(
+                "The AI conclusion is out of date, so it isn't offered below. Generate it "
+                "again under **AI Conclusion** to include it."
+            )
+        elif not ai_conclusion:
+            st.caption(
+                "Generate a conclusion under **AI Conclusion** to open the report with an "
+                "AI summary and next steps."
+            )
+        render_pdf_builder(
+            results,
+            segment_result=st.session_state.get("segment_result"),
+            ai_conclusion=fresh_ai_conclusion,
+        )
 
 
 _render_results_tabs()
