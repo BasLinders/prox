@@ -646,27 +646,34 @@ ORDER BY
         language="sql",
     )
 
-with st.form("load_data_form"):
-    st.divider()
-    st.header("1. Load Data")
-    st.caption(
-        "Choose your data source: upload a CSV or connect to BigQuery. Alternatively, you can select a cached dataset or a prior completed mining run for further analysis."
-    )
-    pending_data_source = st.radio(
-        "Data source", ["Load cached dataset", "Load saved run", "Upload CSV", "Connect to BigQuery"],
-        horizontal=True, key="data_source_pending",
-    )
-    # Only a confirmed choice is loaded, and it's kept in session state so it
-    # survives the reruns that the widgets below (uploader, selectboxes,
-    # buttons) trigger - nothing is loaded at startup, which on low-memory
-    # machines used to mean pulling in the first cached dataset by default.
-    if st.form_submit_button("Confirm data source", width="stretch"):
-        st.session_state["data_source_choice"] = pending_data_source
-
-data_source = st.session_state.get("data_source_choice")
+st.divider()
+st.header("1. Load Data")
+st.caption(
+    "Choose your data source: upload a CSV or connect to BigQuery. Alternatively, you can select a cached dataset or a prior completed mining run for further analysis."
+)
+# Nothing is pre-selected, here or in the cached dataset / saved run pickers
+# below: a default would load that data at startup, which on low-memory
+# machines fills RAM with a dataset nobody asked for.
+data_source = st.radio(
+    "Data source", ["Load cached dataset", "Load saved run", "Upload CSV", "Connect to BigQuery"],
+    horizontal=True, key="data_source_choice", index=None,
+)
 if data_source is None:
-    st.info("Pick a data source above and click **Confirm data source** to load data.")
+    st.info("Pick a data source above to load data.")
     st.stop()
+
+
+def _remembered_index(options, state_key):
+    """Index of the option last picked under state_key, or None if there isn't one.
+
+    Streamlit forgets a widget's value once it stops rendering, so switching
+    to another data source and back would reset these pickers - kept in
+    session state instead, so coming back reloads what was picked before
+    rather than nothing (or, with a default, the first entry).
+    """
+    remembered = st.session_state.get(state_key)
+    return options.index(remembered) if remembered in options else None
+
 
 loaded_from_cache = False
 loaded_from_saved_run = False
@@ -697,8 +704,16 @@ if data_source == "Load cached dataset":
         f"last updated {m.get('last_updated', '?')}": m.get("dataset_id")
         for m in known_datasets
     }
-    chosen_label = st.selectbox("Cached dataset", list(dataset_options.keys()))
-    chosen_dataset_id = dataset_options[chosen_label]
+    dataset_ids = list(dataset_options.values())
+    chosen_dataset_id = st.selectbox(
+        "Cached dataset", dataset_ids,
+        format_func={v: k for k, v in dataset_options.items()}.get,
+        index=_remembered_index(dataset_ids, "chosen_cached_dataset_id"),
+        placeholder="Choose a cached dataset",
+    )
+    st.session_state["chosen_cached_dataset_id"] = chosen_dataset_id
+    if chosen_dataset_id is None:
+        st.stop()
 
     with st.spinner("Loading cached dataset..."):
         cached_raw_df, cached_manifest, df_ready = _cached_load_cached_dataset(
@@ -733,9 +748,15 @@ elif data_source == "Load saved run":
             f"{m.get('label')} — {m.get('n_events', 0):,} events, "
             f"{m.get('n_cases', 0):,} cases, saved {m.get('saved_at', '?')}{link_note}{results_note}"
         )
+    run_ids = list(run_labels.keys())
     chosen_run_id = st.selectbox(
-        "Saved run", list(run_labels.keys()), format_func=run_labels.get, key="saved_run_choice",
+        "Saved run", run_ids, format_func=run_labels.get,
+        index=_remembered_index(run_ids, "saved_run_choice"),
+        placeholder="Choose a saved run",
     )
+    st.session_state["saved_run_choice"] = chosen_run_id
+    if chosen_run_id is None:
+        st.stop()
     # The config widgets (sidebar included) already rendered this run using
     # whatever run was selected before - rerun once so they pick up this
     # run's settings (see _config_scope above).
