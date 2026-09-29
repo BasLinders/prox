@@ -68,26 +68,41 @@ KNOWN_NOISE_ACTIVITIES = {
     "session_start", "first_visit",
 }
 
-def _apply_filter_steps(raw_df: pd.DataFrame, config: dict) -> pd.DataFrame:
+# Filters that decide which *cases* survive from the whole trace - including
+# whether or when it reached an outcome - rather than just dropping events.
+# 'activity' only selects cases in its contains/not_contains modes (the
+# default is 'contains'); remove_events/keep_events drop events and keep
+# every case.
+_CASE_SELECTING_FILTERS = {"crop", "endpoints", "case_duration", "top_variants"}
+_EVENT_LEVEL_ACTIVITY_MODES = {"remove_events", "keep_events"}
+
+
+def _is_case_selecting(f_type: str, params: dict) -> bool:
+    if f_type == "activity":
+        return params.get("mode", "contains") not in _EVENT_LEVEL_ACTIVITY_MODES
+    return f_type in _CASE_SELECTING_FILTERS
+
+
+def _apply_filter_steps(raw_df: pd.DataFrame, config: dict, event_level_only: bool = False) -> pd.DataFrame:
     """Applies the main analysis's filter_steps to raw_df, for standalone tabs
     (Funnel, Reference Model) that otherwise operate on the unfiltered log, so
-    activities removed as noise (e.g. session_start) don't reappear there."""
+    activities removed as noise (e.g. session_start) don't reappear there.
+
+    event_level_only skips case-selecting steps (see _is_case_selecting), for
+    the propensity model: a crop at 'purchase' removes every case that never
+    purchased, leaving the classifier no negatives to learn from."""
     df = raw_df
     for step_config in (config or {}).get("filter_steps") or []:
         params = step_config.copy()
         f_type = params.pop("type", None)
         if f_type is None:
             continue
+        if event_level_only and _is_case_selecting(f_type, params):
+            continue
         filtered_df, _ = filter_event_log(df, filter_type=f_type, **params)
         if filtered_df is not None and not filtered_df.empty:
             df = filtered_df
     return df
-
-
-def _analyzed_activities(raw_df: pd.DataFrame, config: dict) -> list:
-    """Activity choices for standalone tabs, taken from the filtered log."""
-    df = _apply_filter_steps(raw_df, config)
-    return sorted(df["concept:name"].dropna().astype(str).unique().tolist())
 
 
 def _svg_download_button(png_path: str, label: str = "Download High-Res (SVG)", key: str | None = None) -> None:
@@ -1330,7 +1345,7 @@ if run_btn:
 # error goes underneath as a caption.
 _AI_ERROR_HEADLINES = {
     "not_configured": "No Gemini API key is configured.",
-    "sdk_missing": "The google-genai package isn't installed. Install it with `pip install prox[ai]`.",
+    "sdk_missing": "The google-genai package isn't installed. Install it with `pip install -e '.[ai]'`.",
     "quota_exhausted": "The Gemini quota for this API key is used up. Try again later, or use a key with more quota.",
     "server_busy": "Gemini is busy right now. Try again in a minute.",
     "empty_response": "Gemini returned an empty answer. Try again.",
@@ -1345,6 +1360,29 @@ _MARKDOWN_SPECIAL_CHARS = re.compile(r"([\\`*_\[\]<>#|~$])")
 
 def _md_escape(text: str) -> str:
     return _MARKDOWN_SPECIAL_CHARS.sub(r"\\\1", text)
+
+
+def _predictive_log() -> pd.DataFrame | None:
+    """The log the propensity model trains and scores on: the raw log with only
+    event-level filter_steps applied, and unsampled. Case-selecting filters
+    (e.g. a crop at the outcome) would remove the negatives the classifier
+    needs, and the pipeline's stratified sample over-represents purchase cases,
+    which would inflate every propensity score. Leakage is not a concern
+    without the crop: _build_propensity_features already truncates each
+    positive case strictly before its first outcome event.
+
+    Cached per raw log/config object, so _propensity_insights' identity check
+    on analysis_df keeps hitting across reruns."""
+    raw_df = st.session_state.get("df")
+    if raw_df is None:
+        return None
+    config = st.session_state.get("config", {})
+    cached = st.session_state.get("predictive_log")
+    if cached and cached["raw_df"] is raw_df and cached["config"] is config:
+        return cached["df"]
+    df = _apply_filter_steps(raw_df, config, event_level_only=True)
+    st.session_state["predictive_log"] = {"raw_df": raw_df, "config": config, "df": df}
+    return df
 
 
 def _propensity_insights(analysis_df: pd.DataFrame, model_bundle: dict) -> tuple:
@@ -1371,9 +1409,7 @@ def _collect_ai_payload(results: dict) -> dict:
     drivers, score_summary = None, None
     if model_bundle and model_bundle.get("model") is not None:
         # Same dataset the Predictive Insights tab trains and scores on.
-        analysis_df = results.get("processed_log")
-        if analysis_df is None:
-            analysis_df = st.session_state.get("df")
+        analysis_df = _predictive_log()
         drivers, score_summary = _propensity_insights(analysis_df, model_bundle)
 
     return build_ai_payload(
@@ -2485,22 +2521,36 @@ def _render_results_tabs():
             """
             )
 
-        # Uses the same filtered+sampled dataset the rest of this run's results
-        # describe (see pipeline.py's Step 1b), not the raw unfiltered/
-        # unsampled log - otherwise a propensity model trained here would
-        # silently disagree with the sampled conformance/business-insight
-        # numbers shown in the other tabs. Falls back to the raw log, with the
-        # same filter_steps applied, only for results computed before
-        # 'processed_log' existed.
+        # Deliberately not the filtered+sampled log the other tabs use - see
+        # _predictive_log() for why.
         saved_config = st.session_state.get("config", {})
-        analysis_df = results.get("processed_log")
-        if analysis_df is None and st.session_state.get("df") is not None:
-            analysis_df = _apply_filter_steps(st.session_state["df"], saved_config)
+        analysis_df = _predictive_log()
 
         if analysis_df is None or "concept:name" not in analysis_df.columns:
             st.info("Run an analysis first to enable predictive insights.")
         else:
-            activities = _analyzed_activities(analysis_df, saved_config)
+            st.caption(
+                "Unlike the other tabs, this model trains on every case in the log: "
+                "only event filters (e.g. noise removal) are applied, not the process "
+                "end point or other filters that drop whole cases, and no sampling. "
+                "A crop at 'purchase' would otherwise leave only cases that purchased, "
+                "with nothing to contrast them against."
+            )
+            activities = sorted(analysis_df["concept:name"].dropna().astype(str).unique().tolist())
+            crop_targets = [
+                a
+                for step in saved_config.get("filter_steps") or []
+                if step.get("type") == "crop"
+                for a in ([step.get("activity")] if isinstance(step.get("activity"), str) else step.get("activity") or [])
+            ]
+            raw_activities = set(st.session_state["df"]["concept:name"].dropna().astype(str).unique())
+            removed_outcomes = [a for a in crop_targets if a in raw_activities and a not in activities]
+            if removed_outcomes:
+                st.warning(
+                    f"{', '.join(removed_outcomes)} is the process end point but was removed by "
+                    "the event filter, so it can't be picked as an outcome here. Remove it from "
+                    "the event filter and re-run the analysis to predict it."
+                )
             outcome_activities = st.multiselect(
                 "Outcome activity (what counts as success)",
                 options=activities,

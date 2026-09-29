@@ -21,10 +21,10 @@ google-cloud-bigquery-storage
 # (docs/ML_roadmap.md). Not installed by default - most users run PRoX
 # without the ML layer. Adds scikit-learn (pure Python + numpy/scipy, no
 # GPU/compiled deps). Install with:
-#   pip install prox[ml]
+#   pip install -e ".[ml]"
 
 # Optional: AI conclusion (utility/ai_client.py) - a Gemini-written summary
 # and next steps for a finished analysis, also offered in the PDF report.
 # Not installed by default. Install with:
-#   pip install prox[ai]
+#   pip install -e ".[ai]"
 # and add GEMINI_API_KEY to .streamlit/secrets.toml.

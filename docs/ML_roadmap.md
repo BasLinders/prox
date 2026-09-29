@@ -82,7 +82,7 @@ haven't reached an outcome yet.
 ### Dependencies and scope
 
 - New dependency: `scikit-learn` (pure Python + numpy/scipy, no GPU).
-  Should be an **optional extra** (e.g. `pip install prox[ml]`), matching
+  Should be an **optional extra** (e.g. `pip install -e ".[ml]"`), matching
   the pattern proposed for the BigQuery data source below — most users
   running the core discovery/conformance workflow shouldn't need to
   install it.
