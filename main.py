@@ -1501,10 +1501,20 @@ def _render_ai_conclusion(payload: dict, fingerprint: str) -> None:
     st.caption("**Included:** " + (", ".join(included) or "nothing yet"))
     if not_included:
         st.caption("**Not run or not available:** " + ", ".join(not_included))
+    st.caption(
+        "Exact data that will be sent. Activity, segment and category names go out as "
+        "they appear in your event log, so check them if they could contain anything sensitive."
+    )
+    st.json(payload, expanded=False)
 
     configured = ai_client.is_configured()
     if not configured:
         st.info("Add a `GEMINI_API_KEY` to `.streamlit/secrets.toml` to generate AI conclusions.")
+    st.caption(
+        "Uses your own Gemini API key, so Google's Gemini API pricing and quota apply to it. "
+        "Each click sends one request. It's only retried, or passed to a fallback model, "
+        "when Gemini is busy or out of quota."
+    )
 
     language = st.radio(
         "Language",
@@ -1545,7 +1555,7 @@ def _render_ai_conclusion(payload: dict, fingerprint: str) -> None:
         if conclusion["fingerprint"] != fingerprint:
             st.warning(
                 "The results have changed since this conclusion was generated. Generate "
-                "it again to match them - until then, it's left out of the PDF."
+                "it again to match them - until then, it's left out of the PDF and HTML reports."
             )
         st.markdown("**Summary**")
         for paragraph in conclusion["summary"].split("\n\n"):
@@ -1582,6 +1592,7 @@ def _render_results_tabs():
                 st.text(msg)
 
     # Top-level metrics strip
+    report_extras = {}
     summary = results.get("log_summary", {})
     if summary:
         c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1, 1.2, 1.2])
@@ -1596,7 +1607,12 @@ def _render_results_tabs():
         with c5:
             st.download_button(
                 "Download Full Report",
-                data=lambda: generate_html_report(results),
+                # The AI conclusion is only known further down this run (it can
+                # be generated on this very rerun), so it's filled into
+                # report_extras there. The callable runs after the run finishes,
+                # outside it, which is why it reads a plain dict and not
+                # st.session_state.
+                data=lambda: generate_html_report(results, ai_conclusion=report_extras.get("ai_conclusion")),
                 file_name="prox_report.html",
                 mime="text/html",
                 width='stretch',
@@ -2751,6 +2767,7 @@ def _render_results_tabs():
     # rerun is offered in the PDF straight away.
     ai_conclusion = st.session_state.get("ai_conclusion")
     fresh_ai_conclusion = ai_conclusion if ai_conclusion and ai_conclusion["fingerprint"] == ai_fingerprint else None
+    report_extras["ai_conclusion"] = fresh_ai_conclusion
 
     with st.expander("Build a Custom PDF Report"):
         if ai_conclusion and not fresh_ai_conclusion:

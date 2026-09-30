@@ -259,3 +259,31 @@ def test_generate_reference_conformance_report_handles_missing_result_gracefully
     report = generate_reference_conformance_report({})
     assert report.startswith("<!doctype html>")
     assert "No conformance data available." in report
+
+
+def test_generate_html_report_freezes_in_an_escaped_ai_conclusion():
+    df = make_simple_variant_log(n_cases=3)
+    results = run_full_analysis(df, create_analysis_config())
+    conclusion = {
+        'summary': 'Checkout <script>alert(1)</script> leaks.\n\nSecond paragraph.',
+        'key_findings': ['51% of carts & baskets are abandoned.'],
+        'next_steps': ['Simplify checkout.'],
+        'model': 'gemini-test', 'generated_at': '2026-01-01 12:00',
+    }
+
+    html_out = generate_html_report(results, ai_conclusion=conclusion)
+
+    assert 'AI Conclusion' in html_out
+    assert 'AI-generated' in html_out
+    assert '<script>alert(1)</script>' not in html_out
+    assert '&lt;script&gt;alert(1)&lt;/script&gt;' in html_out
+    assert '51% of carts &amp; baskets' in html_out
+    assert 'gemini-test' in html_out
+    # Kept apart from, and after, the deterministic Executive Summary.
+    assert html_out.index('Executive Summary') < html_out.index('AI Conclusion')
+
+
+def test_generate_html_report_has_no_ai_section_without_a_conclusion():
+    df = make_simple_variant_log(n_cases=3)
+    results = run_full_analysis(df, create_analysis_config())
+    assert 'AI Conclusion' not in generate_html_report(results)
