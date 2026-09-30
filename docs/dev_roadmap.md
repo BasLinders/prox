@@ -665,7 +665,7 @@ capabilities those platforms have, listed smallest effort first:
    app, not a new analytical capability. Out of scope unless that
    positioning changes.
 
-### Product development suggestions
+### Product development options
 
 Where the product could go next, given what has shipped: discovery,
 conformance (including against a reference model), bottlenecks, variants,
@@ -735,8 +735,6 @@ payoff.
 
 #### Longer-term
 
-Both items previously listed here have shipped: the BigQuery live data
-source (Phase 5) and incremental analysis (Phase 7, as data-level caching,
-not incremental discovery/conformance). The one large item still open is
+The one large item still open is
 the multi-tenant/hosted deployment layer, under Process mining capability
 gaps above.
