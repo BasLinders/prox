@@ -1,6 +1,8 @@
 import logging
 import gc
 import os
+import sys
+import contextlib
 import tempfile
 import numpy as np
 import pandas as pd
@@ -13,6 +15,7 @@ from pm4py.objects.petri_net.obj import Marking
 from pm4py.objects.process_tree.obj import ProcessTree, Operator
 from pm4py.algo.evaluation.precision import algorithm as precision_evaluator
 from pm4py.algo.conformance.alignments.petri_net import algorithm as alignments_algorithm
+from pm4py.util import constants as pm4py_constants, xes_constants
 
 from .data_manager import sample_log_stratified
 
@@ -329,6 +332,48 @@ def _fitness_token_replay(sampled_log, process_model, initial_marking, final_mar
     }
 
 
+@contextlib.contextmanager
+def _main_module_hidden():
+    """Stop spawn/forkserver workers from re-importing the app script.
+
+    Those start methods re-run __main__ from its __file__ in every worker.
+    Streamlit points __main__.__file__ at main.py, so each worker would execute
+    the whole UI script (and crash or stall without a session). The workers only
+    need pm4py, so hide the path while the pool is alive.
+    """
+    main = sys.modules.get('__main__')
+    saved = {k: main.__dict__[k] for k in ('__file__', '__spec__') if k in main.__dict__} if main else {}
+    if main:
+        main.__dict__.pop('__file__', None)
+        main.__dict__['__spec__'] = None
+    try:
+        yield
+    finally:
+        if main:
+            main.__dict__.pop('__spec__', None)
+            main.__dict__.update(saved)
+
+
+def _align_log(log, process_model, im, fm, params):
+    """Align a log, honouring params['cores'].
+
+    PM4Py's apply() ignores 'cores' (it aligns variants sequentially); only
+    apply_multiprocessing() reads it and spreads variants over a process pool.
+    A single core stays on apply() to avoid the pool's startup and pickling cost.
+    """
+    if params.get('cores', 1) > 1:
+        # Some 2.7.23.x releases read constants.DEFAULT_TIMESTAMP_KEY in
+        # apply_multiprocessing() although it only exists in xes_constants,
+        # raising AttributeError. Alias it so the pool path works there too.
+        if not hasattr(pm4py_constants, 'DEFAULT_TIMESTAMP_KEY'):
+            pm4py_constants.DEFAULT_TIMESTAMP_KEY = xes_constants.DEFAULT_TIMESTAMP_KEY
+        with _main_module_hidden():
+            return alignments_algorithm.apply_multiprocessing(
+                log, process_model, im, fm, parameters=params
+            )
+    return alignments_algorithm.apply(log, process_model, im, fm, parameters=params)
+
+
 def _fitness_state_equation_alignments(
     sampled_log, process_model, initial_marking, final_marking, *,
     max_align, cores, optimize_variants, **_ignored
@@ -392,9 +437,7 @@ def _fitness_state_equation_alignments(
             "Aligning %d unique variants (from %d traces).",
             len(unique_traces), len(clean_log)
         )
-        variant_alignments = alignments_algorithm.apply(
-            unique_traces, process_model, rim, rfm, parameters=params
-        )
+        variant_alignments = _align_log(unique_traces, process_model, rim, rfm, params)
 
         final_alignments = [None] * len(clean_log)
         for k, align_result in enumerate(variant_alignments):
@@ -403,9 +446,7 @@ def _fitness_state_equation_alignments(
                 final_alignments[idx] = align_result
     else:
         logger.info("Aligning %d traces (no variant grouping).", len(clean_log))
-        final_alignments = alignments_algorithm.apply(
-            clean_log, process_model, rim, rfm, parameters=params
-        )
+        final_alignments = _align_log(clean_log, process_model, rim, rfm, params)
 
     method_results = {}
     valid = [a for a in final_alignments if isinstance(a, dict) and 'cost' in a]

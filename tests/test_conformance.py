@@ -394,6 +394,45 @@ def test_state_equation_alignments_uses_supplied_markings_not_topology_guess():
     assert result['fitness']['log_fitness'] == pytest.approx(1.0)
 
 
+def test_alignment_cores_selects_multiprocessing_path(perfect_model, monkeypatch):
+    """PM4Py's apply() ignores 'cores'; only apply_multiprocessing() honours it,
+    so cores > 1 must be routed there and cores == 1 must not."""
+    import prox.conformance as conformance
+    df, (net, im, fm) = perfect_model
+    calls = []
+    real_apply = conformance.alignments_algorithm.apply
+    real_mp = conformance.alignments_algorithm.apply_multiprocessing
+
+    def spy(name, real):
+        def wrapper(*args, **kwargs):
+            calls.append((name, kwargs['parameters']['cores']))
+            return real(*args, **kwargs)
+        return wrapper
+
+    monkeypatch.setattr(conformance.alignments_algorithm, "apply", spy("apply", real_apply))
+    monkeypatch.setattr(conformance.alignments_algorithm, "apply_multiprocessing", spy("mp", real_mp))
+
+    for cores in (1, 2):
+        run_conformance_checking(
+            df, net, im, fm, alignment_variant='state_equation_a_star',
+            perform_sampling=False, cores=cores
+        )
+    assert calls == [("apply", 1), ("mp", 2)]
+
+
+def test_alignment_results_match_across_core_counts(perfect_model):
+    df, (net, im, fm) = perfect_model
+    results = {
+        cores: run_conformance_checking(
+            df, net, im, fm, alignment_variant='state_equation_a_star',
+            perform_sampling=False, cores=cores
+        )
+        for cores in (1, 2)
+    }
+    assert results[2]['errors'] == []
+    assert results[2]['fitness'] == results[1]['fitness']
+
+
 def test_alignment_time_limit_reports_timed_out_traces(perfect_model, monkeypatch):
     """A trace that exceeds MAX_ALIGN_SECONDS_PER_TRACE gets no alignment from
     PM4Py; it must be reported, not silently dropped from the fitness figures."""
