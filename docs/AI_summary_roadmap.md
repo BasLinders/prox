@@ -35,7 +35,8 @@ built, and where it differs from that design:
   conformance, funnel by segment, segment comparison and the propensity
   model. Analyses that weren't run are listed under `not_run`, so the model
   doesn't guess at them. The UI shows which sections are included and which
-  aren't.
+  aren't, and the exact JSON payload (collapsed) before anything is sent,
+  with a note that labels from the event log go out as they are.
 - **Prompt.** It tells the model to use only figures that appear in the
   data. It also explains that discovered-model conformance is a
   self-consistency check, not compliance, and asks the model to call a
@@ -49,12 +50,15 @@ built, and where it differs from that design:
   conclusion can be written in Dutch (the default) or English.
 - **API key.** It is read from `GEMINI_API_KEY` in `.streamlit/secrets.toml`
   rather than typed into a password field. Without a key, the button is
-  disabled and a hint is shown.
+  disabled and a hint is shown. A note under it says the user's own key and
+  Google's Gemini API pricing and quota apply.
 - **Reports.** The conclusion can be added as a section of the custom PDF
-  report. The HTML report doesn't include it. Each conclusion is
+  report, and the "Download Full Report" HTML includes it in its own
+  "AI Conclusion" box after the Executive Summary, frozen in as escaped
+  plain text (the file never calls the API). Each conclusion is
   fingerprinted by its payload: if the results change afterwards, the UI
-  flags it as out of date and leaves it out of the PDF until it is generated
-  again. Generation only runs on a button click, so reruns don't use API
+  flags it as out of date and leaves it out of both reports until it is
+  generated again. Generation only runs on a button click, so reruns don't use API
   quota.
 
 **Open questions below: resolved.** The allowlist is the set of section
@@ -63,10 +67,9 @@ builders in `build_ai_payload()`. The leakage regression test exists as
 The deterministic recommendations and the AI conclusion are shown in
 separate places.
 
-**Still open from the design:**
-- A "Preview payload" view that shows the exact JSON before it is sent. Today
-  only the section names are listed.
-- A note in the UI that the user's own key and Google's pricing apply.
+**Follow-ups from the design: shipped 2026-09-30.** The payload preview,
+the cost note and the HTML report section (above). Nothing from the design
+is still open.
 
 ## AI-assisted recommendations (optional, Gemini)
 

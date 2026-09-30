@@ -127,6 +127,9 @@ def test_ai_conclusion_and_pdf_expanders_follow_the_results(app):
     # No GEMINI_API_KEY in this empty working directory's secrets.
     generate = next(b for b in app.button if b.label == "Generate AI Conclusion")
     assert generate.disabled
+    # The exact payload is shown before anything is sent, with a cost note.
+    assert app.json and '"log_summary"' in app.json[0].proto.body
+    assert any("Gemini API pricing" in c.value for c in app.caption)
 
 
 def test_generated_ai_conclusion_is_shown_and_offered_in_the_pdf(app, monkeypatch):
