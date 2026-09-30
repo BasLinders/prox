@@ -241,6 +241,39 @@ def test_plain_sequence_reference_model_flags_cases_that_skip_a_required_step():
     assert cases['2'] < 1.0
 
 
+def test_state_equation_alignment_reports_which_activities_deviated():
+    """A deviant case must name what deviated, not only that its fitness is low."""
+    model, errors = build_structured_reference_model([
+        {'activities': ['a'], 'type': 'required'},
+        {'activities': ['b'], 'type': 'required'},
+        {'activities': ['c'], 'type': 'required'},
+    ])
+    assert errors == []
+    net, im, fm = model
+
+    df = make_event_log([
+        ('ok', 'a', '2024-01-01 00:00:00'),
+        ('ok', 'b', '2024-01-01 00:01:00'),
+        ('ok', 'c', '2024-01-01 00:02:00'),
+        ('skips_b', 'a', '2024-01-01 00:00:00'),
+        ('skips_b', 'c', '2024-01-01 00:01:00'),
+        ('extra_x', 'a', '2024-01-01 00:00:00'),
+        ('extra_x', 'b', '2024-01-01 00:01:00'),
+        ('extra_x', 'x', '2024-01-01 00:02:00'),
+        ('extra_x', 'c', '2024-01-01 00:03:00'),
+    ])
+    result = run_conformance_checking(
+        df, net, im, fm,
+        alignment_variant='state_equation_a_star',
+        perform_sampling=False
+    )
+    assert result['errors'] == []
+    deviations = {c['case_id']: c['deviations'] for c in result['case_analysis']['cases']}
+    assert deviations['ok'] == {'skipped': [], 'unsolicited': []}
+    assert deviations['skips_b'] == {'skipped': ['b'], 'unsolicited': []}
+    assert deviations['extra_x'] == {'skipped': [], 'unsolicited': ['x']}
+
+
 def test_optional_step_scores_perfectly_whether_included_or_skipped():
     model, errors = build_structured_reference_model([
         {'activities': ['a'], 'type': 'required'},

@@ -2083,14 +2083,15 @@ def _render_results_tabs():
             key=lambda x: x["fitness"]
         )
 
-        if cases:
-            st.caption(f"{len(imperfect)} deviant case(s) out of {len(cases)} sampled.")
         timed_out = conf.get("alignments", {}).get("timed_out", 0)
         if timed_out:
             st.warning(
                 f"{timed_out} trace(s) took too long to align and are left out of fitness "
                 "and the deviation table. Try Token Replay, a higher noise threshold, or a smaller sample."
             )
+
+        if cases:
+            st.caption(f"{len(imperfect)} deviant case(s) out of {len(cases)} sampled.")
             if imperfect:
                 dev_rows = [
                     {
