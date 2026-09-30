@@ -33,7 +33,8 @@ clean.
 | Phase 8 — Memory, rerun cost & analysis consistency | Complete | below, `dev_optimization.md` |
 | ML layer (conversion propensity + drivers) | Complete (engine + Predictive Insights tab) | below, `ML_roadmap.md` |
 | AI Conclusion (optional, Gemini) | Complete | below, `AI_summary_roadmap.md` |
-| Process mining capability gaps (5 items, by effort) | Roadmapped, not scoped | below |
+| Follow-ups on shipped features (AI, ML, performance, BigQuery) | Roadmapped | below |
+| Process mining capability gaps (5 items, by effort) | Roadmapped, not scoped (resource perspective partly shipped) | below |
 | Product development suggestions | Roadmapped | below |
 
 \* One sub-item — segment comparison v2 (automated golden-path diffing) —
@@ -588,74 +589,95 @@ Nothing currently in progress.
 
 ## Roadmapped (not yet scheduled)
 
-The ML layer and the AI Conclusion, both previously listed here, have
-shipped (see Completed phases above). Remaining follow-ups for them:
-- **AI Conclusion:** a payload preview showing the exact JSON before it is
-  sent, and a UI note on API cost (`AI_summary_roadmap.md`).
-- **Performance:** Token Replay is slow on very long traces, and the "CPU
-  Cores" control has no effect under PM4Py 2.7 (`dev_optimization.md`).
+Nothing below is committed, scoped or sequenced. Rechecked against `main`
+on 2026-09-30. The ML layer and the AI Conclusion used to be listed here.
+Both have shipped (see Completed phases above), so only their follow-ups
+remain.
+
+### Follow-ups on shipped features
+
+- **AI Conclusion** (`AI_summary_roadmap.md`):
+  - A payload preview that shows the exact JSON before anything is sent.
+    Today the UI only lists which sections are included.
+  - A note in the UI that the user's own key and Google's pricing apply.
+  - The conclusion is in the PDF report but not the HTML report. Adding it
+    there means freezing it into the file as plain text at export time, as
+    the design specified.
+- **Predictive Insights** (`ML_roadmap.md`): left out of v1 on purpose and
+  still open:
+  - multi-class outcomes
+  - saving or exporting trained models
+  - automatic hyperparameter tuning
+  - using the incremental cache, which first needs a fix for label churn
+- **Performance** (`dev_optimization.md`):
+  - The "CPU Cores" control has no effect, because PM4Py 2.7 ignores
+    `cores`. Either remove the control or wait for a PM4Py version that
+    honours it.
+  - Token Replay is slow on very long traces (runtime only; memory stays
+    bounded).
+  - Pre-discovery downsampling is waiting on a concrete pain report.
+- **BigQuery source**: `attribute_params`/`numeric_attribute_params` are
+  still hardcoded, and switching between accounts isn't supported. Neither
+  has been needed on a real dataset yet.
 
 ### Process mining capability gaps
 
-Surfaced from an honest sophistication assessment (2026-08-21): PRoX is a
-real discovery/conformance engine (Inductive Miner, Heuristics Miner, DFG,
-Token Replay, State Equation A\* alignments, reference-model conformance)
-with a genuine e-commerce/CRO-specific analytical layer on top - ahead of
-a hobby pm4py script, behind an enterprise platform like Celonis or Disco.
-The gap is concentrated in five capabilities those platforms have that
-PRoX doesn't yet. Listed in order of engineering effort, smallest first -
-none of these are scoped or scheduled.
+Surfaced from a sophistication assessment (2026-08-21). PRoX is a real
+discovery/conformance engine (Inductive Miner, Heuristics Miner, DFG, Token
+Replay, State Equation A\* alignments, reference-model conformance). On top
+of that it has an e-commerce/CRO analytics layer and, since 2026-09-21, a
+predictive layer. That puts it ahead of a hobby pm4py script and behind an
+enterprise platform like Celonis or Disco. Most of the gap is in five
+capabilities those platforms have, listed smallest effort first:
 
-1. **Organizational/resource-perspective mining.** `analyze_process_
-   performance()` already reports basic per-resource event counts when a
-   resource column exists, but stops there. A handover-of-work network
-   (who hands cases to whom, and how often) and per-resource workload/
-   throughput metrics are a natural, contained extension of that existing
-   code path - no new data requirements, no new UI paradigm, just deeper
-   aggregation on a dimension PRoX already partially reads.
+1. **Organizational/resource-perspective mining (partly shipped).** The
+   Bottlenecks tab's Resource Performance table (#25) shows events, cases
+   touched and mean/median processing time for each resource, when the log
+   has a resource column. Still missing: a handover-of-work network (who
+   hands cases to whom, and how often) and workload over time. Both extend
+   the same `analyze_process_performance()` code path and need no new data.
 
-2. **Interactive process explorer.** Process Maps and Segment Comparison
-   render static matplotlib/Graphviz images today, not a clickable,
-   filterable, animated flow view. Real lift, but bounded: an existing
-   interactive graph component (or a custom vis.js/d3 embed) replacing the
-   current image-based rendering, with click-to-filter wired back into the
-   existing filter/config state Streamlit already manages.
+2. **Interactive process explorer.** Process maps are static Graphviz
+   images: a PNG on screen, plus an SVG download since Phase 7b. There is no
+   clickable, filterable or animated flow view yet. This is real work but
+   bounded: an interactive graph component (or a vis.js/d3 embed) in place of
+   the images, with click-to-filter wired into the existing filter config.
 
-3. **Decision-point (data-aware) mining.** Explaining *why* a case took
-   one branch over another at a choice point - e.g. "cases with
-   `device=mobile` skip the comparison step 80% of the time" - needs new
-   machinery: identifying XOR choice points in the discovered process
-   tree/Petri net, then correlating case/event attribute values observed
-   before each choice with which branch was actually taken (a decision
-   tree per choice point is the standard approach). No equivalent code
-   exists yet to build on.
+3. **Decision-point (data-aware) mining.** This explains *why* a case took
+   one branch at a choice point, e.g. "cases with `device=mobile` skip the
+   comparison step 80% of the time". The standard approach is to find the
+   XOR choice points in the discovered model, then fit a decision tree per
+   choice point on the attributes seen before it. PRoX has no code for this
+   yet. The optional `[ml]` extra (scikit-learn) already provides the
+   decision tree.
 
 4. **Time-perspective prediction (remaining-time/SLA forecasting).**
-   Today's timing analysis is descriptive (bottleneck durations, lead
-   time) - not "given a case is currently at step X, when will it
-   finish, and is it at risk of breaching an SLA?" That needs a
-   trained-per-process-state predictor and a validation methodology, put
-   this in the same effort class as the already-roadmapped ML layer
-   (`ML_roadmap.md`) - plausibly an extension of it rather than a fully
-   separate build.
+   Timing analysis is still descriptive: bottleneck durations, lead time,
+   duration by hour and day. It can't answer "this case is at step X, when
+   will it finish, and will it breach an SLA?" The most natural home is an
+   extension of the shipped propensity model in `prox/predictive.py`. That
+   model already has prefix-based features, the completed/in-progress split
+   and cross-validation. What it would need is a regression target and a
+   validation approach suited to it.
 
 5. **Multi-tenant / hosted deployment layer.** Authentication, session
-   isolation, persisted (not just `st.session_state`) analysis storage,
-   and audit logging - the architecture change from "single local
-   Streamlit process on one analyst's laptop" (today's explicit design
-   goal, per the README) to a shared, hosted, multi-user service. By far
-   the largest lift here: it's not a new analytical capability but a
-   different deployment model for the whole application, touching
-   caching, storage, and access control throughout. Deliberately out of
-   scope unless that positioning itself changes.
+   isolation, per-user storage and audit logging. Analyses now persist to
+   local disk (`.prox_cache/` for the incremental cache, `.prox_saved_runs/`
+   for saved runs), but that storage is shared, single-user and has no
+   access control. Moving from one local Streamlit process on an analyst's
+   laptop (the README's stated design goal) to a shared, hosted service is
+   by far the largest item. It's a different deployment model for the whole
+   app, not a new analytical capability. Out of scope unless that
+   positioning changes.
 
 ### Product development suggestions
 
-A working list of where the product could go next, given everything
-shipped so far (discovery, conformance, bottlenecks, variants, business
-insights, funnel analysis, segment comparison, HTML reporting). Roughly
-ranked by effort vs. payoff — none of these are committed, scoped, or
-sequenced yet.
+Where the product could go next, given what has shipped: discovery,
+conformance (including against a reference model), bottlenecks, variants,
+funnel and business insights, session insights, segment comparison,
+predictive insights, the AI Conclusion, HTML/PDF reporting, the BigQuery
+source, incremental analysis and saved runs. Roughly ranked by effort vs.
+payoff.
 
 #### Quick wins (small, builds on what already exists)
 
@@ -666,8 +688,8 @@ sequenced yet.
   reuses the overall funnel's stage order for every segment, so results are
   directly comparable - "does mobile drop off earlier than desktop?" is now
   a chart and a table, not a manual cross-reference between two tabs.
-- **Data-quality pre-check — done.** A "2. Data Quality Check" step now runs
-  right after upload, before filtering/analysis. `check_data_quality()` in
+- **Data-quality pre-check — done.** A "Data Quality Check" step runs right
+  after loading, before filtering/analysis. `check_data_quality()` in
   `prox/data_manager.py` flags exact duplicate events, single-event cases
   (no transitions to analyse), and events logged out of chronological order
   within a case - the log-shape problems `load_and_validate_csv()`'s own
@@ -677,34 +699,38 @@ sequenced yet.
   option.
 
 **Still open:**
-- **Config presets.** Save/load the sidebar configuration (discovery algo,
-  sample size, filters, funnel definition) as a small JSON file. Removes the
-  "reconfigure everything every session" friction for a repeat analyst —
-  directly serves the "runs on a laptop, used repeatedly" use case.
-  *Partly covered by saved runs (Phase 7b):* a saved run restores its
-  sidebar, filter and sampling settings. What's still missing is a preset
-  that stands apart from one event log, so it can be applied to a new
-  upload, and that includes the funnel definition.
+- **Config presets (partly covered by saved runs).** A saved run (Phase 7b)
+  already restores its sidebar, filter and sampling settings, but only
+  together with its own event log. What's missing is a preset that stands
+  on its own: a small JSON file that can be applied to a new upload and also
+  holds the funnel definition, which saved runs don't store. This removes
+  the "reconfigure everything every session" friction for a repeat analyst.
 
 #### Medium bets (real feature work, clear value)
 
-- **Segment comparison v2 — automated golden-path diffing.** Already scoped
-  and deliberately deferred (`dev_phase2.md`'s Phase 4 segment-comparison
-  entry: "segment A visits checkout, segment B doesn't"). Worth revisiting
-  now that v1 has real usage patterns (parallel execution, its own report
-  export).
+- **Segment comparison v2 — automated golden-path diffing.** Scoped and
+  deliberately deferred in `dev_phase2.md`'s Phase 4 entry ("segment A
+  visits checkout, segment B doesn't"). Worth revisiting now that v1 has
+  real usage (parallel execution, its own report export, GA4 device, traffic
+  source and country segments from BigQuery).
 - **Cohort/retention view.** Current loyalty metrics (repeat rate,
-  days-between-purchases) are transaction-level. A cohort retention curve
-  (% of users from cohort week N still active in week N+1, N+2, ...) is a
-  different, complementary lens that product/growth stakeholders
-  specifically look for and PRoX doesn't have yet.
-- **Two-log comparison.** Compare this week's export vs. last week's, or
-  this cohort's export vs. last month's — a temporal/version diff, distinct
-  from segment comparison's categorical split of a single upload.
+  days between purchases) are transaction-level. A cohort retention curve
+  (% of users from cohort week N still active in weeks N+1, N+2, ...) is a
+  complementary lens that product/growth stakeholders look for. The input
+  is already there: `user_id` is always kept and cases default to user
+  level, and an incremental cache gives the longer history a cohort needs.
+- **Two-log comparison.** Compare this week's export with last week's, or
+  this month's with last month's: a diff over time, unlike segment
+  comparison's split of a single upload. The inputs now exist, because
+  saved runs keep each save of the same label (e.g. a client, every month)
+  as a separate entry with its results. What's missing is the comparison
+  itself: loading two runs side by side and diffing their metrics, variants
+  and process maps.
 
-#### Longer-term (bigger, already flagged elsewhere in these docs)
+#### Longer-term
 
-- ~~Incremental analysis~~ — shipped as Phase 7 (above), at the data-level
-  scope described there (not incremental discovery/conformance).
-- ~~BigQuery live data source~~ — shipped as Phase 5 (above).
-
+Both items previously listed here have shipped: the BigQuery live data
+source (Phase 5) and incremental analysis (Phase 7, as data-level caching,
+not incremental discovery/conformance). The one large item still open is
+the multi-tenant/hosted deployment layer, under Process mining capability
+gaps above.
