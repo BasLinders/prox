@@ -665,7 +665,7 @@ capabilities those platforms have, listed smallest effort first:
    app, not a new analytical capability. Out of scope unless that
    positioning changes.
 
-### Product development suggestions
+### Product development options
 
 Where the product could go next, given what has shipped: discovery,
 conformance (including against a reference model), bottlenecks, variants,
