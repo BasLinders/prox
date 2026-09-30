@@ -693,13 +693,24 @@ payoff.
   controlled by the on-by-default **Remove Duplicate Events** sidebar
   option.
 
+- **Config presets — done.** A preset is a small JSON file
+  (`prox/presets.py`, stored in `.prox_presets/`) holding the sidebar,
+  filter, sampling and funnel settings, with no event data, so it applies to
+  any new upload. It is saved from the **Save settings as preset** expander
+  above Run Analysis, and applied, imported (JSON file) or deleted from the
+  sidebar's **Configuration preset**. Machine-specific tuning (CPU cores,
+  chunk sizes) is left out. Activities, columns and funnel steps the new log
+  doesn't have are dropped with a warning instead of failing.
+
 **Still open:**
-- **Config presets (partly covered by saved runs).** A saved run (Phase 7b)
-  already restores its sidebar, filter and sampling settings, but only
-  together with its own event log. What's missing is a preset that stands
-  on its own: a small JSON file that can be applied to a new upload and also
-  holds the funnel definition, which saved runs don't store. This removes
-  the "reconfigure everything every session" friction for a repeat analyst.
+- **Funnel in saved runs.** Deliberately not part of the presets change, but
+  prepared for it: the funnel definition has its own shape
+  (`build_funnel_settings`), the funnel widgets already default from a
+  `restored_funnel`, and `fit_funnel_to_log` is not preset-specific. Storing
+  a `"funnel"` key in the saved-run manifest (written in the Save to Library
+  handler) is all that is left; `main.py` already reads it back.
+- **Predictive, AI and segment-comparison settings in presets.** Left out of
+  v1 on purpose.
 
 #### Medium bets (real feature work, clear value)
 

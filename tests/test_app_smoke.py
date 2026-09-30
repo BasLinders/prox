@@ -7,6 +7,9 @@ from streamlit.testing.v1 import AppTest
 from prox import generate_mock_csv_bytes, load_and_validate_csv
 from prox.config import create_analysis_config
 from prox.incremental import DEFAULT_CACHE_DIR, save_cached_dataset
+from prox.presets import (
+    DEFAULT_PRESETS_DIR, build_funnel_settings, build_preset, list_presets, save_preset,
+)
 from prox.saved_runs import DEFAULT_SAVED_RUNS_DIR, save_run
 
 MAIN_PY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main.py")
@@ -170,3 +173,65 @@ def test_generated_ai_conclusion_is_shown_and_offered_in_the_pdf(app, monkeypatc
     assert not app.exception
     assert any("changed since this conclusion" in w.value for w in app.warning)
     assert not any(c.label == "AI Summary & Next Steps" for c in app.checkbox)
+
+
+def _generate_mock_upload(app):
+    app.run()
+    app.radio(key="data_source_choice").set_value("Upload CSV").run()
+    app.number_input(key="mock_sessions").set_value(50)
+    next(b for b in app.button if b.label == "Generate Mock Data").click().run()
+    assert not app.exception
+
+
+def _save_test_preset(name="Repeat analyst", funnel=None):
+    config = create_analysis_config(
+        discovery_algo="heuristics_miner", noise_threshold=0.4, conformance_algo="token_replay",
+        filter_steps=[{"type": "activity", "activities": ["no_such_activity"], "mode": "remove_events"}],
+    )
+    return save_preset(build_preset(name, config, funnel), presets_dir=DEFAULT_PRESETS_DIR)
+
+
+def test_applying_a_preset_sets_the_settings_and_funnel(app):
+    activities = sorted(_mock_event_log()["concept:name"].astype(str).unique())[:2]
+    preset_id = _save_test_preset(funnel=build_funnel_settings("manual", activities + ["missing_step"]))
+    _generate_mock_upload(app)
+    assert app.selectbox(key="cfg_discovery_algo_default").value != "heuristics_miner"
+
+    app.selectbox(key="preset_choice").set_value(preset_id).run()
+    next(b for b in app.button if b.label == "Apply").click().run()
+
+    assert not app.exception
+    assert app.session_state["active_preset"]["name"] == "Repeat analyst"
+    assert app.selectbox(key="cfg_discovery_algo_preset1").value == "heuristics_miner"
+    # The preset names an activity this log doesn't have: said so, not crashed.
+    assert any("no_such_activity" in w.value for w in app.warning)
+
+    next(b for b in app.button if b.label == "Run Analysis").click().run()
+    assert not app.exception
+    assert app.multiselect(key="cfg_funnel_steps_preset1").value == activities
+    assert any("missing_step" in w.value for w in app.warning)
+
+
+def test_saving_a_preset_from_the_current_settings(app):
+    _generate_mock_upload(app)
+
+    app.text_input(key="save_preset_name").set_value("From the app").run()
+    next(b for b in app.button if b.label == "Save preset").click().run()
+
+    assert not app.exception
+    assert [p["name"] for _, p in list_presets(presets_dir=DEFAULT_PRESETS_DIR)] == ["From the app"]
+
+
+def test_preset_is_not_applied_to_a_saved_run(app):
+    _save_test_preset()
+    run = save_run(_mock_event_log(), "Configured", "user", save_dir=DEFAULT_SAVED_RUNS_DIR,
+                   config=create_analysis_config())
+    app.run()
+    app.selectbox(key="preset_choice").set_value("Repeat_analyst").run()
+    next(b for b in app.button if b.label == "Apply").click().run()
+
+    app.radio(key="data_source_choice").set_value("Load saved run").run()
+    next(sb for sb in app.selectbox if sb.label == "Saved run").set_value(run["run_id"]).run()
+
+    assert not app.exception
+    assert app.selectbox(key=f"cfg_discovery_algo_{run['run_id']}").value != "heuristics_miner"
