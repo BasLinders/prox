@@ -33,7 +33,7 @@ clean.
 | Phase 8 — Memory, rerun cost & analysis consistency | Complete | below, `dev_optimization.md` |
 | ML layer (conversion propensity + drivers) | Complete (engine + Predictive Insights tab) | below, `ML_roadmap.md` |
 | AI Conclusion (optional, Gemini) | Complete | below, `AI_summary_roadmap.md` |
-| Follow-ups on shipped features (AI, ML, performance, BigQuery) | Roadmapped | below |
+| Follow-ups on shipped features (ML, performance, BigQuery) | Roadmapped | below |
 | Process mining capability gaps (5 items, by effort) | Roadmapped, not scoped (resource perspective partly shipped) | below |
 | Product development suggestions | Roadmapped | below |
 
@@ -548,8 +548,10 @@ Dutch or English. The conclusion is kept separate from the deterministic
 Executive Summary. It can be added to the custom PDF report and is dropped
 from the PDF once the results change. Needs `pip install -e ".[ai]"` and
 `GEMINI_API_KEY` in `.streamlit/secrets.toml`. Its scope is wider than the
-recommendations-only idea it was designed as. As-built detail and the two
-remaining open items (payload preview, cost note) are in
+recommendations-only idea it was designed as. Follow-ups shipped
+2026-09-30: a preview of the exact JSON payload before anything is sent, a
+note that the user's own key and Google's pricing apply, and the conclusion
+frozen into the HTML report as plain text. As-built detail is in
 `AI_summary_roadmap.md`.
 
 ### Phase 8 — Memory, rerun cost & analysis consistency
@@ -592,17 +594,10 @@ Nothing currently in progress.
 Nothing below is committed, scoped or sequenced. Rechecked against `main`
 on 2026-09-30. The ML layer and the AI Conclusion used to be listed here.
 Both have shipped (see Completed phases above), so only their follow-ups
-remain.
+remain. The AI Conclusion's follow-ups have shipped too.
 
 ### Follow-ups on shipped features
 
-- **AI Conclusion** (`AI_summary_roadmap.md`):
-  - A payload preview that shows the exact JSON before anything is sent.
-    Today the UI only lists which sections are included.
-  - A note in the UI that the user's own key and Google's pricing apply.
-  - The conclusion is in the PDF report but not the HTML report. Adding it
-    there means freezing it into the file as plain text at export time, as
-    the design specified.
 - **Predictive Insights** (`ML_roadmap.md`): left out of v1 on purpose and
   still open:
   - multi-class outcomes
