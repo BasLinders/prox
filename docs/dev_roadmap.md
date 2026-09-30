@@ -11,7 +11,7 @@ current even when the detail lives elsewhere — this is the one page meant
 to answer "where does PRoX development actually stand?" without opening
 five files.
 
-Last assessed 2026-09-23, against `main` — 201 tests passing, `pyflakes`
+Last assessed 2026-09-30, against `main` — 239 tests passing, `pyflakes`
 clean.
 
 ---
@@ -30,8 +30,9 @@ clean.
 | Phase 6b — Full-pipeline correctness pass | Complete | below |
 | Phase 7 — Incremental analysis (data-level caching) | Complete | below |
 | Phase 7b — High-res process map export & saved-run library | Complete | below |
-| ML layer (conversion propensity + drivers) | Engine shipped, UI roadmapped | `ML_roadmap.md` |
-| AI-assisted recommendations (optional, Gemini) | Roadmapped | `AI_summary_roadmap.md` |
+| Phase 8 — Memory, rerun cost & analysis consistency | Complete | below, `dev_optimization.md` |
+| ML layer (conversion propensity + drivers) | Complete (engine + Predictive Insights tab) | below, `ML_roadmap.md` |
+| AI Conclusion (optional, Gemini) | Complete | below, `AI_summary_roadmap.md` |
 | Process mining capability gaps (5 items, by effort) | Roadmapped, not scoped | below |
 | Product development suggestions | Roadmapped | below |
 
@@ -51,7 +52,7 @@ API-drift bug in the DFG-to-Petri-net conversion along the way. Full detail
 in `dev_phase2.md`.
 
 ### Phase 2 — Safety net
-Test suite (`tests/`, now 74 tests across the whole engine), CI
+Test suite (`tests/`, 74 tests at the time, 239 as of 2026-09-30), CI
 (`.github/workflows/ci.yml` — pyflakes then pytest on every PR/push to
 `main`), `.gitignore`, and pinned dependency upper bounds. Caught and fixed
 a real silent bug in `optimize_dataframe_memory()` while writing its test
@@ -103,7 +104,7 @@ unchanged inputs). Found and fixed a real correctness bug along the way:
 `optimize_dataframe_memory()` was converting `case:concept:name`/
 `concept:name` to `category` dtype, which `pm4py.convert_to_event_log()`
 rejects — silently breaking discovery on real event logs. Full detail in
-`dev_optimization.md`.
+`dev_optimization.md`. Later memory and rerun work is under Phase 8.
 
 ### Phase 5 — BigQuery live data source (via `first-order-engine`'s `foe.data`)
 
@@ -502,16 +503,24 @@ error rather than a crash or stale data. Deleting a saved-run entry never
 touches the cache it links to, since that's a shared resource managed
 separately via "Clear cache for this Dataset ID".
 
-### ML layer — engine slice
+### ML layer — conversion propensity + drivers
 
-**Shipped 2026-09-18** (`prox/predictive.py`, `tests/test_predictive.py`) -
-the engine half of the "conversion propensity + driver analysis" idea
-scoped in `ML_roadmap.md`: `train_propensity_model()`,
+**Engine shipped 2026-09-21** (#40, `prox/predictive.py`,
+`tests/test_predictive.py`) - the "conversion propensity + driver analysis"
+idea scoped in `ML_roadmap.md`: `train_propensity_model()`,
 `analyze_propensity_drivers()`, `summarize_propensity_scores()`, and the
 completed/in-progress case split (`split_completed_in_progress()`) it all
-sits on. No `main.py`/UI changes - that's a deliberately separate follow-up.
-Optional dependency (`pip install -e ".[ml]"`, scikit-learn), same pattern as
-the BigQuery extra above.
+sits on. Optional dependency (`pip install -e ".[ml]"`, scikit-learn), same
+pattern as the BigQuery extra above.
+
+**UI shipped 2026-09-21** (#41): a **Predictive Insights** tab with an
+outcome picker, optional attribute/revenue columns, validation metrics,
+plain-language drivers and an aggregate in-progress summary, captioned as a
+prediction rather than a measurement. Since `bc208e5` (2026-09-29) the model
+trains on the raw log with only event-level filter steps and no sampling. A
+crop at the outcome would remove every negative case, and the stratified
+sample over-represents purchases. This makes it the one tab whose case set
+can differ from the rest. Detail in `ML_roadmap.md`.
 
 Deviates from `ML_roadmap.md`'s original framing in three ways, decided
 during implementation: plain logistic regression instead of
@@ -526,6 +535,49 @@ risking a stale-looking prediction casting doubt on the feature's other,
 aggregate numbers. `ML_roadmap.md`'s open questions are resolved inline
 there.
 
+### AI Conclusion (optional, Gemini)
+
+**Shipped 2026-09-29** (#51, `utility/ai_payload.py`, `utility/ai_client.py`).
+An "AI Conclusion" expander under the results tabs sends an aggregate-only
+digest of the run to Gemini: no case, user or session IDs, and no
+per-resource rows. The digest includes any follow-up analyses run in the tabs
+(reference-model conformance, funnel by segment, segment comparison, the
+propensity model). Gemini returns a summary, key findings and next steps in
+Dutch or English. The conclusion is kept separate from the deterministic
+Executive Summary. It can be added to the custom PDF report and is dropped
+from the PDF once the results change. Needs `pip install -e ".[ai]"` and
+`GEMINI_API_KEY` in `.streamlit/secrets.toml`. Its scope is wider than the
+recommendations-only idea it was designed as. As-built detail and the two
+remaining open items (payload preview, cost note) are in
+`AI_summary_roadmap.md`.
+
+### Phase 8 — Memory, rerun cost & analysis consistency
+
+**Shipped 2026-09-22 to 2026-09-29.** Hardening driven by real, large GA4
+logs rather than new capability. Performance detail is in
+`dev_optimization.md`.
+
+- **Memory** (#47): a budget on ETConformance precision (the main cause of
+  the OOM kills), DataFrames passed to PM4Py instead of `EventLog` objects
+  (about 4x less peak memory), capped Streamlit caches, and a 30 s per-trace
+  limit for State Equation A\*. Loaders moved to `st.cache_resource` (#49),
+  and the 500 MB upload limit was removed.
+- **Rerun cost**: an Apply Configuration form for filters and sampling (#45),
+  nothing loaded until a data source is picked (#52, #53), and
+  identity-keyed caching of log-derived data with downloads built on click
+  (#55).
+- **Sampling applies to the whole pipeline** (#43): when enabled, it is taken
+  once after filtering and reused by every stage, so business insights and
+  conformance describe the same cases.
+- **Every tab reads the filtered log** (#54, `e5068a8`): Reference Model,
+  Funnel and the pipeline all use the configured `filter_steps`, so events
+  removed as noise no longer count as deviations. The one deliberate
+  exception is Predictive Insights (see the ML layer above).
+- **Duplicate events removed by default** (#50): see "Data-quality
+  pre-check" under Product development suggestions.
+- **`purchase`/`add_to_cart` flags derived from activity names** (#42), so
+  stratified sampling works on real data, not just the mock data.
+
 ---
 
 ## In progress
@@ -536,30 +588,12 @@ Nothing currently in progress.
 
 ## Roadmapped (not yet scheduled)
 
-### Machine learning layer
-
-A colleague-suggested direction: layering ML on top of the event log.
-Scoped into a concrete first candidate — conversion propensity prediction
-paired with a plain-language root-cause driver analysis — in
-`ML_roadmap.md`, including feature engineering, model choice, validation
-approach, and the open questions (minimum data volume, leakage risk,
-overlap with the Funnel tab) to resolve before building it. Kept as its
-own file since ML output is probabilistic and needs a different kind of
-trust framing than PRoX's otherwise-deterministic metrics.
-
-### AI-assisted recommendations (optional, Gemini)
-
-A response to competitive pressure to have some AI-branded capability,
-scoped narrowly on purpose: an opt-in, off-by-default feature that sends
-an already-aggregated summary of the analysis (never the event log or any
-row-level data) to Gemini and displays the generated recommendations in a
-clearly-labeled, separate section — distinct from the deterministic
-recommendations already in the Executive Summary. Full detail, including
-the exact data-allowlist design that keeps case/user IDs from ever leaving
-the machine, in `AI_summary_roadmap.md`. Kept as its own file since sending
-data to a third-party API raises data-handling questions neither
-`ML_roadmap.md`'s locally-trained models nor any of PRoX's other features
-do.
+The ML layer and the AI Conclusion, both previously listed here, have
+shipped (see Completed phases above). Remaining follow-ups for them:
+- **AI Conclusion:** a payload preview showing the exact JSON before it is
+  sent, and a UI note on API cost (`AI_summary_roadmap.md`).
+- **Performance:** Token Replay is slow on very long traces, and the "CPU
+  Cores" control has no effect under PM4Py 2.7 (`dev_optimization.md`).
 
 ### Process mining capability gaps
 
@@ -647,6 +681,10 @@ sequenced yet.
   sample size, filters, funnel definition) as a small JSON file. Removes the
   "reconfigure everything every session" friction for a repeat analyst —
   directly serves the "runs on a laptop, used repeatedly" use case.
+  *Partly covered by saved runs (Phase 7b):* a saved run restores its
+  sidebar, filter and sampling settings. What's still missing is a preset
+  that stands apart from one event log, so it can be applied to a new
+  upload, and that includes the funnel definition.
 
 #### Medium bets (real feature work, clear value)
 

@@ -12,6 +12,62 @@ top of the same "how much do we trust generated content next to
 deterministic numbers" question. Entries here are scoped for discussion,
 not committed to a phase number yet.
 
+## Status: shipped as "AI Conclusion" (2026-09-29, #51)
+
+The section below is kept as the design record. This is what was actually
+built, and where it differs from that design:
+
+- **Scope: a conclusion, not only recommendations.** An "AI Conclusion"
+  expander under the results tabs asks Gemini for a plain-language
+  summary, key findings and next steps. It sits apart from the
+  deterministic Executive Summary and doesn't replace its rule-based
+  recommendations. It is labelled "AI-generated - check it against the tabs
+  above before sharing it".
+- **Modules live in `utility/`, not `prox/`.** `utility/ai_payload.py`
+  (`build_ai_payload()`) builds the digest, and `utility/ai_client.py`
+  (`generate_conclusion()`) calls Gemini. The core engine makes no network
+  calls, as planned.
+- **Payload.** Aggregate only. It never includes case, user or session IDs,
+  and it leaves out per-resource rows because resource names are often
+  people. Ranked lists are capped at the top 5 entries. The payload carries a
+  `context` block (case grouping, sampling, filters, algorithms) and covers
+  the follow-up analyses the user has run in their tabs: reference-model
+  conformance, funnel by segment, segment comparison and the propensity
+  model. Analyses that weren't run are listed under `not_run`, so the model
+  doesn't guess at them. The UI shows which sections are included and which
+  aren't.
+- **Prompt.** It tells the model to use only figures that appear in the
+  data. It also explains that discovered-model conformance is a
+  self-consistency check, not compliance, and asks the model to call a
+  propensity model with ROC AUC below 0.65 weak. Every label from the event
+  log is treated as untrusted data, never as instructions, to guard against
+  prompt injection.
+- **Model and SDK.** It uses `google-genai` (not `google-generativeai`),
+  with `pip install -e ".[ai]"`. The default model is
+  `gemini-3.5-flash-lite`, with `gemini-flash-latest` as a fallback on 503
+  or 429 responses, and 2 retries with backoff for each model. The
+  conclusion can be written in Dutch (the default) or English.
+- **API key.** It is read from `GEMINI_API_KEY` in `.streamlit/secrets.toml`
+  rather than typed into a password field. Without a key, the button is
+  disabled and a hint is shown.
+- **Reports.** The conclusion can be added as a section of the custom PDF
+  report. The HTML report doesn't include it. Each conclusion is
+  fingerprinted by its payload: if the results change afterwards, the UI
+  flags it as out of date and leaves it out of the PDF until it is generated
+  again. Generation only runs on a button click, so reruns don't use API
+  quota.
+
+**Open questions below: resolved.** The allowlist is the set of section
+builders in `build_ai_payload()`. The leakage regression test exists as
+`tests/test_ai_payload.py::test_payload_never_contains_case_or_user_ids`.
+The deterministic recommendations and the AI conclusion are shown in
+separate places.
+
+**Still open from the design:**
+- A "Preview payload" view that shows the exact JSON before it is sent. Today
+  only the section names are listed.
+- A note in the UI that the user's own key and Google's pricing apply.
+
 ## AI-assisted recommendations (optional, Gemini)
 
 **Idea**: an opt-in, off-by-default feature that sends an aggregated,

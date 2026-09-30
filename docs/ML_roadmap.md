@@ -10,6 +10,36 @@ can be wrong in ways that are harder to explain to a non-technical
 stakeholder than "here's the bottleneck." Entries here are scoped for
 discussion, not committed to a phase number yet.
 
+## Status: conversion propensity shipped (2026-09-21, #40 engine, #41 UI)
+
+The design below is kept as the record. The as-built deviations are
+listed at the end of this file. This section covers what the shipped UI
+does:
+
+- **Predictive Insights tab.** It has an outcome-activity picker, optional
+  case-attribute and revenue columns, and an advanced expander for the
+  minimum cases per class and the number of CV folds. A "Train Propensity
+  Model" button stores the model in `st.session_state` until it is
+  retrained. The tab then shows validation metrics (mean ± std across
+  folds), plain-language drivers and an aggregate summary of in-progress
+  cases. It is captioned as a prediction, not a measurement.
+- **Training data (changed 2026-09-29, `bc208e5`).** The model trains and
+  scores on the raw log with only the *event-level* `filter_steps` applied,
+  and without sampling. This replaces the earlier choice (`e6468d1`) to train
+  on the pipeline's filtered and sampled log, for two reasons:
+  - Case-selecting filters (`crop`, `endpoints`, `case_duration`,
+    `top_variants`, and `activity` in its contains/not_contains modes)
+    decide which cases survive. A crop at `purchase` removes every case that
+    never purchased, which leaves the classifier no negatives to learn from.
+  - The stratified sample over-represents purchase cases, which would
+    inflate every propensity score.
+
+  Leakage stays covered because features are still truncated strictly
+  before a case's first outcome event. As a result, this tab is the one
+  place where the case set can differ from the other tabs.
+- **AI Conclusion.** When a model has been trained, its metrics, drivers and
+  score summary go into the AI Conclusion payload (`AI_summary_roadmap.md`).
+
 ## Conversion propensity + root-cause driver analysis
 
 **Idea**: an opt-in "Predictive Insights" capability with two parts:
@@ -118,7 +148,7 @@ haven't reached an outcome yet.
   (`test_train_propensity_model_excludes_post_outcome_events_from_features`
   and others).
 - **Where this fits relative to Funnel analysis — resolved.** A genuinely
-  separate future "Predictive Insights" tab, not a Funnel tab extension —
+  separate "Predictive Insights" tab (shipped in #41), not a Funnel tab extension —
   keeps deterministic Funnel metrics and probabilistic model output
   visually and architecturally separate, matching the trust-boundary
   concern above. The outcome-picker is its own independent parameter, not
