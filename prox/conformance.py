@@ -294,11 +294,9 @@ def parse_alignments(clean_log, alignments: list) -> list:
         unsolicited = []
 
         for move in align.get('alignment', []):
-            log_part = move[0]
-            log_label = log_part[0] if isinstance(log_part, tuple) else log_part
-
-            model_part = move[1]
-            model_label = model_part[0] if isinstance(model_part, tuple) else model_part
+            # With ret_tuple_as_trans_desc a move is ((event_id, transition_name),
+            # (log_label, model_label)): the labels are the second tuple.
+            log_label, model_label = move[1] if isinstance(move[1], tuple) else move
 
             model_str = str(model_label) if model_label is not None else "None"
             log_str = str(log_label) if log_label is not None else "None"
