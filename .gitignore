@@ -8,3 +8,4 @@ venv/
 .streamlit/secrets.toml
 .prox_cache/
 .prox_saved_runs/
+.prox_presets/

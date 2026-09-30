@@ -59,6 +59,21 @@ from prox import (
     summarize_propensity_scores,
 )
 
+from prox.presets import (
+    DEFAULT_PRESETS_DIR,
+    PresetError,
+    build_funnel_settings,
+    build_preset,
+    delete_preset,
+    fit_config_to_log,
+    fit_funnel_to_log,
+    list_presets,
+    load_preset,
+    preset_from_json,
+    preset_to_json,
+    save_preset,
+)
+
 # Pre-selected as a starting point in the event-filter UI - GA4-style noise
 # events that carry no process-mining signal. Only ones actually present in
 # the uploaded log are pre-checked; the user can add/remove freely.
@@ -457,12 +472,24 @@ def _cached_run_full_analysis(df_ready, config, output_folder="output"):
 # defaults, rather than keeping whatever was last set under the previous run.
 # ---------------------------------------------------------------------------
 restored_config = {}
+restored_funnel = None
 _config_scope = "default"
 if st.session_state.get("data_source_choice") == "Load saved run" and st.session_state.get("saved_run_choice"):
     _restored_manifest = get_saved_run_manifest(st.session_state["saved_run_choice"], save_dir=DEFAULT_SAVED_RUNS_DIR)
     if _restored_manifest and _restored_manifest.get("config"):
         restored_config = _restored_manifest["config"]
         _config_scope = _restored_manifest["run_id"]
+        # Saved runs don't store a funnel yet; when they do, it goes in the
+        # manifest under "funnel" (see prox/presets.py) and is picked up here.
+        restored_funnel = _restored_manifest.get("funnel")
+elif st.session_state.get("active_preset"):
+    # A config preset (sidebar -> Configuration preset) stands in for a saved
+    # run's settings when the data comes from anywhere else. The apply counter
+    # is part of the scope so applying the same preset again resets the
+    # widgets to it.
+    restored_config = st.session_state["active_preset"]["config"]
+    restored_funnel = st.session_state["active_preset"].get("funnel")
+    _config_scope = f"preset{st.session_state.get('preset_apply_count', 0)}"
 
 
 def _ck(name: str) -> str:
@@ -481,9 +508,78 @@ def _restored_filter_step(step_type: str):
 # ---------------------------------------------------------------------------
 # Sidebar - configuration
 # ---------------------------------------------------------------------------
+
+
+def _apply_preset():
+    preset_id = st.session_state.get("preset_choice")
+    try:
+        preset = load_preset(preset_id, presets_dir=DEFAULT_PRESETS_DIR)
+    except PresetError as e:
+        st.session_state["preset_message"] = ("error", str(e))
+        return
+    st.session_state["active_preset"] = preset
+    st.session_state["preset_apply_count"] = st.session_state.get("preset_apply_count", 0) + 1
+    st.session_state["preset_message"] = ("success", f"Applied preset '{preset['name']}'.")
+
+
+def _clear_preset():
+    st.session_state.pop("active_preset", None)
+    st.session_state["preset_apply_count"] = st.session_state.get("preset_apply_count", 0) + 1
+
+
+def _delete_preset():
+    delete_preset(st.session_state.pop("preset_choice", None), presets_dir=DEFAULT_PRESETS_DIR)
+
+
+def _import_preset():
+    uploaded = st.session_state.get("preset_upload")
+    if uploaded is None:
+        return
+    try:
+        preset = preset_from_json(uploaded.getvalue())
+        st.session_state["preset_choice"] = save_preset(preset, presets_dir=DEFAULT_PRESETS_DIR)
+    except PresetError as e:
+        st.session_state["preset_message"] = ("error", f"Couldn't import that file: {e}")
+        return
+    st.session_state["preset_message"] = ("success", f"Imported preset '{preset['name']}'. Click Apply to use it.")
+
+
 with st.sidebar:
     st.title("PRoX ⚙️")
     st.caption("Process Excavator")
+    st.divider()
+
+    with st.expander("Configuration preset", expanded=bool(st.session_state.get("active_preset"))):
+        if st.session_state.get("data_source_choice") == "Load saved run":
+            st.caption("A saved run brings its own settings; presets apply to the other data sources.")
+        else:
+            st.caption(
+                "A preset holds the sidebar, filter, sampling and funnel settings, "
+                "so a new upload doesn't need reconfiguring. Create one with "
+                "**Save settings as preset** above Run Analysis."
+            )
+            known_presets = dict(list_presets(presets_dir=DEFAULT_PRESETS_DIR))
+            if known_presets:
+                preset_ids = list(known_presets)
+                st.selectbox(
+                    "Preset", preset_ids, format_func=lambda pid: known_presets[pid]["name"],
+                    key="preset_choice", index=None, placeholder="Choose a preset",
+                )
+                pc1, pc2 = st.columns(2)
+                pc1.button("Apply", on_click=_apply_preset, disabled=not st.session_state.get("preset_choice"),
+                           width='stretch')
+                pc2.button("Delete", on_click=_delete_preset, disabled=not st.session_state.get("preset_choice"),
+                           width='stretch')
+            else:
+                st.caption("No presets saved yet.")
+            st.file_uploader("Import a preset file", type="json", key="preset_upload")
+            st.button("Import", on_click=_import_preset, disabled=st.session_state.get("preset_upload") is None)
+            if st.session_state.get("active_preset"):
+                st.info(f"Active preset: **{st.session_state['active_preset']['name']}**")
+                st.button("Back to defaults", on_click=_clear_preset)
+            if st.session_state.get("preset_message"):
+                kind, text = st.session_state.pop("preset_message")
+                getattr(st, kind)(text)
     st.divider()
 
     st.header("Data")
@@ -1183,6 +1279,20 @@ if n_duplicates_removed:
         "sidebar to keep them."
     )
 
+# A preset written for another log may name activities or columns this one
+# doesn't have; the widgets below already leave those out, this says so.
+if st.session_state.get("active_preset") and not loaded_from_saved_run:
+    _, _preset_notes = fit_config_to_log(
+        restored_config,
+        sorted(raw_df["concept:name"].dropna().astype(str).unique().tolist()),
+        list(raw_df.columns),
+    )
+    if _preset_notes:
+        st.warning(
+            f"Preset '{st.session_state['active_preset']['name']}' doesn't fully fit this log:\n\n"
+            + "\n".join(f"- {n}" for n in _preset_notes)
+        )
+
 # ---------------------------------------------------------------------------
 # Filter events before analysis
 # ---------------------------------------------------------------------------
@@ -1362,14 +1472,7 @@ with st.form("configuration_form"):
 if applied:
     st.success("Configuration applied.")
 
-st.divider()
-run_btn = st.button("Run Analysis", type="primary", width='stretch')
-
-# ---------------------------------------------------------------------------
-# Run analysis when button is pressed
-# ---------------------------------------------------------------------------
-if run_btn:
-    config = create_analysis_config(
+current_config = create_analysis_config(
         discovery_algo=discovery_algo,
         noise_threshold=noise_threshold,
         conformance_algo=conformance_algo,
@@ -1382,6 +1485,61 @@ if run_btn:
         filter_steps=filter_steps,
         remove_duplicates=remove_duplicates,
     )
+
+# ---------------------------------------------------------------------------
+# Save the current settings (plus the funnel, if one is set up) as a preset
+# ---------------------------------------------------------------------------
+with st.expander("Save settings as preset"):
+    st.caption(
+        "Keeps the sidebar, filter and sampling settings above, and the funnel from the "
+        "Funnel tab, in a small file you can apply to any later upload from the "
+        "sidebar's **Configuration preset**. Settings are those last applied - click "
+        "**Apply Configuration** first after changing the filter or sampling."
+    )
+    _funnel_mode_label = st.session_state.get(_ck("funnel_mode"))
+    _saved_funnel = (
+        build_funnel_settings(
+            "auto" if _funnel_mode_label == "Auto-detect from data" else "manual",
+            st.session_state.get(_ck("funnel_steps")),
+            st.session_state.get(_ck("funnel_segment")) if st.session_state.get(_ck("funnel_segment")) != "None" else None,
+        )
+        if _funnel_mode_label else None
+    )
+    if _saved_funnel is None:
+        st.caption("No funnel is set up yet, so this preset won't include one.")
+    elif _saved_funnel["mode"] == "manual" and _saved_funnel["steps"]:
+        st.caption("Funnel: " + " → ".join(_saved_funnel["steps"]))
+    preset_c1, preset_c2 = st.columns([3, 1])
+    with preset_c1:
+        preset_name = st.text_input(
+            "Preset name", key="save_preset_name", label_visibility="collapsed",
+            placeholder="Preset name (e.g. Acme checkout)",
+            value=(st.session_state.get("active_preset") or {}).get("name", ""),
+        )
+    with preset_c2:
+        if st.button("Save preset", width='stretch'):
+            try:
+                _preset = build_preset(preset_name, current_config, _saved_funnel)
+                _preset_id = save_preset(_preset, presets_dir=DEFAULT_PRESETS_DIR)
+                st.session_state["preset_download"] = (_preset_id, preset_to_json(_preset))
+                st.success(f"Saved preset '{_preset['name']}'.")
+            except PresetError as e:
+                st.warning(str(e))
+    if st.session_state.get("preset_download"):
+        _dl_id, _dl_json = st.session_state["preset_download"]
+        st.download_button(
+            "Download preset file", data=_dl_json, file_name=f"{_dl_id}.preset.json",
+            mime="application/json", on_click="ignore",
+        )
+
+st.divider()
+run_btn = st.button("Run Analysis", type="primary", width='stretch')
+
+# ---------------------------------------------------------------------------
+# Run analysis when button is pressed
+# ---------------------------------------------------------------------------
+if run_btn:
+    config = current_config
 
     _, results = _cached_run_full_analysis(df_ready, config)
 
@@ -2210,9 +2368,26 @@ def _render_results_tabs():
             funnel_df = _apply_filter_steps(raw_df, st.session_state.get("config", {}))
             activities = sorted(funnel_df["concept:name"].dropna().astype(str).unique().tolist())
 
+            funnel_nunique = _cached_column_nunique(funnel_df)[1]
+            funnel_exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id"}
+            funnel_segment_candidates = [
+                c for c in funnel_df.columns
+                if c not in funnel_exclude_cols and 2 <= funnel_nunique[c] <= 20
+            ]
+
+            # A funnel from a preset (or, later, a saved run) may name steps or
+            # a segment column this log doesn't offer: those are left out and
+            # said so, and the rest becomes the widgets' starting point.
+            fitted_funnel, funnel_notes = fit_funnel_to_log(restored_funnel, activities, funnel_segment_candidates)
+            for note in funnel_notes:
+                st.warning(note)
+
+            funnel_modes = ["Define manually", "Auto-detect from data"]
             mode = st.radio(
                 "Funnel definition",
-                ["Define manually", "Auto-detect from data"],
+                funnel_modes,
+                index=1 if fitted_funnel and fitted_funnel["mode"] == "auto" else 0,
+                key=_ck("funnel_mode"),
                 horizontal=True,
                 help=(
                     "Manual: pick activities in the order they should occur - full control, "
@@ -2227,22 +2402,23 @@ def _render_results_tabs():
                 funnel_steps = st.multiselect(
                     "Funnel steps",
                     options=activities,
+                    default=fitted_funnel["steps"] if fitted_funnel else [],
+                    key=_ck("funnel_steps"),
                     help="Activities are added to the funnel in the order you select them."
                 )
                 if funnel_steps:
                     st.caption("Funnel order: " + " → ".join(funnel_steps))
 
-            funnel_exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id"}
-            funnel_nunique = _cached_column_nunique(funnel_df)[1]
-            funnel_segment_candidates = [
-                c for c in funnel_df.columns
-                if c not in funnel_exclude_cols and 2 <= funnel_nunique[c] <= 20
-            ]
             funnel_segment_col = None
             if funnel_segment_candidates:
                 funnel_segment_choice = st.selectbox(
                     "Split by segment (optional)",
                     options=["None"] + funnel_segment_candidates,
+                    index=(
+                        funnel_segment_candidates.index(fitted_funnel["segment_col"]) + 1
+                        if fitted_funnel and fitted_funnel["segment_col"] else 0
+                    ),
+                    key=_ck("funnel_segment"),
                     help=(
                         "Compare drop-off across segment values instead of just the "
                         "overall funnel - e.g. 'does mobile drop off earlier than "
