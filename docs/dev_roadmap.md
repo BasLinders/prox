@@ -724,8 +724,6 @@ payoff.
 
 #### Longer-term
 
-Both items previously listed here have shipped: the BigQuery live data
-source (Phase 5) and incremental analysis (Phase 7, as data-level caching,
-not incremental discovery/conformance). The one large item still open is
+The one large item still open is
 the multi-tenant/hosted deployment layer, under Process mining capability
 gaps above.
