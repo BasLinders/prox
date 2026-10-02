@@ -1753,14 +1753,13 @@ def _render_results_tabs():
     report_extras = {}
     summary = results.get("log_summary", {})
     if summary:
-        c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1, 1.2, 1.2])
+        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1.2])
         c1.metric("Cases", f"{summary.get('Number of Cases', 0):,}")
         c2.metric("Events", f"{summary.get('Number of Events', 0):,}")
         c3.metric("Activities", summary.get("Number of Unique Activities", 0))
         c4.metric("Duration (days)", summary.get("Total Duration (Days)", 0))
-        # Both downloads are built only when clicked (data=callable), not on every
-        # rerun of this fragment - serializing the full event log to CSV is the
-        # slowest thing a tab switch would otherwise do on a large log.
+        # The report is built only when clicked (data=callable), not on every
+        # rerun of this fragment, so a tab switch doesn't pay for it.
         # on_click="ignore": downloading doesn't need a rerun either.
         with c5:
             st.download_button(
@@ -1776,20 +1775,6 @@ def _render_results_tabs():
                 width='stretch',
                 on_click="ignore",
             )
-        with c6:
-            event_log_df = st.session_state.get("df")
-            if event_log_df is not None:
-                st.download_button(
-                    "Download Event Log",
-                    data=lambda: event_log_df.to_csv(index=False).encode("utf-8"),
-                    file_name="prox_event_log.csv",
-                    mime="text/csv",
-                    width='stretch',
-                    on_click="ignore",
-                    help="Download the event log used for this run as a CSV, for a "
-                         "one-off copy. To pick it back up in-app later, use "
-                         "'Save Event Log to Library' below instead.",
-                )
 
         event_log_df = st.session_state.get("df")
         active_source_dataset_id = st.session_state.get("active_source_dataset_id")
@@ -1839,6 +1824,18 @@ def _render_results_tabs():
                                     f"Saved as '{manifest['label']}', with its settings and results. "
                                     "Load it later from Step 1 → **Load saved run**."
                                 )
+            # data=callable: the CSV is serialized only on click, not on every
+            # fragment rerun (slow on a large log). on_click="ignore": no rerun.
+            st.download_button(
+                "Save event log as CSV",
+                data=lambda: event_log_df.to_csv(index=False).encode("utf-8"),
+                file_name="prox_event_log.csv",
+                mime="text/csv",
+                on_click="ignore",
+                help="Download the event log used for this run as a CSV, for a "
+                     "one-off copy. To pick it back up in-app later, use "
+                     "'Save Event Log to Library' above instead.",
+            )
 
     st.divider()
 
