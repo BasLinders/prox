@@ -16,6 +16,7 @@ from .pipeline import run_full_analysis
 from .data_manager import (
     load_and_validate_csv,
     refine_activity_labels,
+    merge_page_views_into_page_events,
     optimize_dataframe_memory,
     filter_event_log,
     sample_log_stratified,
@@ -79,6 +80,7 @@ __all__ = [
     "run_full_analysis",
     "load_and_validate_csv",
     "refine_activity_labels",
+    "merge_page_views_into_page_events",
     "optimize_dataframe_memory",
     "filter_event_log",
     "sample_log_stratified",

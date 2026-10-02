@@ -692,6 +692,18 @@ payoff.
   before analysis by `drop_duplicate_events()` (keeping the first of each),
   controlled by the on-by-default **Remove Duplicate Events** sidebar
   option.
+- **Page-view merging — done.** Templated pages fire `page_view` plus their
+  own event (`view_item`, `view_item_list`, ...) on one page load, which
+  showed the page twice in the journey. `merge_page_views_into_page_events()`
+  in `prox/data_manager.py` drops a `page_view` when a page-specific event
+  fires with it (same case, same time or up to 5s later, same URL if a
+  `page_location` column exists), leaving `page_view` for CMS pages. It needs
+  no `page_type` column and runs before `refine_activity_labels`; it applies
+  to the analysis frame only, not the raw log the Funnel/Segments tabs read.
+  Controlled by the on-by-default **Merge page_view into page-specific
+  events** sidebar option. Single-page-app caveat: it assumes those events
+  mark a page load, so one that fires without a page change (a
+  `view_item_list` carousel on the homepage) absorbs that page's `page_view`.
 
 - **Config presets — done.** A preset is a small JSON file
   (`prox/presets.py`, stored in `.prox_presets/`) holding the sidebar,
