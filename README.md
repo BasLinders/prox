@@ -134,6 +134,7 @@ Optional columns that unlock additional analytics:
 | `purchase` / `transaction` | Repeat buyer detection, crop filter, cart-abandonment outcome |
 | `add_to_cart` | Cart abandonment rate |
 | `page_type` / `screen_class` | Automatic `page_view` label refinement |
+| `page_location` / `page_url` | Optional; tightens page-view merging to events from the same URL |
 | `category` | Category-level filters and revenue breakdown |
 
 None of the above is e-commerce-only by requirement — the Funnel tab works on any sequence of activities in your log, whether or not any of these columns are present.

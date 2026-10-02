@@ -357,6 +357,102 @@ def drop_duplicate_events(df: pd.DataFrame) -> Tuple[pd.DataFrame, int]:
     return df[~dup_mask], n_removed
 
 
+# Events that, in a conventional GA4 setup, fire once per page load of a
+# templated page and so already say which page the user is on. A page_view
+# fired alongside one of them is the same page load counted twice.
+# add_to_cart / select_item / add_shipping_info / add_payment_info are left out:
+# they are interactions, not page loads.
+PAGE_SPECIFIC_EVENTS = (
+    'view_item', 'view_item_list', 'view_cart', 'begin_checkout',
+    'view_search_results', 'purchase',
+)
+
+# page_view and its page-specific event are fired by the same page load, so
+# they land within moments of each other; the page-specific one can lag by the
+# time its product/list data takes to resolve.
+PAGE_VIEW_MERGE_WINDOW_SECONDS = 5.0
+
+# Columns that, when present, identify the page an event fired on and so
+# tighten the match (a page_view only merges with an event from the same URL).
+_PAGE_KEY_COLUMNS = ('page_location', 'page_url')
+
+
+def merge_page_views_into_page_events(
+    df: pd.DataFrame,
+    page_view_activity: str = 'page_view',
+    page_events=PAGE_SPECIFIC_EVENTS,
+    window_seconds: float = PAGE_VIEW_MERGE_WINDOW_SECONDS,
+) -> Tuple[pd.DataFrame, int]:
+    """
+    Drops each page_view that a page-specific event (view_item, view_item_list,
+    ...) already accounts for, so a templated page is one step in the journey
+    instead of page_view followed by view_item. The page_views that remain are
+    the pages with no event of their own - CMS pages such as the homepage or
+    customer service - which refine_activity_labels can then name from
+    page_type, when that column exists. This step needs no page_type.
+
+    A page_view is merged when a page-specific event in the same case occurs
+    at the same time or up to window_seconds after it (and, if the log has a
+    page_location / page_url column, on the same URL). The page-specific event
+    is never strictly *before* its own page_view, so an event that fired
+    earlier belongs to the previous page and does not absorb the page_view of
+    the next one. Because equal timestamps count as a match, the result does
+    not depend on how tied events happen to be ordered. Each page-specific
+    event merges only the nearest page_view before it, so a fast click-through
+    from a CMS page does not lose the CMS page's page_view.
+
+    Single-page apps: this assumes a page-specific event marks a page load.
+    In a SPA, a route change usually fires page_view too, so it merges as
+    intended; but an event can also fire without a page load - view_item_list
+    for a product carousel on the homepage, begin_checkout on a button click -
+    and then absorbs the page_view of the page it sits on, hiding that page.
+    Drop such events from page_events when your tracking does that.
+
+    Returns
+    -------
+    (DataFrame without the merged page_views, number of page_views removed)
+    """
+    required = ('case:concept:name', 'concept:name', 'time:timestamp')
+    if df is None or df.empty or any(c not in df.columns for c in required):
+        return df, 0
+
+    names = df['concept:name']
+    is_page_view = (names == page_view_activity).to_numpy()
+    is_specific = names.isin(list(page_events)).to_numpy()
+    if not is_page_view.any() or not is_specific.any():
+        return df, 0
+
+    key_col = next((c for c in _PAGE_KEY_COLUMNS if c in df.columns), None)
+    by = ['case:concept:name']
+    cols = ['case:concept:name', 'time:timestamp']
+    if key_col:
+        by.append('_page_key')
+        cols.append(key_col)
+
+    def _frame(mask):
+        out = df.loc[mask, cols].copy()
+        out['_row'] = np.flatnonzero(mask)  # position, so a non-unique index is safe
+        if key_col:
+            out['_page_key'] = out.pop(key_col).fillna('').astype(str)
+        return out.sort_values('time:timestamp', kind='stable')
+
+    right = _frame(is_page_view)
+    left = _frame(is_specific).drop(columns='_row')
+
+    # Latest page_view at or before each page-specific event, inside the window.
+    matched = pd.merge_asof(
+        left, right, on='time:timestamp', by=by,
+        direction='backward', allow_exact_matches=True,
+        tolerance=pd.Timedelta(seconds=window_seconds),
+    )['_row'].dropna().unique().astype(int)
+
+    if not len(matched):
+        return df, 0
+    keep = np.ones(len(df), dtype=bool)
+    keep[matched] = False
+    return df[keep], len(matched)
+
+
 def get_trace_signature(trace) -> tuple:
     """Returns a hashable tuple of activity names representing a trace variant."""
     return tuple(str(e['concept:name']) for e in trace)

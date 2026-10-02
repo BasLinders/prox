@@ -42,7 +42,7 @@ FUNNEL_MODES = ("manual", "auto")
 # Sections of the analysis config a preset keeps, and within each the fields.
 # None keeps the whole section.
 _CONFIG_FIELDS = {
-    "data_loading": ("remove_duplicates",),
+    "data_loading": ("remove_duplicates", "merge_page_views"),
     "discovery_params": ("algorithm", "noise_threshold"),
     "conformance_params": ("algorithm", "calculate_precision"),
     "sampling_config": None,

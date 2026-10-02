@@ -9,6 +9,7 @@ from prox.data_manager import (
     sample_log_stratified,
     optimize_dataframe_memory,
     refine_activity_labels,
+    merge_page_views_into_page_events,
     check_data_quality,
     drop_duplicate_events,
     winsorize_series,
@@ -510,3 +511,89 @@ def test_to_pm4py_frame_is_slim_and_time_sorted():
     assert out['concept:name'].tolist() == ['x1', 'x2', 'z', 'y']
     assert not isinstance(out['concept:name'].dtype, pd.CategoricalDtype)
     assert 'user_id' in df.columns  # input untouched
+
+
+# --- merge_page_views_into_page_events ---
+
+def _pv_log(rows, **extra):
+    t0 = pd.Timestamp('2026-01-01 10:00:00')
+    df = pd.DataFrame(
+        [('c1', name, t0 + pd.Timedelta(seconds=sec)) for name, sec in rows],
+        columns=['case:concept:name', 'concept:name', 'time:timestamp'],
+    )
+    for col, values in extra.items():
+        df[col] = values
+    return df
+
+
+def test_merge_page_views_drops_page_view_next_to_page_specific_event():
+    df = _pv_log([('page_view', 0), ('view_item', 1), ('add_to_cart', 8)])
+    result, removed = merge_page_views_into_page_events(df)
+    assert removed == 1
+    assert result['concept:name'].tolist() == ['view_item', 'add_to_cart']
+
+
+def test_merge_page_views_keeps_cms_page_views():
+    df = _pv_log([('page_view', 0), ('page_view', 20), ('view_item_list', 21)])
+    result, removed = merge_page_views_into_page_events(df)
+    assert removed == 1
+    assert result['concept:name'].tolist() == ['page_view', 'view_item_list']
+    assert result['time:timestamp'].iloc[0] == pd.Timestamp('2026-01-01 10:00:00')
+
+
+def test_merge_page_views_is_independent_of_tied_row_order():
+    a = _pv_log([('page_view', 0), ('view_item', 0)])
+    b = _pv_log([('view_item', 0), ('page_view', 0)])
+    for df in (a, b):
+        result, removed = merge_page_views_into_page_events(df)
+        assert removed == 1
+        assert result['concept:name'].tolist() == ['view_item']
+
+
+def test_merge_page_views_event_before_page_view_belongs_to_previous_page():
+    # view_item at 0, then 3s later a CMS page_view: view_item must not absorb it.
+    df = _pv_log([('view_item', 0), ('page_view', 3)])
+    result, removed = merge_page_views_into_page_events(df)
+    assert removed == 0
+    assert result['concept:name'].tolist() == ['view_item', 'page_view']
+
+
+def test_merge_page_views_fast_click_through_keeps_cms_page_view():
+    # CMS page_view at 0, listing page_view at 3 with its view_item_list at 3.2:
+    # the list event merges only the nearest preceding page_view.
+    df = _pv_log([('page_view', 0), ('page_view', 3), ('view_item_list', 3.2)])
+    result, removed = merge_page_views_into_page_events(df)
+    assert removed == 1
+    assert result['time:timestamp'].tolist()[0] == pd.Timestamp('2026-01-01 10:00:00')
+    assert result['concept:name'].tolist() == ['page_view', 'view_item_list']
+
+
+def test_merge_page_views_respects_window_and_case():
+    df = _pv_log([('page_view', 0), ('view_item', 30)])
+    assert merge_page_views_into_page_events(df)[1] == 0
+    other_case = _pv_log([('page_view', 0), ('view_item', 1)])
+    other_case.loc[1, 'case:concept:name'] = 'c2'
+    assert merge_page_views_into_page_events(other_case)[1] == 0
+
+
+def test_merge_page_views_requires_same_url_when_column_present():
+    same = _pv_log([('page_view', 0), ('view_item', 1)], page_location=['/p/1', '/p/1'])
+    assert merge_page_views_into_page_events(same)[1] == 1
+    different = _pv_log([('page_view', 0), ('view_item', 1)], page_location=['/home', '/p/1'])
+    assert merge_page_views_into_page_events(different)[1] == 0
+
+
+def test_merge_page_views_noop_without_both_kinds():
+    only_pv = _pv_log([('page_view', 0), ('click', 1)])
+    result, removed = merge_page_views_into_page_events(only_pv)
+    assert removed == 0
+    assert len(result) == 2
+
+
+def test_merge_page_views_handles_non_unique_index():
+    second = _pv_log([('page_view', 0), ('view_item', 1)])
+    second['case:concept:name'] = 'c2'
+    df = pd.concat([_pv_log([('page_view', 0), ('view_item', 1)]), second])  # index labels repeat
+    result, removed = merge_page_views_into_page_events(df)
+    assert removed == 2
+    assert result['concept:name'].tolist() == ['view_item', 'view_item']

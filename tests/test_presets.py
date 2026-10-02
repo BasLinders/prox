@@ -33,7 +33,7 @@ def test_extract_keeps_reusable_settings_only():
     kept = extract_preset_config(_config())
 
     assert kept["discovery_params"] == {"algorithm": "heuristics_miner", "noise_threshold": 0.4}
-    assert kept["data_loading"] == {"remove_duplicates": True}
+    assert kept["data_loading"] == {"remove_duplicates": True, "merge_page_views": True}
     assert "speed_params" not in kept  # cores are machine-specific
     assert kept["filter_steps"][1] == {"type": "crop", "activity": ["purchase"]}
 

@@ -32,6 +32,7 @@ from prox import (
     analyze_funnel_by_segment,
     check_data_quality,
     drop_duplicate_events,
+    merge_page_views_into_page_events,
     generate_mock_csv_bytes,
     filter_event_log,
     run_conformance_checking,
@@ -237,10 +238,11 @@ if st.session_state.get("shutdown_requested"):
     st.stop()
 
 
-def _prepare_df_ready(df: pd.DataFrame, remove_duplicates: bool) -> pd.DataFrame:
+def _prepare_df_ready(df: pd.DataFrame, remove_duplicates: bool, merge_page_views: bool) -> pd.DataFrame:
     """Derives the analysis-ready frame from an already-loaded/validated raw
-    log: optional duplicate-event removal, category-dtype roundtrip, page_view
-    label refinement, then memory optimization. Shared by
+    log: optional duplicate-event removal, category-dtype roundtrip, optional
+    merging of page_views into page-specific events, page_view label
+    refinement, then memory optimization. Shared by
     _cached_load_and_prepare (fresh upload) and the incremental-merge step
     below (merged-with-cache upload), so both paths produce df_ready the same
     way.
@@ -249,12 +251,20 @@ def _prepare_df_ready(df: pd.DataFrame, remove_duplicates: bool) -> pd.DataFrame
     (case, activity, timestamp) key the Data Quality Check reports on and
     raw_df is later deduplicated with, so df_ready and raw_df lose exactly
     the same rows.
+
+    Merging page_views removes rows from df_ready only: raw_df keeps them, as
+    the Funnel, Segments, and reference-conformance tabs read it. It runs
+    before label refinement, so the page_views left to refine are the ones
+    with no page-specific event.
     """
     df_ready = df.copy()
     if remove_duplicates:
         df_ready, _ = drop_duplicate_events(df_ready)
     for col in df_ready.select_dtypes(include=["category"]).columns:
         df_ready[col] = df_ready[col].astype("object")
+
+    if merge_page_views:
+        df_ready, _ = merge_page_views_into_page_events(df_ready)
 
     if "page_type" in df_ready.columns:
         df_ready = refine_activity_labels(df_ready, target_activity="page_view", context_column="page_type")
@@ -269,7 +279,7 @@ def _prepare_df_ready(df: pd.DataFrame, remove_duplicates: bool) -> pd.DataFrame
 # Each cap keeps the current entry (plus the previous config's results, so
 # flipping back to it stays instant); older entries are evicted.
 @st.cache_resource(show_spinner=False, max_entries=1)
-def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_grouping, remove_duplicates):
+def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_grouping, remove_duplicates, merge_page_views):
     """Loads + validates the CSV and applies label refinement/memory optimization.
     Cached on file content and loader params so re-running with the same
     upload (e.g. only sidebar options changed) skips CSV parsing entirely.
@@ -287,7 +297,7 @@ def _cached_load_and_prepare(file_bytes, chunk_threshold_mb, chunk_size, case_gr
     if df is None:
         return None, None, messages, has_category
 
-    df_ready = _prepare_df_ready(df, remove_duplicates)
+    df_ready = _prepare_df_ready(df, remove_duplicates, merge_page_views)
     return df, df_ready, messages, has_category
 
 
@@ -323,7 +333,7 @@ def _cached_merge_incremental(active_file_bytes, dataset_id, case_grouping, cach
 
 
 @st.cache_resource(show_spinner=False, max_entries=1)
-def _cached_load_cached_dataset(dataset_id, cache_dir, cache_sig, remove_duplicates):
+def _cached_load_cached_dataset(dataset_id, cache_dir, cache_sig, remove_duplicates, merge_page_views):
     """Loads an incremental-cache dataset and derives df_ready from it, once -
     not on every rerun. Streamlit reruns the whole script on every widget
     interaction, so calling load_cached_dataset directly re-read and re-parsed
@@ -340,11 +350,11 @@ def _cached_load_cached_dataset(dataset_id, cache_dir, cache_sig, remove_duplica
     df, manifest = load_cached_dataset(dataset_id, cache_dir=cache_dir)
     if df is None:
         return None, None, None
-    return df, manifest, _prepare_df_ready(df, remove_duplicates)
+    return df, manifest, _prepare_df_ready(df, remove_duplicates, merge_page_views)
 
 
 @st.cache_resource(show_spinner=False, max_entries=1)
-def _cached_load_saved_run(run_id, save_dir, cache_dir, source_sig, remove_duplicates):
+def _cached_load_saved_run(run_id, save_dir, cache_dir, source_sig, remove_duplicates, merge_page_views):
     """Same as _cached_load_cached_dataset, for a saved run. A saved run's own
     files never change once written, so run_id identifies its data - except a
     cache-linked run, which reads through to its cache: source_sig is that
@@ -352,13 +362,13 @@ def _cached_load_saved_run(run_id, save_dir, cache_dir, source_sig, remove_dupli
     df, manifest, error = load_saved_run(run_id, save_dir=save_dir, cache_dir=cache_dir)
     if df is None:
         return None, None, error, None
-    return df, manifest, None, _prepare_df_ready(df, remove_duplicates)
+    return df, manifest, None, _prepare_df_ready(df, remove_duplicates, merge_page_views)
 
 
 @st.cache_resource(show_spinner=False, max_entries=1, hash_funcs=_BY_IDENTITY)
-def _cached_prepare_df_ready(raw_df, remove_duplicates):
+def _cached_prepare_df_ready(raw_df, remove_duplicates, merge_page_views):
     """_prepare_df_ready for a merged-with-cache upload, once per merge result."""
-    return raw_df, _prepare_df_ready(raw_df, remove_duplicates)
+    return raw_df, _prepare_df_ready(raw_df, remove_duplicates, merge_page_views)
 
 
 @st.cache_resource(show_spinner=False, max_entries=1, hash_funcs=_BY_IDENTITY)
@@ -591,6 +601,27 @@ with st.sidebar:
             "earlier event, keeping the first, so repeated rows don't "
             "double-count activity frequencies and transition timings. The "
             "Data Quality Check still reports how many were found."
+        ),
+    )
+    merge_page_views = st.checkbox(
+        "Merge page_view into page-specific events",
+        value=bool(_restored("data_loading", "merge_page_views", True)),
+        key=_ck("merge_page_views"),
+        help=(
+            "Templated pages fire a page_view and their own event (view_item, "
+            "view_item_list, begin_checkout, ...) on the same page load, so the "
+            "journey shows the page twice. This drops the page_view when one of "
+            "those events fires with it (same case, within 5 seconds, and on the "
+            "same URL when the log has a page_location column), leaving page_view "
+            "only for pages with no event of their own, such as the homepage or "
+            "customer service pages. Applies to the process analysis; the Funnel "
+            "and Segments tabs keep the raw events.\n\n"
+            "Single-page apps: this assumes those events mark a page load. If one "
+            "fires without a page change (view_item_list for a carousel on the "
+            "homepage, begin_checkout on a button click), it will absorb the "
+            "page_view of the page it sits on. Untick this, or review the event "
+            "list in `PAGE_SPECIFIC_EVENTS` (prox/data_manager.py), if your "
+            "tracking does that."
         ),
     )
 
@@ -907,7 +938,7 @@ if data_source == "Load cached dataset":
     with st.spinner("Loading cached dataset..."):
         cached_raw_df, cached_manifest, df_ready = _cached_load_cached_dataset(
             chosen_dataset_id, DEFAULT_CACHE_DIR, cache_signature(chosen_dataset_id, cache_dir=DEFAULT_CACHE_DIR),
-            remove_duplicates,
+            remove_duplicates, merge_page_views,
         )
     if cached_raw_df is None:
         st.error(f"Could not load cached dataset '{chosen_dataset_id}'. It may have just been cleared.")
@@ -958,7 +989,7 @@ elif data_source == "Load saved run":
         saved_raw_df, saved_manifest, saved_run_error, saved_df_ready = _cached_load_saved_run(
             chosen_run_id, DEFAULT_SAVED_RUNS_DIR, DEFAULT_CACHE_DIR,
             cache_signature(linked_dataset_id, cache_dir=DEFAULT_CACHE_DIR) if linked_dataset_id else "standalone",
-            remove_duplicates,
+            remove_duplicates, merge_page_views,
         )
     if st.button("Delete this saved run"):
         delete_saved_run(chosen_run_id, save_dir=DEFAULT_SAVED_RUNS_DIR)
@@ -1099,7 +1130,7 @@ else:
             loader_defaults["chunk_threshold_mb"],
             loader_defaults["chunk_size"],
             case_grouping,
-            remove_duplicates,
+            remove_duplicates, merge_page_views,
         )
 
     st.session_state["load_messages"] = load_messages
@@ -1187,7 +1218,7 @@ else:
             # for this exact upload, and that's still correct when nothing merged in
             # (a fresh seed, or a case-grouping mismatch that skipped the merge).
             if incremental_stats.get("merged"):
-                df_ready = _cached_prepare_df_ready(raw_df, remove_duplicates)[1]
+                df_ready = _cached_prepare_df_ready(raw_df, remove_duplicates, merge_page_views)[1]
             # merge_incremental writes raw_df through to the cache for both the
             # seed and actual-merge cases - only a grouping mismatch skips that
             # write, leaving raw_df un-coupled from this dataset_id.
@@ -1484,6 +1515,7 @@ current_config = create_analysis_config(
         max_priority_ratio=float(max_priority_ratio),
         filter_steps=filter_steps,
         remove_duplicates=remove_duplicates,
+        merge_page_views=merge_page_views,
     )
 
 # ---------------------------------------------------------------------------
