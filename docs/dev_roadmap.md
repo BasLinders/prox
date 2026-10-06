@@ -11,7 +11,7 @@ current even when the detail lives elsewhere — this is the one page meant
 to answer "where does PRoX development actually stand?" without opening
 five files.
 
-Last assessed 2026-09-30, against `main` — 239 tests passing, `pyflakes`
+Last assessed 2026-10-06, against `main` — 275 tests passing, `pyflakes`
 clean.
 
 ---
@@ -33,9 +33,9 @@ clean.
 | Phase 8 — Memory, rerun cost & analysis consistency | Complete | below, `dev_optimization.md` |
 | ML layer (conversion propensity + drivers) | Complete (engine + Predictive Insights tab) | below, `ML_roadmap.md` |
 | AI Conclusion (optional, Gemini) | Complete | below, `AI_summary_roadmap.md` |
-| Follow-ups on shipped features (ML, performance, BigQuery) | Roadmapped | below |
+| Follow-ups on shipped features (ML, performance, BigQuery) | Roadmapped (CPU Cores fix shipped) | below |
 | Process mining capability gaps (5 items, by effort) | Roadmapped, not scoped (resource perspective partly shipped) | below |
-| Product development suggestions | Roadmapped | below |
+| Product development options | Roadmapped (config presets shipped) | below |
 
 \* One sub-item — segment comparison v2 (automated golden-path diffing) —
 is deliberately deferred; see "Medium bets" below. Everything else under
@@ -53,7 +53,7 @@ API-drift bug in the DFG-to-Petri-net conversion along the way. Full detail
 in `dev_phase2.md`.
 
 ### Phase 2 — Safety net
-Test suite (`tests/`, 74 tests at the time, 239 as of 2026-09-30), CI
+Test suite (`tests/`, 74 tests at the time, 275 as of 2026-10-06), CI
 (`.github/workflows/ci.yml` — pyflakes then pytest on every PR/push to
 `main`), `.gitignore`, and pinned dependency upper bounds. Caught and fixed
 a real silent bug in `optimize_dataframe_memory()` while writing its test
@@ -577,7 +577,7 @@ logs rather than new capability. Performance detail is in
   removed as noise no longer count as deviations. The one deliberate
   exception is Predictive Insights (see the ML layer above).
 - **Duplicate events removed by default** (#50): see "Data-quality
-  pre-check" under Product development suggestions.
+  pre-check" under Product development options.
 - **`purchase`/`add_to_cart` flags derived from activity names** (#42), so
   stratified sampling works on real data, not just the mock data.
 
@@ -592,9 +592,11 @@ Nothing currently in progress.
 ## Roadmapped (not yet scheduled)
 
 Nothing below is committed, scoped or sequenced. Rechecked against `main`
-on 2026-09-30. The ML layer and the AI Conclusion used to be listed here.
+on 2026-10-06. The ML layer and the AI Conclusion used to be listed here.
 Both have shipped (see Completed phases above), so only their follow-ups
-remain. The AI Conclusion's follow-ups have shipped too.
+remain. The AI Conclusion's follow-ups have shipped too, as has the
+"CPU Cores" fix from the Performance list below, and config presets from
+the quick wins.
 
 ### Follow-ups on shipped features
 
@@ -605,12 +607,17 @@ remain. The AI Conclusion's follow-ups have shipped too.
   - automatic hyperparameter tuning
   - using the incremental cache, which first needs a fix for label churn
 - **Performance** (`dev_optimization.md`):
-  - The "CPU Cores" control has no effect, because PM4Py 2.7 ignores
-    `cores`. Either remove the control or wait for a PM4Py version that
-    honours it.
   - Token Replay is slow on very long traces (runtime only; memory stays
     bounded).
   - Pre-discovery downsampling is waiting on a concrete pain report.
+  - *Shipped (#57):* the "CPU Cores" control now takes effect. PM4Py 2.7's
+    `alignments.apply()` ignores `cores`, so State Equation A\* calls
+    `apply_multiprocessing()` when more than one core is set (one core stays
+    on `apply()` to avoid the pool's startup cost). What remains is a
+    caveat, not a task: the pool path works around two PM4Py quirks (a
+    missing `DEFAULT_TIMESTAMP_KEY` constant in some 2.7.23.x releases, and
+    spawn workers re-importing the Streamlit script), so recheck it when
+    PM4Py is upgraded.
 - **BigQuery source**: `attribute_params`/`numeric_attribute_params` are
   still hardcoded, and switching between accounts isn't supported. Neither
   has been needed on a real dataset yet.
