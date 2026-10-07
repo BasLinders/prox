@@ -220,6 +220,22 @@ def fit_config_to_log(
             if not kept:
                 continue
             step["activities"] = kept
+        elif step.get("type") == "directly_follows":
+            missing = [a for a in (step.get("source"), step.get("target")) if a not in known_acts]
+            if missing:
+                notes.append(
+                    f"Filter: '{step.get('source')}' -> '{step.get('target')}' needs activities "
+                    f"not in this log ({', '.join(str(m) for m in missing)}), so it was dropped."
+                )
+                continue
+        elif step.get("type") == "endpoints":
+            wanted = (step.get("start_activities") or []) + (step.get("end_activities") or [])
+            missing = [a for a in wanted if a not in known_acts]
+            if missing:
+                notes.append(
+                    f"Filter: case start/end activities not in this log were dropped: {', '.join(missing)}."
+                )
+                continue
         elif step.get("type") == "crop":
             missing = [a for a in step.get("activity") or [] if a not in known_acts]
             if missing:

@@ -9,6 +9,7 @@ from .analytics import (
     classify_sessions, summarize_user_journeys
 )
 from .visualizer import visualize_focused_insights, export_results
+from .process_graph import build_process_graph
 from .data_manager import filter_event_log, FILTER_HANDLERS, sample_log_stratified
 
 logger = logging.getLogger(__name__)
@@ -285,6 +286,14 @@ def run_full_analysis(
         'happy_path': happy_img,
         'bottlenecks': main_img
     }
+
+    # Data for the interactive process explorer. Built from the same filtered
+    # + sampled log as the static maps, stored whole (pruning is a display
+    # choice) so it persists with saved runs. Never allowed to abort a run.
+    try:
+        pipeline_results['process_graph'] = build_process_graph(log_df, time_unit=time_unit)
+    except Exception as e:
+        logger.warning("Process graph could not be built: %s", e)
 
     _report_progress(5)
 

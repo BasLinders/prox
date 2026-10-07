@@ -21,7 +21,7 @@ A modular process mining tool for analysing customer journeys from any event log
 
 ## Features
 
-- **Golden Path Discovery** - Inductive Miner (sound, robust) and Heuristics Miner (noisy/large logs) produce Petri net models; DFG (Directly-Follows Graph) gives a fast first look. The most frequent variant is rendered as a "Happy Path" BPMN diagram.
+- **Golden Path Discovery** - Inductive Miner (sound, robust) and Heuristics Miner (noisy/large logs) produce Petri net models; DFG (Directly-Follows Graph) gives a fast first look. The most frequent variant is rendered as a "Happy Path" BPMN diagram, and an interactive process map lets you explore the flow and click an activity or transition to filter on it.
 - **Conformance Checking** - Token Replay for fast fitness and precision scores; State Equation A\* for exact per-trace deviations (skipped and unsolicited activities), optionally parallelized across CPU cores.
 - **Bottleneck Analysis** - Activity and transition durations ranked by impact score; overall process health score.
 - **Variant Analysis** - Top-20 variants with frequency, coverage, and duration statistics.
@@ -210,7 +210,13 @@ filter_steps=[
 ]
 ```
 
-Available filter types: `activity`, `crop`, `case_duration`, `endpoints`, `attribute`, `top_variants`.
+Available filter types: `activity`, `crop`, `case_duration`, `endpoints`, `attribute`, `top_variants`, `directly_follows`.
+
+`directly_follows` keeps (or, with `"mode": "not_contains"`, removes) cases where one activity is immediately followed by another:
+
+```python
+{"type": "directly_follows", "source": "view_item", "target": "add_to_cart", "mode": "contains"}
+```
 
 ---
 
@@ -225,6 +231,9 @@ prox/               Engine package — import this from any Python script
 ├── conformance.py  Fitness, precision, alignment-based trace deviations
 ├── analytics.py    Performance metrics, bottlenecks, business insights, funnel analysis
 ├── visualizer.py   BPMN and Petri net diagram generation
+├── process_graph.py Directly-follows graph data for the interactive process map
+├── explorer_filters.py Turns clicks on that map into filter steps
+├── components/     Interactive process map (Cytoscape.js, vendored, runs offline)
 ├── report.py       Self-contained HTML report export
 ├── segments.py     Segment comparison — runs the pipeline per segment, optionally in parallel
 ├── incremental.py  On-disk cache for merging recurring exports across runs

@@ -45,6 +45,7 @@ from .analytics import (
     summarize_user_journeys,
 )
 from .visualizer import visualize_focused_insights, export_results, render_petri_net
+from .process_graph import build_process_graph, prune_process_graph
 from .report import (
     generate_html_report,
     generate_segment_comparison_report,
@@ -109,6 +110,8 @@ __all__ = [
     "visualize_focused_insights",
     "export_results",
     "render_petri_net",
+    "build_process_graph",
+    "prune_process_graph",
     "generate_html_report",
     "generate_segment_comparison_report",
     "generate_reference_conformance_report",
