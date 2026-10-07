@@ -160,7 +160,7 @@ export default function (component) {
         layout: { name: "preset" },
     });
 
-    cy.layout({ name: "dagre", rankDir: "TB", nodeSep: 40, rankSep: 70, edgeSep: 20, animate: false }).run();
+    cy.layout({ name: "dagre", rankDir: "LR", nodeSep: 30, rankSep: 100, edgeSep: 20, animate: false }).run();
     cy.fit(undefined, 30);
 
     // Hover tooltip. Built with textContent only: activity names come from the
