@@ -16,6 +16,7 @@ from utility import ai_client
 from utility.ai_payload import SECTION_LABELS as AI_PAYLOAD_SECTION_LABELS, build_ai_payload
 from utility.bigquery_source import render_bigquery_source
 from utility.pdf_builder import render_pdf_builder
+from prox.components.process_explorer import render_process_explorer
 from prox import (
     load_and_validate_csv,
     refine_activity_labels,
@@ -28,6 +29,7 @@ from prox import (
     generate_segment_comparison_report,
     generate_reference_conformance_report,
     compare_segments,
+    prune_process_graph,
     analyze_conversion_funnel,
     analyze_funnel_by_segment,
     check_data_quality,
@@ -60,6 +62,13 @@ from prox import (
     summarize_propensity_scores,
 )
 
+from prox.explorer_filters import (
+    add_step,
+    available_actions,
+    build_step,
+    describe_step,
+    split_filter_steps,
+)
 from prox.presets import (
     DEFAULT_PRESETS_DIR,
     PresetError,
@@ -89,7 +98,7 @@ KNOWN_NOISE_ACTIVITIES = {
 # 'activity' only selects cases in its contains/not_contains modes (the
 # default is 'contains'); remove_events/keep_events drop events and keep
 # every case.
-_CASE_SELECTING_FILTERS = {"crop", "endpoints", "case_duration", "top_variants"}
+_CASE_SELECTING_FILTERS = {"crop", "endpoints", "case_duration", "top_variants", "directly_follows"}
 _EVENT_LEVEL_ACTIVITY_MODES = {"remove_events", "keep_events"}
 
 
@@ -511,8 +520,13 @@ def _restored(section: str, field: str, default):
     return (restored_config.get(section) or {}).get(field, default)
 
 
+# The Filter Events form restores only the steps it wrote itself; steps staged
+# from the process explorer re-seed that list instead (see below).
+_restored_form_steps, _restored_explorer_steps = split_filter_steps(restored_config.get("filter_steps"))
+
+
 def _restored_filter_step(step_type: str):
-    return next((s for s in restored_config.get("filter_steps") or [] if s.get("type") == step_type), None)
+    return next((s for s in _restored_form_steps if s.get("type") == step_type), None)
 
 
 # ---------------------------------------------------------------------------
@@ -1325,6 +1339,23 @@ if st.session_state.get("active_preset") and not loaded_from_saved_run:
         )
 
 # ---------------------------------------------------------------------------
+# Filters staged from the process explorer (Process Maps tab). They live
+# outside the Filter Events form - a click on the map adds one without
+# touching the form's widgets - and are appended to the form's steps below.
+# Keyed per restored run/preset (_ck), so loading one re-seeds the list from
+# its saved steps. Steps naming activities this log doesn't have are dropped.
+# ---------------------------------------------------------------------------
+_staged_key = _ck("explorer_filters")
+if _staged_key not in st.session_state:
+    st.session_state[_staged_key] = list(_restored_explorer_steps)
+_known_activities = sorted(raw_df["concept:name"].dropna().astype(str).unique().tolist())
+_fitted_staged, _staged_notes = fit_config_to_log(
+    {"filter_steps": st.session_state[_staged_key]}, _known_activities, []
+)
+st.session_state[_staged_key] = _fitted_staged["filter_steps"]
+staged_explorer_steps = st.session_state[_staged_key]
+
+# ---------------------------------------------------------------------------
 # Filter events before analysis
 # ---------------------------------------------------------------------------
 with st.form("configuration_form"):
@@ -1401,6 +1432,7 @@ with st.form("configuration_form"):
     if endpoint_choice != endpoint_options[0]:
         filter_steps.append({"type": "crop", "activity": [endpoint_choice]})
 
+    filter_steps.extend(staged_explorer_steps)
     preview_df = _apply_filter_steps(raw_df, {"filter_steps": filter_steps})
 
     post_cases = preview_df["case:concept:name"].nunique() if preview_df is not None and not preview_df.empty else 0
@@ -1409,6 +1441,8 @@ with st.form("configuration_form"):
     st.caption(
         f"After filtering: **{post_cases:,} cases**, **{post_events:,} events** "
         f"(from {raw_df['case:concept:name'].nunique():,} cases, {len(raw_df):,} events)."
+        + (f" Includes {len(staged_explorer_steps)} filter(s) from the process explorer, listed below."
+           if staged_explorer_steps else "")
     )
 
     # ---------------------------------------------------------------------------
@@ -1502,6 +1536,37 @@ with st.form("configuration_form"):
     applied = st.form_submit_button("Apply Configuration", type="secondary", width='stretch')
 if applied:
     st.success("Configuration applied.")
+
+
+def _remove_staged_filter(index: int) -> None:
+    steps = list(st.session_state.get(_staged_key, []))
+    if 0 <= index < len(steps):
+        steps.pop(index)
+    st.session_state[_staged_key] = steps
+
+
+if staged_explorer_steps or _staged_notes:
+    with st.container(border=True):
+        st.subheader(
+            "Filters from the process explorer",
+            help=(
+                "Added by clicking a step or a transition in the interactive map (Process Maps "
+                "tab). They are applied after the Filter Events settings above, in the order "
+                "listed, the next time you click Run Analysis.\n\n"
+                "'Directly followed by' means the two activities appear back to back in a case, "
+                "with no other event in between. An activity that merely comes later does not "
+                "count. It is evaluated on the log as filtered by the settings above, so events "
+                "removed there don't sit in between."
+            ),
+        )
+        for note in _staged_notes:
+            st.caption(note)
+        for i, staged_step in enumerate(staged_explorer_steps):
+            row_text, row_remove = st.columns([8, 1], vertical_alignment="center")
+            row_text.write(f"{i + 1}. {describe_step(staged_step)}")
+            row_remove.button(
+                "Remove", key=f"{_staged_key}_remove_{i}", on_click=_remove_staged_filter, args=(i,),
+            )
 
 current_config = create_analysis_config(
         discovery_algo=discovery_algo,
@@ -1767,6 +1832,114 @@ def _render_ai_conclusion(payload: dict, fingerprint: str) -> None:
 # ---------------------------------------------------------------------------
 # Display results
 # ---------------------------------------------------------------------------
+def _has_process_graph(results: dict) -> bool:
+    graph = results.get("process_graph") or {}
+    return any(n["kind"] == "activity" for n in graph.get("nodes", []))
+
+
+def _render_static_process_maps(results: dict) -> None:
+    viz = results.get("visualizations", {})
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("Happy Path")
+        st.caption("Most frequent variant - the intended customer journey.")
+        hp = viz.get("happy_path")
+        if hp and os.path.exists(hp):
+            st.image(hp, width='stretch')
+            _svg_download_button(hp, key="dl_svg_happy_path")
+        else:
+            st.info("Happy path image not available. Check that Graphviz is installed.")
+
+    with col2:
+        st.subheader("Main Process Flow")
+        st.caption("Top-K variants combined, showing common deviations.")
+        mf = viz.get("bottlenecks")
+        if mf and os.path.exists(mf):
+            st.image(mf, width='stretch')
+            _svg_download_button(mf, key="dl_svg_main_flow")
+        else:
+            st.info("Main flow image not available.")
+
+
+def _selection_in_graph(selection: dict | None, graph: dict) -> dict | None:
+    """The component keeps its last click across reruns, so a node or edge
+    hidden since by the sliders (or by a newer run) must not stay selected."""
+    if not selection:
+        return None
+    if selection.get("type") == "node":
+        return selection if any(n["id"] == selection.get("id") for n in graph["nodes"]) else None
+    if selection.get("type") == "edge":
+        pair = (selection.get("source"), selection.get("target"))
+        return selection if any((e["source"], e["target"]) == pair for e in graph["edges"]) else None
+    return None
+
+
+def _describe_selection(selection: dict, graph: dict) -> str:
+    n_cases = graph.get("n_cases") or 0
+    unit = graph.get("time_unit", "minutes")
+    if selection["type"] == "node":
+        share = f" ({selection['cases'] / n_cases:.0%} of cases)" if n_cases else ""
+        return f"**{selection['label']}** - {selection['cases']:,} cases{share}, {selection['events']:,} events."
+    text = (
+        f"**{selection['source']} → {selection['target']}** - happened {selection['frequency']:,} times "
+        f"in {selection['cases']:,} cases."
+    )
+    if selection.get("mean_time") is not None:
+        text += f" Mean {selection['mean_time']:.1f} {unit}, median {selection['median_time']:.1f} {unit}."
+    return text
+
+
+def _render_process_explorer(results: dict) -> None:
+    graph = results["process_graph"]
+    n_activities = sum(1 for n in graph["nodes"] if n["kind"] == "activity")
+
+    c_act, c_edge, c_metric = st.columns([1, 1, 1])
+    activity_pct = c_act.slider(
+        "Activities shown", 10, 100, 40, step=5, format="%d%%", key="explorer_activity_pct",
+        help=(
+            "Share of activities shown, most frequent first. Raise it to see rarer steps. "
+            "The happy path is always shown in full."
+        ),
+    )
+    edge_pct = c_edge.slider(
+        "Connections shown", 10, 100, 100, step=5, format="%d%%", key="explorer_edge_pct",
+        help=(
+            "Share of the connections between the shown activities, most frequent first. "
+            "Lower it to declutter a busy map. Happy path connections always stay."
+        ),
+    )
+    metric_label = c_metric.radio(
+        "Connections show", ["Frequency", "Mean time"], horizontal=True, key="explorer_metric",
+        help="Connection width is always how often it happened. Mean time also colours it, blue (fast) to red (slow).",
+    )
+    pruned = prune_process_graph(graph, activity_pct, edge_pct)
+    shown = sum(1 for n in pruned["nodes"] if n["kind"] == "activity")
+    st.caption(
+        f"Showing {shown} of {n_activities} activities, for the {graph['n_cases']:,} cases "
+        "in this run (after filtering and sampling). The happy path is highlighted."
+    )
+
+    result = render_process_explorer(
+        pruned, key="process_explorer", height=650,
+        metric="time" if metric_label == "Mean time" else "frequency",
+    )
+    selection = _selection_in_graph(result.selection, pruned)
+
+    if not selection:
+        st.caption("Click an activity or a connection to see its details and filter on it.")
+        return
+    st.markdown(_describe_selection(selection, graph))
+    for action_id, label in available_actions(selection):
+        if st.button(label, key=f"explorer_action_{action_id}"):
+            st.session_state[_staged_key] = add_step(
+                list(st.session_state.get(_staged_key, [])), build_step(action_id, selection)
+            )
+            st.toast("Filter added - see 'Filters from the process explorer' above Run Analysis. "
+                     "Click Run Analysis to apply it.")
+            st.rerun()
+
+
 @st.fragment
 def _render_results_tabs():
     results = st.session_state.get("results")
@@ -1911,30 +2084,35 @@ def _render_results_tabs():
 - **Main Process Flow**: the top-K most frequent variants merged into one
   diagram, so you can see common deviations from the happy path alongside it
   rather than just the one dominant route.
+- **Directly follows**: activity B comes immediately after activity A in a
+  case, with nothing in between. Each arrow in the interactive map is one
+  such transition; its width is how often it happened.
             """
             )
-        viz = results.get("visualizations", {})
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.subheader("Happy Path")
-            st.caption("Most frequent variant - the intended customer journey.")
-            hp = viz.get("happy_path")
-            if hp and os.path.exists(hp):
-                st.image(hp, width='stretch')
-                _svg_download_button(hp, key="dl_svg_happy_path")
+        has_explorer = _has_process_graph(results)
+        view = st.radio(
+            "View",
+            ["Interactive", "Static (BPMN)"],
+            index=0 if has_explorer else 1,
+            horizontal=True,
+            key="process_map_view",
+            help=(
+                "Interactive: a clickable flow of the activities and transitions actually seen "
+                "in the log, with the happy path highlighted. Static (BPMN): the discovered "
+                "process model as an image, also used in the downloadable reports."
+            ),
+        )
+        if view == "Interactive":
+            if has_explorer:
+                _render_process_explorer(results)
             else:
-                st.info("Happy path image not available. Check that Graphviz is installed.")
-
-        with col2:
-            st.subheader("Main Process Flow")
-            st.caption("Top-K variants combined, showing common deviations.")
-            mf = viz.get("bottlenecks")
-            if mf and os.path.exists(mf):
-                st.image(mf, width='stretch')
-                _svg_download_button(mf, key="dl_svg_main_flow")
-            else:
-                st.info("Main flow image not available.")
+                st.info(
+                    "This run has no interactive map data (it was saved before the explorer "
+                    "existed, or the log had no usable timestamps). Showing the static maps."
+                )
+                _render_static_process_maps(results)
+        else:
+            _render_static_process_maps(results)
 
     # ---------------------------------------------------------------------------
     # Tab 2: Variants
