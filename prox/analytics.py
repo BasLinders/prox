@@ -613,7 +613,7 @@ def analyze_repeat_purchases(
 
     purchase_df = purchase_traces.groupby(real_case_col).agg(agg_rules).reset_index()
 
-    user_counts = purchase_df.groupby(real_user_col).size().reset_index(name='purchase_count')
+    user_counts = purchase_df.groupby(real_user_col, observed=False).size().reset_index(name='purchase_count')
     repeat_buyers = user_counts[user_counts['purchase_count'] > 1]
     repeat_rate = (len(repeat_buyers) / len(user_counts)) * 100 if len(user_counts) > 0 else 0
 
@@ -621,11 +621,18 @@ def analyze_repeat_purchases(
     chart_dist = None
     try:
         chart_dist = os.path.join(output_folder, "repeat_purchases_dist.png")
-        viz = user_counts.copy()
-        viz['bucket'] = viz['purchase_count'].apply(lambda x: str(x) if x < 5 else "5+")
+        buckets = ['1', '2', '3', '4', '5+']
+        bucket_counts = (
+            user_counts['purchase_count'].apply(lambda x: str(x) if x < 5 else "5+")
+            .value_counts().reindex(buckets, fill_value=0)
+        )
+        # Bars at numeric positions with string tick labels: handing matplotlib the
+        # bucket strings makes it log an INFO about "strings parsable as floats"
+        # whenever no customer reaches 5+ (labels are then all digits).
         plt.figure(figsize=(8, 5))
-        sns.countplot(data=viz, x='bucket', order=['1', '2', '3', '4', '5+'],
-                      palette="viridis", hue='bucket', legend=False)
+        plt.bar(range(len(buckets)), bucket_counts.values, color=sns.color_palette("viridis", len(buckets)))
+        plt.xticks(range(len(buckets)), buckets)
+        plt.xlabel("bucket")
         plt.title(f"Orders per Customer (Repeat Rate: {repeat_rate:.1f}%)")
         plt.ylabel("Customer Count")
         plt.tight_layout()
@@ -641,7 +648,7 @@ def analyze_repeat_purchases(
     chart_time = None
 
     purchase_df = purchase_df.sort_values([real_user_col, real_time_col])
-    purchase_df['prev_time'] = purchase_df.groupby(real_user_col)[real_time_col].shift(1)
+    purchase_df['prev_time'] = purchase_df.groupby(real_user_col, observed=False)[real_time_col].shift(1)
     purchase_df['days_diff'] = (
         purchase_df[real_time_col] - purchase_df['prev_time']
     ).dt.total_seconds() / (3600 * 24)
@@ -698,7 +705,7 @@ def analyze_repeat_purchases(
         purchase_df['type'] = purchase_df['purchase_count'].apply(
             lambda x: 'Repeat Buyer' if x > 1 else 'One-time Buyer'
         )
-        clv_df = purchase_df.groupby([real_user_col, 'type'])[real_rev_col].sum().reset_index()
+        clv_df = purchase_df.groupby([real_user_col, 'type'], observed=False)[real_rev_col].sum().reset_index()
 
         avg_rep = clv_df[clv_df['type'] == 'Repeat Buyer'][real_rev_col].mean()
         avg_once = clv_df[clv_df['type'] == 'One-time Buyer'][real_rev_col].mean()
@@ -743,7 +750,7 @@ def analyze_repeat_purchases(
     real_category_col = cols_map.get('category')
     if real_category_col and real_rev_col:
         cat_df = (
-            purchase_traces.groupby(real_category_col)[real_rev_col]
+            purchase_traces.groupby(real_category_col, observed=False)[real_rev_col]
             .agg(['sum', 'count'])
             .rename(columns={'sum': 'revenue', 'count': 'orders'})
             .sort_values('revenue', ascending=False)
@@ -1113,7 +1120,7 @@ def classify_sessions(
     df['_is_cart'] = _contains_any(df[real_activity_col], cart_values)
     df['_is_research'] = _contains_any(df[real_activity_col], research_keywords)
 
-    grouped = df.groupby(real_session_col).agg(
+    grouped = df.groupby(real_session_col, observed=False).agg(
         user_id=(real_user_col, 'first'),
         event_count=(real_activity_col, 'count'),
         has_purchase=('_is_purchase', 'any'),
@@ -1153,7 +1160,7 @@ def summarize_user_journeys(session_labels_df: pd.DataFrame) -> pd.DataFrame:
 
     ordered = session_labels_df.sort_values(['user_id', 'first_activity'])
     journeys = (
-        ordered.groupby('user_id')
+        ordered.groupby('user_id', observed=False)
         .agg(session_count=('label', 'count'), journey=('label', lambda s: ' -> '.join(s)))
         .reset_index()
     )
