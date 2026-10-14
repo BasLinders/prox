@@ -6,6 +6,7 @@ import pytest
 from prox.data_manager import (
     load_and_validate_csv,
     filter_event_log,
+    find_emptying_step,
     sample_log_stratified,
     optimize_dataframe_memory,
     refine_activity_labels,
@@ -185,6 +186,28 @@ def test_filter_event_log_directly_follows_rejects_unknown_mode():
     )
     assert filtered is None
     assert any('mode' in m for m in messages)
+
+
+def test_find_emptying_step_names_the_first_step_that_leaves_nothing(simple_event_log):
+    steps = [
+        {'type': 'activity', 'activities': ['a'], 'mode': 'contains'},
+        {'type': 'activity', 'activities': ['b'], 'mode': 'not_contains'},  # every case has b
+        {'type': 'activity', 'activities': ['c'], 'mode': 'contains'},
+    ]
+    assert find_emptying_step(simple_event_log, steps) == 1
+
+
+def test_find_emptying_step_is_none_when_something_survives(simple_event_log):
+    steps = [{'type': 'activity', 'activities': ['b'], 'mode': 'remove_events'}]
+    assert find_emptying_step(simple_event_log, steps) is None
+    assert find_emptying_step(simple_event_log, []) is None
+    assert find_emptying_step(simple_event_log, None) is None
+
+
+def test_find_emptying_step_counts_a_failing_step_like_the_pipeline_does(simple_event_log):
+    # filter_event_log returns None for these, which aborts a run.
+    assert find_emptying_step(simple_event_log, [{'type': 'not_a_real_filter'}]) == 0
+    assert find_emptying_step(simple_event_log, [{'type': 'directly_follows', 'source': 'a'}]) == 0
 
 
 def test_filter_event_log_top_variants_keeps_only_most_frequent():

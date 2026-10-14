@@ -13,6 +13,9 @@ saved run or preset restores each to the right place.
 """
 from typing import Any, Dict, List, Optional, Tuple
 
+import pandas as pd
+
+from .data_manager import find_emptying_step
 from .process_graph import END_ID, START_ID
 
 # Selection dicts are what the component reports (see render_process_explorer).
@@ -75,7 +78,8 @@ def build_step(action_id: str, selection: Selection) -> Step:
 
 
 def describe_step(step: Step) -> str:
-    """One readable line for a staged step, e.g. for a chip or list entry."""
+    """One readable line for any filter step, whether staged from the explorer
+    or set in the Filter Events form."""
     kind = step.get("type")
     if kind == "activity":
         names = ", ".join(f"'{a}'" for a in step.get("activities") or [])
@@ -94,7 +98,30 @@ def describe_step(step: Step) -> str:
         if step.get("end_activities"):
             parts.append("ending with " + ", ".join(f"'{a}'" for a in step["end_activities"]))
         return "Keep only cases " + " and ".join(parts)
+    if kind == "crop":
+        target = step.get("activity")
+        target = ", ".join(f"'{a}'" for a in ([target] if isinstance(target, str) else target or []))
+        return f"Crop traces at {target} (cases that never reach it are removed)"
+    if kind == "case_duration":
+        return "Keep cases within a duration range"
+    if kind == "top_variants":
+        return f"Keep only the top {step.get('top_n', 10)} variants"
+    if kind == "attribute":
+        return f"Keep events where '{step.get('attribute_col')}' matches"
     return str(kind)
+
+
+def blocked_actions(event_log_df: pd.DataFrame, selection: Optional[Selection]) -> Dict[str, bool]:
+    """
+    {action_id: True} for each action offered for `selection` that would leave
+    no cases if staged on top of `event_log_df` (the log as the staged filters
+    so far leave it). Such an action would only abort the next run, so the
+    UI disables it.
+    """
+    return {
+        action_id: find_emptying_step(event_log_df, [build_step(action_id, selection)]) is not None
+        for action_id, _ in available_actions(selection)
+    }
 
 
 def add_step(steps: List[Step], step: Step) -> List[Step]:

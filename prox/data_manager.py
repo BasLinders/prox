@@ -687,6 +687,23 @@ FILTER_HANDLERS = {
 }
 
 
+def find_emptying_step(event_log_df: pd.DataFrame, filter_steps: list) -> int | None:
+    """
+    Index of the first step in `filter_steps` that leaves no events (or fails),
+    or None if the whole chain leaves something. Mirrors how the pipeline runs
+    the chain - each step on the previous step's output - and aborts at the
+    first step that produces nothing, so this names the step a run would stop at.
+    """
+    df = event_log_df
+    for i, step_config in enumerate(filter_steps or []):
+        params = dict(step_config)
+        f_type = params.pop('type', None)
+        df, _ = filter_event_log(df, filter_type=f_type, **params)
+        if df is None or df.empty:
+            return i
+    return None
+
+
 def filter_event_log(
     event_log_df: pd.DataFrame,
     filter_type: str,

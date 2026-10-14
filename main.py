@@ -62,9 +62,11 @@ from prox import (
     summarize_propensity_scores,
 )
 
+from prox.data_manager import find_emptying_step
 from prox.explorer_filters import (
     add_step,
     available_actions,
+    blocked_actions,
     build_step,
     describe_step,
     split_filter_steps,
@@ -125,8 +127,13 @@ _BY_IDENTITY = {pd.DataFrame: id}
 
 @st.cache_resource(show_spinner=False, max_entries=2, hash_funcs=_BY_IDENTITY)
 def _cached_filter_steps(raw_df: pd.DataFrame, filter_steps: list, event_level_only: bool = False):
+    """(raw_df, filtered frame, emptied_at). A step that leaves nothing is
+    skipped here so the tabs that reuse this still get a frame; emptied_at is
+    the index of the first such step (None if there was none) - where a run
+    with these steps would abort."""
     df = raw_df
-    for step_config in filter_steps:
+    emptied_at = None
+    for i, step_config in enumerate(filter_steps):
         params = step_config.copy()
         f_type = params.pop("type", None)
         if f_type is None:
@@ -136,7 +143,16 @@ def _cached_filter_steps(raw_df: pd.DataFrame, filter_steps: list, event_level_o
         filtered_df, _ = filter_event_log(df, filter_type=f_type, **params)
         if filtered_df is not None and not filtered_df.empty:
             df = filtered_df
-    return raw_df, df
+        elif emptied_at is None:
+            emptied_at = i
+    return raw_df, df, emptied_at
+
+
+@st.cache_resource(show_spinner=False, max_entries=2, hash_funcs=_BY_IDENTITY)
+def _cached_blocked_actions(filtered_df: pd.DataFrame, selection: dict):
+    """blocked_actions() for a clicked node/edge, once per (log, selection) -
+    the explorer's fragment reruns on every slider move while one is selected."""
+    return filtered_df, blocked_actions(filtered_df, selection)
 
 
 def _apply_filter_steps(raw_df: pd.DataFrame, config: dict, event_level_only: bool = False) -> pd.DataFrame:
@@ -1433,11 +1449,25 @@ with st.form("configuration_form"):
         filter_steps.append({"type": "crop", "activity": [endpoint_choice]})
 
     filter_steps.extend(staged_explorer_steps)
-    preview_df = _apply_filter_steps(raw_df, {"filter_steps": filter_steps})
+    _, preview_df, emptied_at = _cached_filter_steps(raw_df, filter_steps)
+    # Read by the process explorer (a fragment) to grey out actions that would
+    # empty the log; see _render_process_explorer.
+    _filtered_preview_df, _filters_empty = preview_df, emptied_at is not None
 
-    post_cases = preview_df["case:concept:name"].nunique() if preview_df is not None and not preview_df.empty else 0
-    post_events = len(preview_df) if preview_df is not None else 0
+    # A step that leaves nothing is skipped when building preview_df (the tabs
+    # that reuse it need a frame), so say so here: Run Analysis stops there.
+    post_cases = 0 if emptied_at is not None else preview_df["case:concept:name"].nunique()
+    post_events = 0 if emptied_at is not None else len(preview_df)
 
+    if emptied_at is not None:
+        st.error(
+            f"These filters remove every case: filter {emptied_at + 1} "
+            f"({describe_step(filter_steps[emptied_at])}) leaves nothing, so Run Analysis would "
+            "fail. Change or remove it" + (
+                " - it is in the list of explorer filters below." if emptied_at >= len(filter_steps) - len(staged_explorer_steps)
+                else " in the settings above."
+            )
+        )
     st.caption(
         f"After filtering: **{post_cases:,} cases**, **{post_events:,} events** "
         f"(from {raw_df['case:concept:name'].nunique():,} cases, {len(raw_df):,} events)."
@@ -1641,7 +1671,17 @@ if run_btn:
     _, results = _cached_run_full_analysis(df_ready, config)
 
     if results is None:
-        st.error("Analysis failed. Check the application logs for details.")
+        # Run on the same frame the pipeline filtered, to name the step that
+        # left no cases (the usual reason a run fails right away).
+        emptying = find_emptying_step(df_ready, config.get("filter_steps"))
+        if emptying is not None:
+            st.error(
+                f"Analysis failed: filter {emptying + 1} "
+                f"({describe_step(config['filter_steps'][emptying])}) leaves no cases. "
+                "Change or remove it, then run again."
+            )
+        else:
+            st.error("Analysis failed. Check the application logs for details.")
         st.stop()
 
     st.session_state["results"] = results
@@ -1930,8 +1970,18 @@ def _render_process_explorer(results: dict) -> None:
         st.caption("Click an activity or a connection to see its details and filter on it.")
         return
     st.markdown(_describe_selection(selection, graph))
+    # Actions that would leave no cases (given the filters as they stand) are
+    # offered greyed out rather than hidden, with the reason on hover. Skipped
+    # when the current filters already leave nothing - the Filter Events
+    # section says so, and every action would look blocked.
+    blocked = {}
+    if not _filters_empty:
+        blocked = _cached_blocked_actions(_filtered_preview_df, selection)[1]
     for action_id, label in available_actions(selection):
-        if st.button(label, key=f"explorer_action_{action_id}"):
+        if st.button(
+            label, key=f"explorer_action_{action_id}", disabled=blocked.get(action_id, False),
+            help="Would remove every case, so the run would fail." if blocked.get(action_id) else None,
+        ):
             st.session_state[_staged_key] = add_step(
                 list(st.session_state.get(_staged_key, [])), build_step(action_id, selection)
             )

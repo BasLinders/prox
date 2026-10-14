@@ -3,7 +3,7 @@ import pytest
 
 from prox.data_manager import filter_event_log
 from prox.explorer_filters import (
-    add_step, available_actions, build_step, describe_step, split_filter_steps,
+    add_step, available_actions, blocked_actions, build_step, describe_step, split_filter_steps,
 )
 from prox.process_graph import END_ID, START_ID
 
@@ -117,3 +117,34 @@ def test_split_filter_steps_staged_event_removal_alone_is_form_owned_by_shape():
     # round trip through the form's own output stays lossless.
     step = {"type": "activity", "activities": ["x"], "mode": "remove_events"}
     assert split_filter_steps([step]) == ([step], [])
+
+
+def test_describe_step_covers_the_form_filters_too():
+    assert describe_step({"type": "crop", "activity": ["purchase"]}) == \
+        "Crop traces at 'purchase' (cases that never reach it are removed)"
+    assert describe_step({"type": "activity", "activities": ["x"], "mode": "keep_events"}) == \
+        "Keep only events 'x'"
+    assert describe_step({"type": "top_variants", "top_n": 5}) == "Keep only the top 5 variants"
+
+
+def _cropped_log():
+    """Every case runs a -> b -> c and ends at c, like a log cropped at its end point."""
+    base = pd.Timestamp("2024-01-01")
+    rows = [(case, act, base + pd.Timedelta(minutes=i))
+            for case in ("1", "2") for i, act in enumerate("abc")]
+    return pd.DataFrame(rows, columns=["case:concept:name", "concept:name", "time:timestamp"])
+
+
+def test_blocked_actions_flags_actions_that_would_leave_no_cases():
+    blocked = blocked_actions(_cropped_log(), _node("b"))
+    assert blocked == {"remove_events": False, "keep_cases_with": False, "drop_cases_with": True}
+
+    blocked = blocked_actions(_cropped_log(), _edge("b", END_ID))
+    assert blocked == {"keep_cases_ending": True}  # every case ends at c, not b
+
+    blocked = blocked_actions(_cropped_log(), _edge("a", "b"))
+    assert blocked == {"keep_cases_following": False, "drop_cases_following": True}
+
+
+def test_blocked_actions_without_a_selection_is_empty():
+    assert blocked_actions(_cropped_log(), None) == {}
