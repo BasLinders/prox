@@ -1,0 +1,26 @@
+.pe-canvas {
+    position: relative;
+    width: 100%;
+    border: 1px solid var(--st-border-color, rgba(128, 128, 128, 0.35));
+    border-radius: 0.5rem;
+    background: var(--st-background-color, transparent);
+}
+
+.pe-tooltip {
+    position: absolute;
+    z-index: 5;
+    max-width: 220px;
+    padding: 0.4rem 0.6rem;
+    border-radius: 0.4rem;
+    border: 1px solid var(--st-border-color, rgba(128, 128, 128, 0.35));
+    background: var(--st-secondary-background-color, #f0f2f6);
+    color: var(--st-text-color, #262730);
+    font-size: 0.8rem;
+    line-height: 1.35;
+    pointer-events: none;
+    overflow-wrap: anywhere;
+}
+
+.pe-tooltip-title {
+    font-weight: 600;
+}

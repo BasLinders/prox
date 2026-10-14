@@ -96,3 +96,13 @@ def test_run_full_analysis_omits_variant_outcomes_without_purchases():
 
     assert results is not None
     assert 'variant_outcomes' not in results
+
+
+def test_run_full_analysis_includes_process_graph():
+    df = make_simple_variant_log(n_cases=3)
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+    results = run_full_analysis(df, config=config)
+
+    graph = results['process_graph']
+    assert graph['n_cases'] == 3
+    assert graph['happy_path'] == ['a', 'b', 'c']

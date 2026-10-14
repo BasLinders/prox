@@ -51,7 +51,7 @@
 
 | Component | Status | Description |
 | :--- | :--- | :--- |
-| **Process Discovery** | Active | Inductive Miner or Heuristics Miner generates the process model and "Happy Path" BPMN. |
+| **Process Discovery** | Active | Inductive Miner or Heuristics Miner generates the process model and "Happy Path" BPMN. The Process Maps tab also offers an interactive map with click-to-filter. |
 | **Conformance Checking** | Active | Token Replay (fast) or State Equation A\* (per-trace deviations). |
 | **Bottleneck Analysis** | Active | Activity/transition durations ranked by impact score, plus an overall process health score. |
 | **Business Insights** | Active | Repeat purchase rate, inter-purchase timing, revenue multiplier, average order value, cart abandonment rate, category revenue breakdown, and revenue-over-time trend. |

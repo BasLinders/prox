@@ -235,3 +235,86 @@ def test_preset_is_not_applied_to_a_saved_run(app):
 
     assert not app.exception
     assert app.selectbox(key=f"cfg_discovery_algo_{run['run_id']}").value != "heuristics_miner"
+
+
+_STAGED_STEP = {"type": "directly_follows", "source": "view_item_list", "target": "view_item", "mode": "contains"}
+
+
+def test_filters_staged_from_the_process_explorer_are_applied_on_run(app):
+    _generate_mock_upload(app)
+    app.session_state["cfg_explorer_filters_default"] = [_STAGED_STEP]
+    app.run()
+
+    assert not app.exception
+    assert any(s.value == "Filters from the process explorer" for s in app.subheader)
+
+    next(b for b in app.button if b.label == "Run Analysis").click().run()
+    assert not app.exception
+    assert app.session_state["config"]["filter_steps"][-1] == _STAGED_STEP
+    assert app.session_state["results"]["process_graph"]["nodes"]
+
+
+def test_staged_explorer_filter_can_be_removed(app):
+    _generate_mock_upload(app)
+    app.session_state["cfg_explorer_filters_default"] = [_STAGED_STEP]
+    app.run()
+
+    next(b for b in app.button if b.label == "Remove").click().run()
+
+    assert not app.exception
+    assert app.session_state["cfg_explorer_filters_default"] == []
+    assert not any(s.value == "Filters from the process explorer" for s in app.subheader)
+
+
+def test_staged_filter_naming_a_missing_activity_is_dropped_with_a_note(app):
+    _generate_mock_upload(app)
+    app.session_state["cfg_explorer_filters_default"] = [{**_STAGED_STEP, "target": "not_in_this_log"}]
+    app.run()
+
+    assert not app.exception
+    assert app.session_state["cfg_explorer_filters_default"] == []
+    assert any("not_in_this_log" in c.value for c in app.caption)
+
+
+def test_preset_explorer_filters_restore_into_the_staged_list(app):
+    config = create_analysis_config(filter_steps=[_STAGED_STEP])
+    preset_id = save_preset(build_preset("With explorer filter", config), presets_dir=DEFAULT_PRESETS_DIR)
+    _generate_mock_upload(app)
+
+    app.selectbox(key="preset_choice").set_value(preset_id).run()
+    next(b for b in app.button if b.label == "Apply").click().run()
+
+    assert not app.exception
+    assert app.session_state["cfg_explorer_filters_preset1"] == [_STAGED_STEP]
+    # The form didn't claim it as one of its own steps.
+    assert app.multiselect(key="cfg_selected_events_preset1").value == []
+
+
+_EMPTYING_STEP = {"type": "activity", "activities": ["add_to_cart"], "mode": "not_contains"}
+
+
+def test_preview_warns_when_staged_filters_remove_every_case(app):
+    _generate_mock_upload(app)
+    app.session_state["cfg_explorer_filters_default"] = [_EMPTYING_STEP]
+    app.run()
+
+    assert not app.exception
+    message = next(e.value for e in app.error if "remove every case" in e.value)
+    assert "Remove cases containing 'add_to_cart'" in message
+    assert "explorer filters" in message
+    assert any("0 cases" in c.value and "0 events" in c.value for c in app.caption)
+
+
+def test_failed_run_names_the_filter_that_left_no_cases(app):
+    _generate_mock_upload(app)
+    app.session_state["cfg_explorer_filters_default"] = [_EMPTYING_STEP]
+    app.run()
+
+    next(b for b in app.button if b.label == "Run Analysis").click().run()
+
+    assert not app.exception
+    assert any(
+        "Analysis failed: filter 3" in e.value and "Remove cases containing 'add_to_cart'" in e.value
+        for e in app.error
+    )
+    assert "results" not in app.session_state or not app.session_state["results"]

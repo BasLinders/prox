@@ -648,6 +648,31 @@ def _filter_top_variants(filtered_df, top_n=10, **_ignored):
     return filtered_df, messages
 
 
+def _filter_directly_follows(filtered_df, source=None, target=None, mode='contains', **_ignored):
+    messages = []
+    if not source or not target:
+        messages.append("Error: 'source' and 'target' must both be specified for directly_follows filter.")
+        return None, messages
+    if mode not in ('contains', 'not_contains'):
+        messages.append(f"Error: Invalid mode '{mode}' for directly_follows filter.")
+        return None, messages
+
+    # Stable sort so events sharing a timestamp keep their original order -
+    # the same ordering the process explorer's graph is built from.
+    ordered = filtered_df.sort_values(['case:concept:name', 'time:timestamp'], kind='stable')
+    activity = ordered['concept:name'].astype(str)
+    next_activity = activity.groupby(ordered['case:concept:name'], sort=False).shift(-1)
+    hit_cases = ordered.loc[(activity == str(source)) & (next_activity == str(target)), 'case:concept:name'].unique()
+
+    if mode == 'contains':
+        filtered_df = filtered_df[filtered_df['case:concept:name'].isin(hit_cases)]
+        messages.append(f"Kept cases where '{source}' is directly followed by '{target}'.")
+    else:
+        filtered_df = filtered_df[~filtered_df['case:concept:name'].isin(hit_cases)]
+        messages.append(f"Removed cases where '{source}' is directly followed by '{target}'.")
+    return filtered_df, messages
+
+
 # Single source of truth for available filter types: filter_event_log dispatches
 # on this dict, and pipeline.py validates filter_steps config against it upfront,
 # so a new filter type only needs an entry here.
@@ -658,7 +683,25 @@ FILTER_HANDLERS = {
     'endpoints': _filter_endpoints,
     'attribute': _filter_attribute,
     'top_variants': _filter_top_variants,
+    'directly_follows': _filter_directly_follows,
 }
+
+
+def find_emptying_step(event_log_df: pd.DataFrame, filter_steps: list) -> int | None:
+    """
+    Index of the first step in `filter_steps` that leaves no events (or fails),
+    or None if the whole chain leaves something. Mirrors how the pipeline runs
+    the chain - each step on the previous step's output - and aborts at the
+    first step that produces nothing, so this names the step a run would stop at.
+    """
+    df = event_log_df
+    for i, step_config in enumerate(filter_steps or []):
+        params = dict(step_config)
+        f_type = params.pop('type', None)
+        df, _ = filter_event_log(df, filter_type=f_type, **params)
+        if df is None or df.empty:
+            return i
+    return None
 
 
 def filter_event_log(
@@ -684,6 +727,9 @@ def filter_event_log(
                       kwargs: attribute_col (str), attribute_values (list)
     'top_variants'  : retain only the top N most frequent variants
                       kwargs: top_n (int)
+    'directly_follows' : keep/remove cases where one activity is immediately
+                      followed by another
+                      kwargs: source (str), target (str), mode ('contains'|'not_contains')
     """
     messages = []
 

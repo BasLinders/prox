@@ -6,6 +6,7 @@ import pytest
 from prox.data_manager import (
     load_and_validate_csv,
     filter_event_log,
+    find_emptying_step,
     sample_log_stratified,
     optimize_dataframe_memory,
     refine_activity_labels,
@@ -136,6 +137,77 @@ def test_filter_event_log_unknown_type(simple_event_log):
     filtered, messages = filter_event_log(simple_event_log, filter_type='not_a_real_filter')
     assert filtered is None
     assert any('unknown filter type' in m.lower() for m in messages)
+
+
+def _directly_follows_log():
+    """case 1: a->b->c, case 2: a->c->b, case 3: a->x->b (b follows, but not directly after a)."""
+    base = pd.Timestamp('2024-01-01')
+    rows = []
+    for case, acts in [('1', 'abc'), ('2', 'acb'), ('3', 'axb')]:
+        for i, act in enumerate(acts):
+            rows.append((case, act, base + pd.Timedelta(minutes=i)))
+    df = pd.DataFrame(rows, columns=['case:concept:name', 'concept:name', 'time:timestamp'])
+    return df
+
+
+def test_filter_event_log_directly_follows_keeps_matching_cases():
+    filtered, _ = filter_event_log(
+        _directly_follows_log(), filter_type='directly_follows', source='a', target='b'
+    )
+    assert set(filtered['case:concept:name']) == {'1'}
+    assert len(filtered) == 3  # whole traces are kept, not just the matching events
+
+
+def test_filter_event_log_directly_follows_not_contains_removes_matching_cases():
+    filtered, _ = filter_event_log(
+        _directly_follows_log(), filter_type='directly_follows',
+        source='a', target='b', mode='not_contains'
+    )
+    assert set(filtered['case:concept:name']) == {'2', '3'}
+
+
+def test_filter_event_log_directly_follows_uses_timestamps_not_row_order():
+    df = _directly_follows_log().iloc[::-1].reset_index(drop=True)
+    filtered, _ = filter_event_log(df, filter_type='directly_follows', source='a', target='b')
+    assert set(filtered['case:concept:name']) == {'1'}
+
+
+def test_filter_event_log_directly_follows_requires_source_and_target():
+    filtered, messages = filter_event_log(
+        _directly_follows_log(), filter_type='directly_follows', source='a'
+    )
+    assert filtered is None
+    assert any('source' in m and 'target' in m for m in messages)
+
+
+def test_filter_event_log_directly_follows_rejects_unknown_mode():
+    filtered, messages = filter_event_log(
+        _directly_follows_log(), filter_type='directly_follows', source='a', target='b', mode='sideways'
+    )
+    assert filtered is None
+    assert any('mode' in m for m in messages)
+
+
+def test_find_emptying_step_names_the_first_step_that_leaves_nothing(simple_event_log):
+    steps = [
+        {'type': 'activity', 'activities': ['a'], 'mode': 'contains'},
+        {'type': 'activity', 'activities': ['b'], 'mode': 'not_contains'},  # every case has b
+        {'type': 'activity', 'activities': ['c'], 'mode': 'contains'},
+    ]
+    assert find_emptying_step(simple_event_log, steps) == 1
+
+
+def test_find_emptying_step_is_none_when_something_survives(simple_event_log):
+    steps = [{'type': 'activity', 'activities': ['b'], 'mode': 'remove_events'}]
+    assert find_emptying_step(simple_event_log, steps) is None
+    assert find_emptying_step(simple_event_log, []) is None
+    assert find_emptying_step(simple_event_log, None) is None
+
+
+def test_find_emptying_step_counts_a_failing_step_like_the_pipeline_does(simple_event_log):
+    # filter_event_log returns None for these, which aborts a run.
+    assert find_emptying_step(simple_event_log, [{'type': 'not_a_real_filter'}]) == 0
+    assert find_emptying_step(simple_event_log, [{'type': 'directly_follows', 'source': 'a'}]) == 0
 
 
 def test_filter_event_log_top_variants_keeps_only_most_frequent():

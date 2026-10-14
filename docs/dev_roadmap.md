@@ -34,7 +34,7 @@ clean.
 | ML layer (conversion propensity + drivers) | Complete (engine + Predictive Insights tab) | below, `ML_roadmap.md` |
 | AI Conclusion (optional, Gemini) | Complete | below, `AI_summary_roadmap.md` |
 | Follow-ups on shipped features (ML, performance, BigQuery) | Roadmapped (CPU Cores fix shipped) | below |
-| Process mining capability gaps (5 items, by effort) | Roadmapped, not scoped (resource perspective partly shipped) | below |
+| Process mining capability gaps (5 items, by effort) | Roadmapped (resource perspective partly shipped, interactive process explorer shipped) | below |
 | Product development options | Roadmapped (config presets shipped) | below |
 
 \* One sub-item — segment comparison v2 (automated golden-path diffing) —
@@ -639,11 +639,31 @@ capabilities those platforms have, listed smallest effort first:
    hands cases to whom, and how often) and workload over time. Both extend
    the same `analyze_process_performance()` code path and need no new data.
 
-2. **Interactive process explorer.** Process maps are static Graphviz
-   images: a PNG on screen, plus an SVG download since Phase 7b. There is no
-   clickable, filterable or animated flow view yet. This is real work but
-   bounded: an interactive graph component (or a vis.js/d3 embed) in place of
-   the images, with click-to-filter wired into the existing filter config.
+2. **Interactive process explorer (shipped, with follow-ups).** The
+   Process Maps tab now opens on an interactive directly-follows graph
+   (Cytoscape.js, vendored so the app still works offline) next to the
+   static BPMN maps, which remain for the reports, PDF and saved runs.
+   - *What it shows:* activities as nodes, transitions as edges (width =
+     frequency, optionally coloured by mean time), the happy path
+     highlighted, hover details, and sliders for how many activities and
+     connections to show (first view: happy path plus the top 40% of
+     activities). The graph is built from the run's filtered (and sampled,
+     if enabled) log by `prox/process_graph.py` and stored in
+     `results['process_graph']`, so saved runs keep it.
+   - *Click-to-filter:* clicking a node or edge offers filter actions
+     (remove events, keep or remove cases containing an activity, keep or
+     remove cases where A is directly followed by B, keep cases starting or
+     ending with an activity). Each one is staged as a normal `filter_steps`
+     entry in a list above Run Analysis, applied on the next run, and saved
+     in config presets and saved runs. This added the `directly_follows`
+     filter type (`prox/explorer_filters.py` maps clicks to steps).
+   - *Follow-ups, not built:* (a) animated case replay along the edges;
+     (b) the same explorer in the other tabs that draw process maps -
+     Segment Comparison (happy path per segment) and Reference Model
+     (discovered vs. reference); (c) bridging over hidden activities
+     (when the sliders hide an activity, its edges are dropped, not
+     rerouted around it, which Disco and Celonis do); (d) showing the staged filters'
+     effect on the map before re-running.
 
 3. **Decision-point (data-aware) mining.** This explains *why* a case took
    one branch at a choice point, e.g. "cases with `device=mobile` skip the

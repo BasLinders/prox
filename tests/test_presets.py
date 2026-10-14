@@ -124,6 +124,32 @@ def test_fit_config_with_nothing_missing_has_no_notes():
     assert fitted["filter_steps"] == config["filter_steps"]
 
 
+def test_directly_follows_and_endpoints_steps_round_trip_through_a_preset():
+    config = create_analysis_config(filter_steps=[
+        {"type": "directly_follows", "source": "view", "target": "cart", "mode": "contains"},
+        {"type": "endpoints", "start_activities": ["view"]},
+    ])
+    preset = preset_from_json(preset_to_json(build_preset("explorer", config)))
+    assert preset["config"]["filter_steps"] == config["filter_steps"]
+
+
+def test_fit_config_drops_explorer_steps_whose_activities_are_missing():
+    config = extract_preset_config(create_analysis_config(filter_steps=[
+        {"type": "directly_follows", "source": "view", "target": "cart", "mode": "contains"},
+        {"type": "directly_follows", "source": "view", "target": "gone", "mode": "contains"},
+        {"type": "endpoints", "end_activities": ["gone"]},
+        {"type": "endpoints", "start_activities": ["view"]},
+    ]))
+
+    fitted, notes = fit_config_to_log(config, activities=["view", "cart"], columns=["purchase"])
+
+    assert fitted["filter_steps"] == [
+        {"type": "directly_follows", "source": "view", "target": "cart", "mode": "contains"},
+        {"type": "endpoints", "start_activities": ["view"]},
+    ]
+    assert len(notes) == 2
+
+
 def test_fit_funnel_drops_missing_steps_and_segment():
     funnel = build_funnel_settings("manual", ["view", "cart", "buy"], "device")
 
