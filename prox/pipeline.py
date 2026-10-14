@@ -6,7 +6,7 @@ from .discovery import perform_process_discovery
 from .conformance import run_conformance_checking
 from .analytics import (
     analyze_process_performance, get_event_log_summary, analyze_repeat_purchases, analyze_conversion_funnel,
-    classify_sessions, summarize_user_journeys
+    analyze_variant_outcomes, classify_sessions, summarize_user_journeys
 )
 from .visualizer import visualize_focused_insights, export_results
 from .data_manager import filter_event_log, FILTER_HANDLERS, sample_log_stratified
@@ -322,6 +322,20 @@ def run_full_analysis(
     )
     if funnel_stats.get('stages'):
         pipeline_results['funnel_analysis'] = funnel_stats
+
+    variant_outcomes = analyze_variant_outcomes(
+        log_df,
+        revenue_col=biz_cfg.get("revenue_col", "event_value"),
+        purchase_values=biz_cfg.get("purchase_values", ['purchase', 'has_purchase']),
+    )
+    if variant_outcomes['routes']:
+        pipeline_results['variant_outcomes'] = variant_outcomes
+        export_results(
+            pd.DataFrame.from_dict(variant_outcomes['routes'], orient='index').rename_axis('Route'),
+            "variant_outcomes", "csv", output_folder=output_folder
+        )
+    for msg in variant_outcomes['errors']:
+        logger.info(msg)
 
     session_labels = classify_sessions(
         log_df,

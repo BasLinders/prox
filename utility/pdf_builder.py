@@ -242,6 +242,26 @@ def _section_variants(results, segment_result, styles) -> List:
         if note:
             story.append(Spacer(1, 6))
             story.append(note)
+
+    outcomes = results.get("variant_outcomes") or {}
+    routes = outcomes.get("routes") or {}
+    if routes:
+        has_revenue = "total_revenue" in (outcomes.get("summary") or {})
+        cols = ["cases", "conversion_rate"] + (["revenue", "revenue_share", "revenue_per_case"] if has_revenue else [])
+        headers = ["Cases", "Conversion (%)"] + (["Revenue", "Revenue Share (%)", "Revenue per Case"] if has_revenue else [])
+        story.append(Spacer(1, 16))
+        story.append(_subheading("Conversion and revenue per route", styles))
+        story.append(Paragraph(
+            "A route is a variant cut off at the first purchase, so buyers and non-buyers who took "
+            "the same steps count as one route.",
+            styles["Normal"],
+        ))
+        story.append(Spacer(1, 6))
+        story.append(_dict_table(routes, cols, headers))
+        note = _truncation_note(len(routes), min(len(routes), _MAX_TABLE_ROWS), styles)
+        if note:
+            story.append(Spacer(1, 6))
+            story.append(note)
     return story
 
 
