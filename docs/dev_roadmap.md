@@ -731,7 +731,8 @@ payoff.
   `_pick_revenue_column`), so the numbers line up with Business Insights. It
   shows under the table in the Variants tab, in the HTML and PDF reports and
   as `variant_outcomes.csv`, and runs only when the log has purchase events.
-  Not yet part of the AI Conclusion digest.
+  The AI Conclusion digest carries the five most common routes and the top
+  five by revenue (aggregate-only, like its other sections).
 
 **Still open:**
 - **Funnel in saved runs.** Deliberately not part of the presets change, but

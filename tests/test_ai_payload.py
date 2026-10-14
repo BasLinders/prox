@@ -146,3 +146,61 @@ def test_segment_comparison_rows():
     assert section["segment_column"] == "device"
     assert section["segments"][0]["segment"] == "mobile"
     assert section["segments"][0]["most_common_variant"] == "a -> b"
+
+
+def _variant_outcomes_result():
+    return {
+        "routes": {
+            "a -> b": {"cases": 30, "case_share": 60.0, "conversions": 15, "conversion_rate": 50.0,
+                       "revenue": 900.0, "revenue_share": 90.0, "revenue_per_case": 30.0,
+                       "revenue_per_conversion": 60.0},
+            "a -> c": {"cases": 20, "case_share": 40.0, "conversions": 2, "conversion_rate": 10.0,
+                       "revenue": 100.0, "revenue_share": 10.0, "revenue_per_case": 5.0,
+                       "revenue_per_conversion": 50.0},
+            "a": {"cases": 5, "case_share": 5.0, "conversions": 0, "conversion_rate": 0.0,
+                  "revenue": 0.0, "revenue_share": 0.0, "revenue_per_case": 0.0,
+                  "revenue_per_conversion": 0.0},
+        },
+        "summary": {"total_routes": 3, "overall_conversion_rate": 34.0, "total_revenue": 1000.0},
+    }
+
+
+def test_variant_outcomes_section_ranks_routes_and_omits_zero_revenue_ones():
+    payload = build_ai_payload({"variant_outcomes": _variant_outcomes_result()})
+
+    section = payload["variant_outcomes"]
+    assert "variant_outcomes" not in payload["not_run"]
+    assert section["overall_conversion_rate_pct"] == 34.0
+    assert [r["route"] for r in section["most_common_routes"]] == ["a -> b", "a -> c", "a"]
+    assert section["most_common_routes"][0]["conversion_rate_pct"] == 50.0
+    assert section["total_revenue"] == 1000.0
+    assert [r["route"] for r in section["top_routes_by_revenue"]] == ["a -> b", "a -> c"]
+    json.dumps(payload, allow_nan=False)
+
+
+def test_variant_outcomes_section_without_revenue_has_conversion_only():
+    outcomes = _variant_outcomes_result()
+    for stats in outcomes["routes"].values():
+        for key in ("revenue", "revenue_share", "revenue_per_case", "revenue_per_conversion"):
+            del stats[key]
+    del outcomes["summary"]["total_revenue"]
+
+    section = build_ai_payload({"variant_outcomes": outcomes})["variant_outcomes"]
+
+    assert "top_routes_by_revenue" not in section
+    assert "total_revenue" not in section
+    assert "revenue" not in section["most_common_routes"][0]
+
+
+def test_variant_outcomes_section_is_capped_to_top_five_routes():
+    outcomes = _variant_outcomes_result()
+    outcomes["routes"] = {f"route {i}": {**outcomes["routes"]["a -> b"], "cases": 100 - i} for i in range(8)}
+
+    section = build_ai_payload({"variant_outcomes": outcomes})["variant_outcomes"]
+
+    assert len(section["most_common_routes"]) == 5
+    assert len(section["top_routes_by_revenue"]) == 5
+
+
+def test_variant_outcomes_section_is_not_run_without_outcomes():
+    assert "variant_outcomes" in build_ai_payload({})["not_run"]
