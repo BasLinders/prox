@@ -269,6 +269,44 @@ def test_sample_log_stratified_preserves_all_priority_cases():
     assert len(sampled_cases) == 3
 
 
+def test_sample_log_stratified_fills_sample_when_every_case_is_priority():
+    # E.g. after a crop at 'purchase': no non-priority cases to fill with, so
+    # the ratio must not leave the sample at total_sample_size * ratio.
+    rows = [(f'p{i}', 'a', pd.Timestamp('2024-01-01'), 1) for i in range(20)]
+    df = pd.DataFrame(rows, columns=['case:concept:name', 'concept:name', 'time:timestamp', 'flag'])
+
+    sampled, _ = sample_log_stratified(
+        df, strata_col='flag', priority_value=1, total_sample_size=10, max_priority_ratio=0.5
+    )
+    assert sampled['case:concept:name'].nunique() == 10
+
+
+def test_sample_log_stratified_tops_up_with_priority_when_other_pool_is_small():
+    rows = [(f'p{i}', 'a', pd.Timestamp('2024-01-01'), 1) for i in range(20)]
+    rows += [(f'n{i}', 'a', pd.Timestamp('2024-01-01'), 0) for i in range(2)]
+    df = pd.DataFrame(rows, columns=['case:concept:name', 'concept:name', 'time:timestamp', 'flag'])
+
+    sampled, _ = sample_log_stratified(
+        df, strata_col='flag', priority_value=1, total_sample_size=10, max_priority_ratio=0.5
+    )
+    cases = set(sampled['case:concept:name'])
+    assert len(cases) == 10
+    assert {'n0', 'n1'}.issubset(cases)
+
+
+def test_sample_log_stratified_ratio_still_caps_priority_when_others_available():
+    rows = [(f'p{i}', 'a', pd.Timestamp('2024-01-01'), 1) for i in range(20)]
+    rows += [(f'n{i}', 'a', pd.Timestamp('2024-01-01'), 0) for i in range(20)]
+    df = pd.DataFrame(rows, columns=['case:concept:name', 'concept:name', 'time:timestamp', 'flag'])
+
+    sampled, _ = sample_log_stratified(
+        df, strata_col='flag', priority_value=1, total_sample_size=10, max_priority_ratio=0.5
+    )
+    cases = sampled['case:concept:name'].unique()
+    assert len(cases) == 10
+    assert sum(c.startswith('p') for c in cases) == 5
+
+
 def test_sample_log_stratified_falls_back_to_random_when_column_missing():
     df = make_event_log([('1', 'a', pd.Timestamp('2024-01-01')), ('2', 'a', pd.Timestamp('2024-01-01'))])
     sampled, messages = sample_log_stratified(df, strata_col='missing_col', total_sample_size=1)
