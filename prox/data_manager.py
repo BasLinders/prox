@@ -753,6 +753,13 @@ def sample_log_stratified(
             max_priority = int(total_sample_size * max_priority_ratio)
             n_priority = min(len(priority_cases), max_priority)
             n_other = min(total_sample_size - n_priority, len(other_cases))
+            # The ratio only caps priority cases while there are other cases to
+            # fill the rest of the sample. When there aren't (e.g. a crop at
+            # 'purchase' makes every case a priority case), top up with more
+            # priority cases instead of returning a sample smaller than asked.
+            shortfall = total_sample_size - n_priority - n_other
+            if shortfall > 0:
+                n_priority = min(len(priority_cases), n_priority + shortfall)
 
             priority_ids = (
                 priority_cases.to_series().sample(n_priority, replace=False)
