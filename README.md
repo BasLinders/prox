@@ -24,7 +24,7 @@ A modular process mining tool for analysing customer journeys from any event log
 - **Golden Path Discovery** - Inductive Miner (sound, robust) and Heuristics Miner (noisy/large logs) produce Petri net models; DFG (Directly-Follows Graph) gives a fast first look. The most frequent variant is rendered as a "Happy Path" BPMN diagram, and an interactive process map lets you explore the flow and click an activity or transition to filter on it.
 - **Conformance Checking** - Token Replay for fast fitness and precision scores; State Equation A\* for exact per-trace deviations (skipped and unsolicited activities), optionally parallelized across CPU cores.
 - **Bottleneck Analysis** - Activity and transition durations ranked by impact score; overall process health score.
-- **Variant Analysis** - Top-20 variants with frequency, coverage, and duration statistics.
+- **Variant Analysis** - Top-20 variants with frequency, coverage, and duration statistics. A second table shows conversion rate and revenue per *route* (a variant cut off at the first purchase, so buyers and non-buyers who took the same steps share a route), with each route's share of cases and revenue.
 - **Business Insights** - Repeat buyer detection, inter-purchase timing, revenue multiplier (repeat vs. one-time buyers), average order value, cart abandonment rate, category-level revenue breakdown, and revenue-over-time trend.
 - **Funnel Analysis** - Conversion/drop-off rate across any sequence of activities you define, for any process in any industry — or let PRoX auto-derive a likely order from the data as a starting point.
 - **Segment Comparison** - Split the log by any low-cardinality column (e.g. device, traffic source) and compare health score, fitness, precision, repeat rate, and happy path side by side, optionally run in parallel across CPU cores.
@@ -109,7 +109,7 @@ config = create_analysis_config(
 results = run_full_analysis(df, config)
 ```
 
-`results` is a plain dict with keys: `log_summary`, `model`, `conformance`, `performance`, `visualizations`, `repeat_purchase_analysis`, `funnel_analysis`.
+`results` is a plain dict with keys: `log_summary`, `model`, `conformance`, `performance`, `visualizations`, `repeat_purchase_analysis`, `funnel_analysis`, and `variant_outcomes` (only when the log has purchase events).
 
 ---
 

@@ -7,6 +7,7 @@ from prox.analytics import (
     analyze_repeat_purchases,
     analyze_conversion_funnel,
     analyze_funnel_by_segment,
+    analyze_variant_outcomes,
     format_business_report,
     classify_sessions,
     summarize_user_journeys,
@@ -593,3 +594,122 @@ def test_classify_sessions_empty_keyword_lists_labels_everything_browsing():
     df = make_session_intent_log()
     labels = classify_sessions(df, purchase_values=[], cart_values=[], research_keywords=[])
     assert set(labels['label']) == {'Browsing'}
+
+
+def _make_variant_outcome_log():
+    """c1: a,b,purchase(100)  c2: a,b  c3: a,c  c4: a,b,purchase(300),thanks.
+
+    Cut off at the first purchase, c1, c2 and c4 all took route a -> b
+    (2 of 3 bought, 400 revenue); c3 took a -> c and didn't buy.
+    """
+    base = pd.Timestamp('2024-01-01')
+    layout = {
+        'c1': [('a', 0), ('b', 1), ('purchase', 2)],
+        'c2': [('a', 0), ('b', 1)],
+        'c3': [('a', 0), ('c', 1)],
+        'c4': [('a', 0), ('b', 1), ('purchase', 2), ('thanks', 3)],
+    }
+    values = {'c1': 100, 'c4': 300}
+    rows = []
+    for case_id, steps in layout.items():
+        for act, minute in steps:
+            rows.append({
+                'case:concept:name': case_id, 'concept:name': act,
+                'time:timestamp': base + pd.Timedelta(minutes=minute),
+                # revenue sits on the purchase row only; browsing rows carry a
+                # decoy value that must not leak into route revenue
+                'event_value': values.get(case_id, 0) if act == 'purchase' else 7,
+            })
+    return pd.DataFrame(rows)
+
+
+def test_analyze_variant_outcomes_groups_buyers_and_non_buyers_on_the_route_up_to_purchase():
+    result = analyze_variant_outcomes(_make_variant_outcome_log())
+
+    assert result['errors'] == []
+    routes = result['routes']
+    assert list(routes) == ['a -> b', 'a -> c']  # most frequent first
+
+    ab = routes['a -> b']
+    assert ab['cases'] == 3
+    assert ab['conversions'] == 2
+    assert ab['conversion_rate'] == pytest.approx(200 / 3)
+    assert ab['revenue'] == 400
+    assert ab['revenue_share'] == 100
+    assert ab['revenue_per_case'] == pytest.approx(400 / 3)
+    assert ab['revenue_per_conversion'] == 200
+
+    ac = routes['a -> c']
+    assert ac['conversions'] == 0
+    assert ac['revenue'] == 0
+    assert ac['revenue_per_conversion'] == 0
+
+    summary = result['summary']
+    assert summary['total_cases'] == 4
+    assert summary['total_routes'] == 2
+    assert summary['total_conversions'] == 2
+    assert summary['overall_conversion_rate'] == 50
+    assert summary['total_revenue'] == 400
+    assert summary['up_to_purchase'] is True
+
+
+def test_analyze_variant_outcomes_whole_path_makes_conversion_trivial():
+    result = analyze_variant_outcomes(_make_variant_outcome_log(), up_to_purchase=False)
+
+    routes = result['routes']
+    assert routes['a -> b -> purchase']['conversion_rate'] == 100
+    assert routes['a -> b']['conversion_rate'] == 0
+    assert result['summary']['up_to_purchase'] is False
+
+
+def test_analyze_variant_outcomes_without_revenue_column_reports_conversion_only():
+    df = _make_variant_outcome_log().drop(columns='event_value')
+    result = analyze_variant_outcomes(df)
+
+    ab = result['routes']['a -> b']
+    assert ab['conversion_rate'] == pytest.approx(200 / 3)
+    assert 'revenue' not in ab
+    assert 'total_revenue' not in result['summary']
+
+
+def test_analyze_variant_outcomes_without_purchases_returns_error():
+    result = analyze_variant_outcomes(make_bottleneck_log())
+
+    assert result['routes'] == {}
+    assert result['summary'] == {}
+    assert any('No purchase events' in e for e in result['errors'])
+
+
+def test_analyze_variant_outcomes_handles_empty_and_missing_columns():
+    assert analyze_variant_outcomes(pd.DataFrame())['routes'] == {}
+    result = analyze_variant_outcomes(pd.DataFrame({'concept:name': ['a']}))
+    assert result['routes'] == {}
+    assert any('missing' in e for e in result['errors'])
+
+
+def test_analyze_variant_outcomes_purchase_as_first_step_gets_placeholder_route():
+    base = pd.Timestamp('2024-01-01')
+    df = pd.DataFrame([
+        {'case:concept:name': 'c1', 'concept:name': 'purchase', 'time:timestamp': base, 'event_value': 10},
+        {'case:concept:name': 'c1', 'concept:name': 'a', 'time:timestamp': base + pd.Timedelta(minutes=1), 'event_value': 0},
+    ])
+    result = analyze_variant_outcomes(df)
+
+    assert list(result['routes']) == ['(purchase as first step)']
+    assert result['routes']['(purchase as first step)']['conversion_rate'] == 100
+
+
+def test_analyze_variant_outcomes_respects_top_n_and_reports_coverage():
+    result = analyze_variant_outcomes(_make_variant_outcome_log(), top_n=1)
+
+    assert list(result['routes']) == ['a -> b']
+    assert result['summary']['total_routes'] == 2
+    assert result['summary']['top_n_case_coverage'] == 75
+    assert result['summary']['top_n_revenue_coverage'] == 100
+
+
+def test_analyze_variant_outcomes_orders_events_by_timestamp_not_row_order():
+    df = _make_variant_outcome_log().sample(frac=1, random_state=0).reset_index(drop=True)
+    result = analyze_variant_outcomes(df)
+
+    assert result['routes']['a -> b']['conversions'] == 2

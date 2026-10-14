@@ -2130,6 +2130,15 @@ def _render_results_tabs():
 - **Frequency / Percentage**: how many cases followed a given variant, and
   what share of all cases that is.
 - **Num Activities**: the number of steps in that variant's sequence.
+- **Route**: a variant cut off at the first purchase, so a visitor who
+  bought and one who didn't but took the same steps count as the same
+  route. This is what makes a conversion rate per route meaningful; on
+  whole-case variants, any variant containing the purchase step would
+  trivially convert at 100%.
+- **Conversion Rate / Revenue**: per route, the share of its cases that
+  purchased, and the revenue those purchases brought in (total, share of
+  all revenue, and per case). Purchase and revenue detection follow the
+  same settings as Business Insights.
             """
             )
         vp = results.get("performance", {}).get("variant_performance", {})
@@ -2148,6 +2157,39 @@ def _render_results_tabs():
                 var_df.index.name = "Variant"
                 show_cols = [c for c in ["frequency", "percentage", "num_activities"] if c in var_df.columns]
                 st.dataframe(var_df[show_cols], width='stretch')
+
+            variant_outcomes = results.get("variant_outcomes")
+            st.subheader("Conversion and revenue per route")
+            if variant_outcomes and variant_outcomes.get("routes"):
+                vo_summary = variant_outcomes["summary"]
+                st.caption(
+                    "Each route is a variant cut off at the first purchase, so buyers and "
+                    "non-buyers who took the same steps share a route and the conversion rate "
+                    "compares routes rather than outcomes. Most frequent routes first; "
+                    "click a column header to sort."
+                )
+                has_revenue = "total_revenue" in vo_summary
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Overall Conversion", f"{vo_summary['overall_conversion_rate']:.1f}%")
+                m2.metric("Routes", f"{vo_summary['total_routes']:,}")
+                m3.metric(
+                    "Top Routes' Share of Revenue" if has_revenue else "Top Routes' Share of Cases",
+                    f"{vo_summary['top_n_revenue_coverage' if has_revenue else 'top_n_case_coverage']:.1f}%",
+                )
+                vo_df = pd.DataFrame.from_dict(variant_outcomes["routes"], orient="index")
+                vo_df.index.name = "Route"
+                vo_df = vo_df.rename(columns={
+                    "cases": "Cases", "case_share": "Case Share (%)", "conversions": "Conversions",
+                    "conversion_rate": "Conversion Rate (%)", "revenue": "Revenue",
+                    "revenue_share": "Revenue Share (%)", "revenue_per_case": "Revenue per Case",
+                    "revenue_per_conversion": "Revenue per Conversion",
+                })
+                st.dataframe(vo_df.round(2), width='stretch')
+            else:
+                st.info(
+                    "Conversion and revenue per route need purchase events in the log (an activity "
+                    "matching the purchase values, or a purchase flag column)."
+                )
         else:
             st.info("No variant data available.")
 

@@ -143,3 +143,20 @@ def test_build_pdf_report_skips_ai_key_without_a_conclusion(tmp_path):
     results = make_results_with_business_and_sessions(tmp_path)
     pdf_bytes = build_pdf_report(results, ['sessions', AI_CONCLUSION_KEY])
     assert pdf_bytes.startswith(b'%PDF')
+
+
+def test_section_variants_renders_route_conversion_table_when_present():
+    base = {'performance': {'variant_performance': {'top_variants': {'a -> b': {'frequency': 3, 'percentage': 75.0}}}}}
+    without = _section_variants(base, None, _styles())
+
+    results = {
+        **base,
+        'variant_outcomes': {
+            'routes': {'a -> b': {'cases': 3, 'conversion_rate': 66.7, 'revenue': 400.0,
+                                  'revenue_share': 100.0, 'revenue_per_case': 133.3}},
+            'summary': {'total_revenue': 400.0},
+        },
+    }
+    story = _section_variants(results, None, _styles())
+
+    assert len(story) > len(without)

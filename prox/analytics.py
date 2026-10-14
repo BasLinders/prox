@@ -447,6 +447,61 @@ def _generate_performance_recommendations(results: Dict[str, Any], health_score:
     return recommendations
 
 
+def _normalise_values(values, default: list) -> list:
+    """None -> default list, a bare string -> one-item list, otherwise unchanged."""
+    if values is None:
+        return default
+    if isinstance(values, str):
+        return [values]
+    return values
+
+
+def _pick_revenue_column(df: pd.DataFrame, revenue_col: str) -> str | None:
+    """Smart revenue column detection: the first candidate that has values > 0,
+    falling back to the first candidate that exists at all (with a warning)."""
+    cols_map = {c.lower(): c for c in df.columns}
+    candidates = list(dict.fromkeys([revenue_col, 'event_value', 'revenue', 'total_amount', 'value', 'price', 'amount']))
+    for cand in candidates:
+        if cand.lower() in cols_map:
+            col_name = cols_map[cand.lower()]
+            try:
+                if pd.to_numeric(df[col_name], errors='coerce').sum() > 0:
+                    logger.info("Revenue column selected: '%s'", col_name)
+                    return col_name
+            except Exception:
+                continue
+    for cand in candidates:
+        if cand.lower() in cols_map:
+            logger.warning("No revenue column with >0 values found. Defaulting to '%s'.", cols_map[cand.lower()])
+            return cols_map[cand.lower()]
+    return None
+
+
+def _purchase_row_mask(df: pd.DataFrame, activity_col: str, purchase_values: list) -> pd.Series:
+    """Rows that are purchase evidence: an activity name matching purchase_values,
+    or a positive value in any purchase/conversion flag column.
+
+    Revenue/price values alone are deliberately NOT treated as purchase evidence:
+    GA4-style logs commonly attach event_value/price to browsing events too
+    (view_item, add_to_cart), not just completed transactions, so "revenue > 0
+    somewhere in this case" previously misclassified cart-abandoners as buyers.
+    """
+    mask_text = _contains_any(df[activity_col], purchase_values)
+
+    mask_col = pd.Series(False, index=df.index)
+    for flag_col in [c for c in df.columns if 'purchase' in c.lower() or 'conversion' in c.lower()]:
+        if flag_col == activity_col:
+            continue
+        try:
+            hits = pd.to_numeric(df[flag_col], errors='coerce').fillna(0) > 0
+            if hits.sum() > 0:
+                mask_col = mask_col | hits
+        except Exception:
+            pass
+
+    return mask_text | mask_col
+
+
 def analyze_repeat_purchases(
     df: pd.DataFrame,
     output_folder: str = "output",
@@ -474,15 +529,8 @@ def analyze_repeat_purchases(
     }
     empty = {"metrics": empty_metrics, "charts": {}}
 
-    if purchase_values is None:
-        purchase_values = ['purchase', 'has_purchase']
-    elif isinstance(purchase_values, str):
-        purchase_values = [purchase_values]
-
-    if cart_values is None:
-        cart_values = ['add_to_cart', 'add_to_basket']
-    elif isinstance(cart_values, str):
-        cart_values = [cart_values]
+    purchase_values = _normalise_values(purchase_values, ['purchase', 'has_purchase'])
+    cart_values = _normalise_values(cart_values, ['add_to_cart', 'add_to_basket'])
 
     os.makedirs(output_folder, exist_ok=True)
     cols_map = {c.lower(): c for c in df.columns}
@@ -505,25 +553,7 @@ def analyze_repeat_purchases(
     real_time_col = cols_map.get(timestamp_col.lower())
     real_activity_col = cols_map.get(activity_col.lower(), activity_col)
 
-    # Smart revenue column detection: pick first candidate that has values > 0
-    real_rev_col = None
-    candidates = list(dict.fromkeys([revenue_col, 'event_value', 'revenue', 'total_amount', 'value', 'price', 'amount']))
-    for cand in candidates:
-        if cand.lower() in cols_map:
-            col_name = cols_map[cand.lower()]
-            try:
-                if pd.to_numeric(df[col_name], errors='coerce').sum() > 0:
-                    real_rev_col = col_name
-                    logger.info("Revenue column selected: '%s'", real_rev_col)
-                    break
-            except Exception:
-                continue
-    if not real_rev_col:
-        for cand in candidates:
-            if cand.lower() in cols_map:
-                real_rev_col = cols_map[cand.lower()]
-                logger.warning("No revenue column with >0 values found. Defaulting to '%s'.", real_rev_col)
-                break
+    real_rev_col = _pick_revenue_column(df, revenue_col)
 
     if not real_user_col or not real_time_col or not real_case_col or real_activity_col not in df.columns:
         logger.warning("Missing required columns for repeat purchase analysis.")
@@ -533,24 +563,7 @@ def analyze_repeat_purchases(
     df[real_time_col] = pd.to_datetime(df[real_time_col], utc=True)
 
     # --- Purchase detection (activity name or an explicit flag column) ---
-    # Revenue/price values alone are deliberately NOT treated as purchase evidence:
-    # GA4-style logs commonly attach event_value/price to browsing events too
-    # (view_item, add_to_cart), not just completed transactions, so "revenue > 0
-    # somewhere in this case" previously misclassified cart-abandoners as buyers.
-    mask_text = _contains_any(df[real_activity_col], purchase_values)
-
-    mask_col = pd.Series(False, index=df.index)
-    for flag_col in [c for c in df.columns if 'purchase' in c.lower() or 'conversion' in c.lower()]:
-        if flag_col == real_activity_col:
-            continue
-        try:
-            hits = pd.to_numeric(df[flag_col], errors='coerce').fillna(0) > 0
-            if hits.sum() > 0:
-                mask_col = mask_col | hits
-        except Exception:
-            pass
-
-    purchase_row_mask = mask_text | mask_col
+    purchase_row_mask = _purchase_row_mask(df, real_activity_col, purchase_values)
     purchase_case_ids = df.loc[purchase_row_mask, real_case_col].unique()
 
     # --- Cart detection (activity name or an explicit flag column) ---
@@ -1001,6 +1014,137 @@ def analyze_funnel_by_segment(
         )
 
     return {'overall': overall, 'segments': segment_results, 'errors': errors}
+
+
+def analyze_variant_outcomes(
+    df: pd.DataFrame,
+    case_col: str = 'case:concept:name',
+    activity_col: str = 'concept:name',
+    timestamp_col: str = 'time:timestamp',
+    revenue_col: str = 'event_value',
+    purchase_values=None,
+    top_n: int = 20,
+    up_to_purchase: bool = True,
+) -> Dict[str, Any]:
+    """
+    Conversion rate and revenue per variant: which route is worth the most?
+
+    By default a case's variant is the route it took *up to* its first purchase
+    (the purchase and anything after it are dropped; cases that never purchase
+    keep their full path). Grouping on whole-case paths instead would make
+    conversion trivial - a variant containing the purchase step converts at
+    100% and one without it at 0% - whereas on the route up to the purchase a
+    non-buyer and a buyer who took the same steps share a variant, so the
+    conversion rate says something about the route. Pass up_to_purchase=False
+    to group on the whole path.
+
+    Purchase and revenue detection are shared with analyze_repeat_purchases()
+    (same purchase_values, same flag columns, same revenue column pick), so the
+    numbers here line up with the Business Insights tab. Revenue is summed over
+    a case's purchase rows only.
+
+    Returns
+    -------
+    dict with keys:
+        'routes'  : {route: {cases, case_share, conversions, conversion_rate,
+                              revenue, revenue_share, revenue_per_case,
+                              revenue_per_conversion}} for the top_n routes by
+                     cases; shares and rates are percentages. Revenue keys are
+                     absent when no revenue column exists.
+        'summary' : {total_cases, total_routes, total_conversions,
+                      overall_conversion_rate, total_revenue, top_n_case_coverage,
+                      top_n_revenue_coverage, revenue_col, up_to_purchase}
+        'errors'  : list of str
+    """
+    errors: List[str] = []
+    empty = {'routes': {}, 'summary': {}, 'errors': errors}
+
+    purchase_values = _normalise_values(purchase_values, ['purchase', 'has_purchase'])
+
+    if df is None or df.empty:
+        errors.append("Event log is empty.")
+        return empty
+    required = [case_col, activity_col, timestamp_col]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        errors.append(f"Variant outcomes need columns {required}; missing: {missing}.")
+        return empty
+
+    work = df.sort_values([case_col, timestamp_col], kind='stable')
+    purchase_mask = _purchase_row_mask(work, activity_col, purchase_values)
+    if not purchase_mask.any():
+        errors.append(
+            f"No purchase events found (purchase_values={purchase_values}); conversion per variant "
+            "needs a purchase activity or an explicit purchase flag column."
+        )
+        return empty
+
+    case_ids = work[case_col].unique()
+    purchase_cases = set(work.loc[purchase_mask, case_col].unique())
+
+    rev_col = _pick_revenue_column(work, revenue_col)
+    revenue = pd.Series(0.0, index=case_ids)
+    if rev_col:
+        purchase_rev = pd.to_numeric(work.loc[purchase_mask, rev_col], errors='coerce').fillna(0)
+        revenue = purchase_rev.groupby(work.loc[purchase_mask, case_col]).sum().reindex(case_ids, fill_value=0.0)
+
+    if up_to_purchase:
+        # cummax is True from a case's first purchase row onwards
+        after_first_purchase = purchase_mask.groupby(work[case_col]).cummax()
+        route_rows = work.loc[~after_first_purchase]
+    else:
+        route_rows = work
+    routes = (
+        route_rows.groupby(case_col)[activity_col].apply(lambda a: ' -> '.join(a.astype(str)))
+        .reindex(case_ids)
+        .fillna('(purchase as first step)')
+    )
+
+    per_case = pd.DataFrame({
+        'route': routes.values,
+        'converted': [c in purchase_cases for c in case_ids],
+        'revenue': revenue.values,
+    })
+    grouped = per_case.groupby('route').agg(
+        cases=('route', 'size'), conversions=('converted', 'sum'), revenue=('revenue', 'sum')
+    ).sort_values(['cases', 'conversions'], ascending=False)
+
+    total_cases = len(per_case)
+    total_conversions = int(per_case['converted'].sum())
+    total_revenue = float(per_case['revenue'].sum())
+
+    top = grouped.head(top_n)
+    route_stats = {}
+    for route, row in top.iterrows():
+        cases = int(row['cases'])
+        conversions = int(row['conversions'])
+        stats = {
+            'cases': cases,
+            'case_share': cases / total_cases * 100,
+            'conversions': conversions,
+            'conversion_rate': conversions / cases * 100,
+        }
+        if rev_col:
+            stats['revenue'] = float(row['revenue'])
+            stats['revenue_share'] = float(row['revenue']) / total_revenue * 100 if total_revenue else 0.0
+            stats['revenue_per_case'] = float(row['revenue']) / cases
+            stats['revenue_per_conversion'] = float(row['revenue']) / conversions if conversions else 0.0
+        route_stats[route] = stats
+
+    summary = {
+        'total_cases': total_cases,
+        'total_routes': len(grouped),
+        'total_conversions': total_conversions,
+        'overall_conversion_rate': total_conversions / total_cases * 100,
+        'top_n_case_coverage': float(top['cases'].sum() / total_cases * 100),
+        'revenue_col': rev_col,
+        'up_to_purchase': up_to_purchase,
+    }
+    if rev_col:
+        summary['total_revenue'] = total_revenue
+        summary['top_n_revenue_coverage'] = float(top['revenue'].sum() / total_revenue * 100) if total_revenue else 0.0
+
+    return {'routes': route_stats, 'summary': summary, 'errors': errors}
 
 
 def format_business_report(results: Dict[str, Any]) -> str:

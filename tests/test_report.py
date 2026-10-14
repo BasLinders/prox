@@ -114,6 +114,7 @@ def test_generate_html_report_includes_funnel_and_extended_business_sections():
     assert "Cart Abandonment" in report
     assert "Revenue by Category" in report
     assert "Electronics" in report
+    assert "Conversion and Revenue per Route" in report
 
 
 def test_generate_html_report_escapes_activity_names():
@@ -287,3 +288,12 @@ def test_generate_html_report_has_no_ai_section_without_a_conclusion():
     df = make_simple_variant_log(n_cases=3)
     results = run_full_analysis(df, create_analysis_config())
     assert 'AI Conclusion' not in generate_html_report(results)
+
+
+def test_generate_html_report_omits_route_section_without_purchases():
+    df = make_simple_variant_log(n_cases=3)
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+    results = run_full_analysis(df, config=config)
+    assert results is not None
+
+    assert "Conversion and Revenue per Route" not in generate_html_report(results)
