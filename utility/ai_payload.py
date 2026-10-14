@@ -40,6 +40,7 @@ SECTION_LABELS = {
     "log_summary": "Log summary",
     "process_performance": "Process performance",
     "variants": "Variants",
+    "variant_outcomes": "Conversion and revenue per route",
     "bottlenecks": "Bottlenecks",
     "conformance_discovered_model": "Conformance (discovered model)",
     "conformance_reference_model": "Conformance vs. reference model",
@@ -164,6 +165,45 @@ def _variants(results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             for path, v in list(top.items())[:_TOP_N]
         ],
     }
+
+
+def _variant_outcomes(results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    outcomes = results.get("variant_outcomes") or {}
+    routes = outcomes.get("routes") or {}
+    if not routes:
+        return None
+    summary = outcomes.get("summary") or {}
+    has_revenue = "total_revenue" in summary
+
+    def row(route, v):
+        out = {
+            "route": route,
+            "cases": v.get("cases"),
+            "pct_of_cases": v.get("case_share"),
+            "conversion_rate_pct": v.get("conversion_rate"),
+        }
+        if has_revenue:
+            out["revenue"] = v.get("revenue")
+            out["pct_of_revenue"] = v.get("revenue_share")
+            out["revenue_per_case"] = v.get("revenue_per_case")
+        return out
+
+    section = {
+        "note": (
+            "A route is a variant cut off at the first purchase, so buyers and non-buyers who took the "
+            "same steps share a route and the conversion rate compares routes, not outcomes. "
+            "Revenue is in the log's own currency."
+        ),
+        "total_routes": summary.get("total_routes"),
+        "overall_conversion_rate_pct": summary.get("overall_conversion_rate"),
+        "most_common_routes": [row(r, v) for r, v in list(routes.items())[:_TOP_N]],
+    }
+    if has_revenue:
+        section["total_revenue"] = summary.get("total_revenue")
+        section["top_routes_by_revenue"] = [
+            row(r, v) for r, v in _top_by(routes, "revenue") if v.get("revenue")
+        ]
+    return section
 
 
 def _bottlenecks(results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -446,6 +486,7 @@ def build_ai_payload(
         "log_summary": _log_summary(results),
         "process_performance": _process_performance(results),
         "variants": _variants(results),
+        "variant_outcomes": _variant_outcomes(results),
         "bottlenecks": _bottlenecks(results),
         "conformance_discovered_model": _discovered_conformance(results),
         "conformance_reference_model": _reference_conformance(reference_conformance),

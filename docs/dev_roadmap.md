@@ -720,6 +720,19 @@ payoff.
   sidebar's **Configuration preset**. Machine-specific tuning (CPU cores,
   chunk sizes) is left out. Activities, columns and funnel steps the new log
   doesn't have are dropped with a warning instead of failing.
+- **Conversion and revenue per variant — done (#78).**
+  `analyze_variant_outcomes()` in `prox/analytics.py` groups cases by the
+  route they took *up to* their first purchase and reports cases, conversion
+  rate and revenue (total, share, per case, per conversion) per route. Cutting
+  at the purchase is what keeps the conversion rate meaningful: on whole-case
+  variants any variant containing the purchase step converts at 100% by
+  construction (`up_to_purchase=False` gives that view). It shares purchase
+  and revenue detection with `analyze_repeat_purchases()` (`_purchase_row_mask`,
+  `_pick_revenue_column`), so the numbers line up with Business Insights. It
+  shows under the table in the Variants tab, in the HTML and PDF reports and
+  as `variant_outcomes.csv`, and runs only when the log has purchase events.
+  The AI Conclusion digest carries the five most common routes and the top
+  five by revenue (aggregate-only, like its other sections).
 
 **Still open:**
 - **Funnel in saved runs.** Deliberately not part of the presets change, but

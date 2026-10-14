@@ -111,6 +111,42 @@ def _format_variant(variant: str) -> str:
     return html.escape(str(variant).replace(' -> ', ' → '))
 
 
+def _build_variant_outcomes_section(variant_outcomes: Dict[str, Any] | None) -> str:
+    """Conversion and revenue per route (a variant cut off at the first purchase), or ''
+    when the analysis didn't run (no purchase events in the log)."""
+    if not variant_outcomes or not variant_outcomes.get('routes'):
+        return ""
+    routes = variant_outcomes['routes']
+    summary = variant_outcomes.get('summary', {})
+    has_revenue = 'total_revenue' in summary
+
+    def _fmt_row(stats: Dict[str, Any]) -> Dict[str, Any]:
+        out = {
+            'cases': f"{stats['cases']:,}",
+            'conversion_rate': f"{stats['conversion_rate']:.1f}%",
+        }
+        if has_revenue:
+            out['revenue'] = f"{stats['revenue']:,.2f}"
+            out['revenue_share'] = f"{stats['revenue_share']:.1f}%"
+            out['revenue_per_case'] = f"{stats['revenue_per_case']:,.2f}"
+        return out
+
+    rows = {route.replace(' -> ', ' → '): _fmt_row(stats) for route, stats in routes.items()}
+    columns = ['cases', 'conversion_rate'] + (['revenue', 'revenue_share', 'revenue_per_case'] if has_revenue else [])
+    headers = "<th>Cases</th><th>Conversion</th>" + (
+        "<th>Revenue</th><th>Revenue Share</th><th>Revenue per Case</th>" if has_revenue else ""
+    )
+    return f"""
+<h2>Conversion and Revenue per Route</h2>
+<p class="note">A route is a variant cut off at the first purchase, so buyers and non-buyers who took the
+same steps count as one route. Overall conversion: <strong>{summary.get('overall_conversion_rate', 0):.1f}%</strong>
+across {summary.get('total_cases', 0):,} cases.</p>
+<table>
+<tr><th>Route</th>{headers}</tr>
+{_table_rows(rows, columns)}
+</table>"""
+
+
 def _build_narrative_summary(results: Dict[str, Any]) -> str:
     """Builds a plain-language 'Executive Summary' section for non-technical readers,
     translating scores and stats already computed elsewhere in the pipeline into sentences."""
@@ -287,6 +323,8 @@ def generate_html_report(results: Dict[str, Any], ai_conclusion: Optional[Dict[s
     happy_path_img = _embed_image(viz.get('happy_path'))
     main_flow_img = _embed_image(viz.get('bottlenecks'))
 
+    variant_outcomes_section = _build_variant_outcomes_section(results.get('variant_outcomes'))
+
     narrative_summary = _build_narrative_summary(results) if results else ""
     ai_conclusion_section = _build_ai_conclusion_section(ai_conclusion)
 
@@ -395,6 +433,7 @@ def generate_html_report(results: Dict[str, Any], ai_conclusion: Optional[Dict[s
 <tr><th>Variant</th><th>Frequency</th><th>Percentage</th></tr>
 {_table_rows(variant_perf.get('top_variants', {}), ['frequency', 'percentage'])}
 </table>
+{variant_outcomes_section}
 {funnel_section}
 {business_section}"""
 

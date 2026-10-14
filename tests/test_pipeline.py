@@ -1,3 +1,5 @@
+import pandas as pd
+
 from prox.config import create_analysis_config
 from prox.pipeline import run_full_analysis, _PROGRESS_STAGES
 
@@ -67,3 +69,30 @@ def test_run_full_analysis_none_progress_callback_is_a_no_op():
     results = run_full_analysis(df, config=config, progress_callback=None)
 
     assert results is not None
+
+
+def test_run_full_analysis_includes_variant_outcomes_when_log_has_purchases():
+    from conftest import make_event_log
+    base = '2024-01-01 00:00:00'
+    rows = []
+    for i in range(4):
+        t = pd.Timestamp(base) + pd.Timedelta(hours=i)
+        rows += [(f'c{i}', 'view_item', t), (f'c{i}', 'add_to_cart', t + pd.Timedelta(minutes=1))]
+        if i % 2 == 0:
+            rows.append((f'c{i}', 'purchase', t + pd.Timedelta(minutes=2)))
+    df = make_event_log(rows)
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+    results = run_full_analysis(df, config=config)
+
+    assert results is not None
+    outcomes = results['variant_outcomes']
+    assert outcomes['routes']['view_item -> add_to_cart']['conversion_rate'] == 50
+
+
+def test_run_full_analysis_omits_variant_outcomes_without_purchases():
+    df = make_simple_variant_log(n_cases=3)
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+    results = run_full_analysis(df, config=config)
+
+    assert results is not None
+    assert 'variant_outcomes' not in results
