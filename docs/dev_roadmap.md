@@ -736,7 +736,7 @@ payoff.
   (`prox/presets.py`, stored in `.prox_presets/`) holding the sidebar,
   filter, sampling and funnel settings, with no event data, so it applies to
   any new upload. It is saved from the **Save settings as preset** expander
-  above Run Analysis, and applied, imported (JSON file) or deleted from the
+  below Run Analysis, and applied, imported (JSON file) or deleted from the
   sidebar's **Configuration preset**. Machine-specific tuning (CPU cores,
   chunk sizes) is left out. Activities, columns and funnel steps the new log
   doesn't have are dropped with a warning instead of failing.

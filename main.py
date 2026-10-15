@@ -596,7 +596,7 @@ with st.sidebar:
             st.caption(
                 "A preset holds the sidebar, filter, sampling and funnel settings, "
                 "so a new upload doesn't need reconfiguring. Create one with "
-                "**Save settings as preset** above Run Analysis."
+                "**Save settings as preset** below Run Analysis."
             )
             known_presets = dict(list_presets(presets_dir=DEFAULT_PRESETS_DIR))
             if known_presets:
@@ -1563,7 +1563,15 @@ with st.form("configuration_form"):
                 "or switching to Token Replay in the sidebar."
             )
 
-    applied = st.form_submit_button("Apply Configuration", type="secondary", width='stretch')
+    # Run Analysis is a submit button of this form, not a plain st.button below
+    # it: Streamlit only commits form values on submit, so a button outside the
+    # form ran with the last *applied* values - e.g. a sample size typed in but
+    # not applied silently fell back to the 250 default.
+    apply_col, run_col = st.columns(2)
+    with apply_col:
+        applied = st.form_submit_button("Apply Configuration", type="secondary", width='stretch')
+    with run_col:
+        run_btn = st.form_submit_button("Run Analysis", type="primary", width='stretch')
 if applied:
     st.success("Configuration applied.")
 
@@ -1658,9 +1666,6 @@ with st.expander("Save settings as preset"):
             "Download preset file", data=_dl_json, file_name=f"{_dl_id}.preset.json",
             mime="application/json", on_click="ignore",
         )
-
-st.divider()
-run_btn = st.button("Run Analysis", type="primary", width='stretch')
 
 # ---------------------------------------------------------------------------
 # Run analysis when button is pressed

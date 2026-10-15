@@ -85,8 +85,8 @@ This opens the app in your browser. From there:
 1. **Load data** — upload a CSV, connect to BigQuery, load a previously cached incremental dataset, or generate a mock event log to try the app without any real data.
 2. **Merge into an incremental cache** (optional) if you're re-running a recurring export, so already-seen rows aren't reprocessed from scratch.
 3. **Handle outliers** (optional) by winsorizing revenue/price columns.
-4. **Configure** the discovery algorithm, noise threshold, conformance method, precision, CPU cores, event filters, and sampling (including stratification) inside the configuration form, then click **Apply Configuration**.
-5. Click **Run Analysis**.
+4. **Configure** the discovery algorithm, noise threshold, conformance method, precision, CPU cores, event filters, and sampling (including stratification) inside the configuration form. **Apply Configuration** updates the filtered case and event counts without running anything.
+5. Click **Run Analysis**. It applies the form's current settings itself, so clicking Apply first is optional.
 6. Explore results across nine tabs: Process Maps, Variants, Bottlenecks, Conformance, Funnel, Business Insights, Session Insights, Segment Comparison, and Predictive Insights.
 7. **Download** a self-contained HTML report from the top of the page, a segment comparison report from the Segment Comparison tab, or build a scoped custom PDF report from the results page.
 

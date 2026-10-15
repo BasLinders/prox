@@ -183,6 +183,23 @@ def _generate_mock_upload(app):
     assert not app.exception
 
 
+def test_run_analysis_uses_unapplied_sampling_settings(app):
+    # Sampling settings changed in the form but not applied: Run Analysis
+    # must still run with them, not the last applied (default 250) values.
+    _generate_mock_upload(app)
+    app.checkbox(key="cfg_enable_sampling_default").check()
+    next(b for b in app.button if b.label == "Apply Configuration").click().run()
+    app.number_input(key="cfg_sample_size_default").set_value(600)
+    app.slider(key="cfg_max_priority_ratio_default").set_value(0.4)
+
+    next(b for b in app.button if b.label == "Run Analysis").click().run()
+
+    assert not app.exception
+    sampling = app.session_state["config"]["sampling_config"]
+    assert sampling["total_sample_size"] == 600
+    assert sampling["max_priority_ratio"] == 0.4
+
+
 def _save_test_preset(name="Repeat analyst", funnel=None):
     config = create_analysis_config(
         discovery_algo="heuristics_miner", noise_threshold=0.4, conformance_algo="token_replay",
