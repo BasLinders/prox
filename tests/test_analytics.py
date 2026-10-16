@@ -243,6 +243,22 @@ def test_analyze_repeat_purchases_on_app_loaded_log(tmp_path, case_grouping):
     assert metrics['cart_abandonment']['cases_added_to_cart'] == 5
 
 
+def test_category_chart_plots_only_purchased_categories_of_a_categorical_column(tmp_path, monkeypatch):
+    """Regression test: with a categorical category column (as
+    optimize_dataframe_memory makes it), seaborn gave every category in the
+    dtype an axis slot - overlapping labels, top-10 bars too thin to see."""
+    import prox.analytics as analytics
+    closed = []
+    monkeypatch.setattr(analytics.plt, 'close', lambda fig=None: closed.append(fig))
+
+    df = make_purchase_log()
+    df['category'] = pd.Categorical(['Books', 'Books', 'Games'], categories=[f'cat{i}' for i in range(30)] + ['Books', 'Games'])
+    analyze_repeat_purchases(df, output_folder=str(tmp_path))
+
+    fig = next(f for f in closed if f is not None and f.axes[0].get_title().startswith('Revenue by Category'))
+    assert [t.get_text() for t in fig.axes[0].get_yticklabels()] == ['Books', 'Games']
+
+
 def test_classify_sessions_ignores_sessions_filtered_out_of_categorical_ids():
     """Regression test: a categorical session_id keeps every session as a category
     after filtering/sampling, and observed=False returned them all as phantom
