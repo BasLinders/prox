@@ -1,4 +1,4 @@
-# ProX - Process Excavator
+# ProX - Process eXcavator
 
 A modular process mining tool for analysing customer journeys from any event log — not just e-commerce. Upload an event log, and ProX automatically discovers the paths users take, identifies where they drop off or deviate, and surfaces business intelligence like repeat purchase rates, revenue lift, and funnel conversion. Built on [PM4Py](https://pm4py.fit.fraunhofer.de/), designed to run locally on a standard laptop.
 
