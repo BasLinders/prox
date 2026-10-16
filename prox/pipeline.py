@@ -143,10 +143,15 @@ def run_full_analysis(
         max_priority_ratio = sampling_config.get("max_priority_ratio", 0.5)
 
         logger.info("Applying stratified sampling (target: %d cases, strata: '%s').", sample_size, strata_col)
+        # Whole users are drawn, so when a case is a session (case_grouping=
+        # "session") a sampled user keeps all of their sessions and per-user
+        # business insights (repeat rate, days between purchases, journeys)
+        # stay unbiased. When a case is a user this is plain case sampling.
         log_df, sample_messages = sample_log_stratified(
             log_df, strata_col,
             total_sample_size=sample_size,
-            max_priority_ratio=max_priority_ratio
+            max_priority_ratio=max_priority_ratio,
+            unit_col=config.get("business_params", {}).get("user_col", "user_id"),
         )
         for msg in sample_messages:
             logger.info("  [sampling] %s", msg)
@@ -154,6 +159,14 @@ def run_full_analysis(
         n_events = len(log_df)
         n_cases = log_df['case:concept:name'].nunique()
         logger.info("Post-sampling: %d events, %d cases.", n_events, n_cases)
+
+        # Drawing whole users can overshoot sample_size by a few cases. The
+        # sample is already the cap, so conformance must not trim it again.
+        speed_params = {
+            **speed_params,
+            "max_align": max(speed_params.get("max_align", 250), n_cases),
+            "max_prec_traces": max(speed_params.get("max_prec_traces", 250), n_cases),
+        }
 
     # Exposed so callers outside this pipeline (e.g. the propensity-modeling
     # tab, which reruns its own feature extraction rather than reading a

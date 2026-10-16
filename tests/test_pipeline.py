@@ -89,6 +89,29 @@ def test_run_full_analysis_includes_variant_outcomes_when_log_has_purchases():
     assert outcomes['routes']['view_item -> add_to_cart']['conversion_rate'] == 50
 
 
+def test_run_full_analysis_sampling_keeps_whole_users_for_session_cases():
+    """Session-level cases with sampling on: whole users are drawn, so a user
+    who bought in two sessions is still a repeat buyer in the sample."""
+    rows = []
+    for u in range(6):
+        for s in range(2):
+            t = pd.Timestamp('2024-01-01') + pd.Timedelta(days=u + 3 * s)
+            case = f'u{u}_s{s}'
+            rows += [
+                dict(user_id=f'u{u}', **{'case:concept:name': case, 'concept:name': 'view_item', 'time:timestamp': t}),
+                dict(user_id=f'u{u}', **{'case:concept:name': case, 'concept:name': 'purchase',
+                                         'time:timestamp': t + pd.Timedelta(minutes=1)}),
+            ]
+    df = pd.DataFrame(rows)
+    config = create_analysis_config(filter_steps=[], sample_size=4, enable_sampling=True)
+    results = run_full_analysis(df, config=config)
+
+    assert results is not None
+    sampled = results['processed_log']
+    assert (sampled.groupby('user_id')['case:concept:name'].nunique() == 2).all()
+    assert results['repeat_purchase_analysis']['metrics']['repeat_rate'] == 100
+
+
 def test_run_full_analysis_omits_variant_outcomes_without_purchases():
     df = make_simple_variant_log(n_cases=3)
     config = create_analysis_config(filter_steps=[], sample_size=10)
