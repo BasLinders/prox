@@ -1,6 +1,6 @@
-# PRoX - Process Excavator
+# ProX - Process Excavator
 
-A modular process mining tool for analysing customer journeys from any event log — not just e-commerce. Upload an event log, and PRoX automatically discovers the paths users take, identifies where they drop off or deviate, and surfaces business intelligence like repeat purchase rates, revenue lift, and funnel conversion. Built on [PM4Py](https://pm4py.fit.fraunhofer.de/), designed to run locally on a standard laptop.
+A modular process mining tool for analysing customer journeys from any event log — not just e-commerce. Upload an event log, and ProX automatically discovers the paths users take, identifies where they drop off or deviate, and surfaces business intelligence like repeat purchase rates, revenue lift, and funnel conversion. Built on [PM4Py](https://pm4py.fit.fraunhofer.de/), designed to run locally on a standard laptop.
 
 ---
 
@@ -26,7 +26,7 @@ A modular process mining tool for analysing customer journeys from any event log
 - **Bottleneck Analysis** - Activity and transition durations ranked by impact score; overall process health score.
 - **Variant Analysis** - Top-20 variants with frequency, coverage, and duration statistics. A second table shows conversion rate and revenue per *route* (a variant cut off at the first purchase, so buyers and non-buyers who took the same steps share a route), with each route's share of cases and revenue.
 - **Business Insights** - Repeat buyer detection, inter-purchase timing, revenue multiplier (repeat vs. one-time buyers), average order value, cart abandonment rate, category-level revenue breakdown, and revenue-over-time trend.
-- **Funnel Analysis** - Conversion/drop-off rate across any sequence of activities you define, for any process in any industry — or let PRoX auto-derive a likely order from the data as a starting point.
+- **Funnel Analysis** - Conversion/drop-off rate across any sequence of activities you define, for any process in any industry — or let ProX auto-derive a likely order from the data as a starting point.
 - **Segment Comparison** - Split the log by any low-cardinality column (e.g. device, traffic source) and compare health score, fitness, precision, repeat rate, and happy path side by side, optionally run in parallel across CPU cores.
 - **Predictive Insights** - Train a conversion-propensity classifier (logistic regression, k-fold cross-validated) on in-progress cases to estimate their likelihood of reaching a chosen "success" activity, and surface the activities most associated with converting vs. not. Aggregate/driver-level only — no per-case scoring. Optional extra: `pip install -e ".[ml]"`.
 - **Incremental Analysis** - Merge a freshly-loaded export into a named, on-disk cached dataset instead of reprocessing a recurring log from scratch each time; pick up a previously cached dataset on a later run.
@@ -92,10 +92,10 @@ This opens the app in your browser. From there:
 
 ### Using the engine directly
 
-The `prox` package is fully importable for scripting or notebook use:
+The `ProX` package is fully importable for scripting or notebook use:
 
 ```python
-from prox import load_and_validate_csv, create_analysis_config, run_full_analysis
+from ProX import load_and_validate_csv, create_analysis_config, run_full_analysis
 
 df, messages, has_category = load_and_validate_csv(open("my_log.csv", "rb"))
 
@@ -115,7 +115,7 @@ results = run_full_analysis(df, config)
 
 ## Input Data Format
 
-PRoX expects a CSV file with at least three columns:
+ProX expects a CSV file with at least three columns:
 
 | Column | Description | Accepted names |
 |---|---|---|
@@ -124,7 +124,7 @@ PRoX expects a CSV file with at least three columns:
 | Timestamp | When the event occurred | `timestamp`, `event_timestamp`, `created_at`, `datetime`, … |
 | User ID | Customer identifier (for composite key) | `user_id`, `user_pseudo_id`, `customer_id`, … |
 
-Column names are auto-detected, including Dutch aliases (`gebruikers id`, `tijdstempel`, etc.) — see `COLUMN_MAPPINGS` in `prox/config.py` for the full list. If both a user ID and a session ID are present, PRoX creates a composite case key (`user_id + session_id`) to correctly scope sessions per user.
+Column names are auto-detected, including Dutch aliases (`gebruikers id`, `tijdstempel`, etc.) — see `COLUMN_MAPPINGS` in `ProX/config.py` for the full list. If both a user ID and a session ID are present, ProX creates a composite case key (`user_id + session_id`) to correctly scope sessions per user.
 
 Optional columns that unlock additional analytics:
 
@@ -143,7 +143,7 @@ None of the above is e-commerce-only by requirement — the Funnel tab works on 
 
 ## Configuration
 
-`create_analysis_config()` builds the config dict `run_full_analysis()` expects. Parameters are grouped below by the pipeline stage they affect; see `prox/config.py` for the full defaults.
+`create_analysis_config()` builds the config dict `run_full_analysis()` expects. Parameters are grouped below by the pipeline stage they affect; see `ProX/config.py` for the full defaults.
 
 ### Discovery
 
@@ -186,7 +186,7 @@ Default `business_params`: `{"user_col": "user_id", "revenue_col": "event_value"
 
 ### Outlier handling (winsorization)
 
-Winsorization of the `price`/revenue column is opt-in and UI-only (not part of `CONFIG`/`business_params`) — off by default. Two methods are available: capping at mean ± N standard deviations (N between 1 and 5, default 3.0), or capping at the [P, 100−P] percentile range (P between 0.5 and 10, default 1.0). To use it from the engine directly, call `winsorize_series()` from the `prox` package before running the pipeline.
+Winsorization of the `price`/revenue column is opt-in and UI-only (not part of `CONFIG`/`business_params`) — off by default. Two methods are available: capping at mean ± N standard deviations (N between 1 and 5, default 3.0), or capping at the [P, 100−P] percentile range (P between 0.5 and 10, default 1.0). To use it from the engine directly, call `winsorize_series()` from the `ProX` package before running the pipeline.
 
 ### Data loading
 
@@ -223,7 +223,7 @@ Available filter types: `activity`, `crop`, `case_duration`, `endpoints`, `attri
 ## Project Structure
 
 ```
-prox/               Engine package — import this from any Python script
+ProX/               Engine package — import this from any Python script
 ├── __init__.py     Public API
 ├── config.py       Column mappings and default configuration
 ├── data_manager.py CSV loading, cleaning, filtering, sampling, winsorization
@@ -237,16 +237,16 @@ prox/               Engine package — import this from any Python script
 ├── report.py       Self-contained HTML report export
 ├── segments.py     Segment comparison — runs the pipeline per segment, optionally in parallel
 ├── incremental.py  On-disk cache for merging recurring exports across runs
-├── predictive.py   Conversion-propensity model (Predictive Insights tab, optional: prox[ml])
+├── predictive.py   Conversion-propensity model (Predictive Insights tab, optional: ProX[ml])
 ├── mock_data.py    Mock GA4-style event log generator
 └── pipeline.py     Orchestrator — runs all stages in sequence
 
 main.py             Streamlit app (UI layer only)
 utility/            Standalone UI-layer tools main.py wires in - BigQuery live
                     data source (utility/bigquery_source.py, optional:
-                    prox[bigquery] + .streamlit/secrets.toml) and the modular,
+                    ProX[bigquery] + .streamlit/secrets.toml) and the modular,
                     opt-in-sections PDF report builder (utility/pdf_builder.py)
-tests/              pytest suite covering the prox/ engine and utility/pdf_builder.py
+tests/              pytest suite covering the ProX/ engine and utility/pdf_builder.py
 scripts/            Dev tooling (e.g. pipeline profiling), not part of the installable package
 docs/               Reference docs (see Documentation below) and development status
 output/             Generated PNGs and CSVs (created on first run)
@@ -271,7 +271,7 @@ output/             Generated PNGs and CSVs (created on first run)
 
 ## Limitations
 
-- Precision calculation uses ETC Conformance Token (fast approximation). Full alignment-based precision is disabled due to memory cost on standard hardware.
+- Precision calculation uses ETC Conformance Token (fast apProXimation). Full alignment-based precision is disabled due to memory cost on standard hardware.
 - Visualisations require Graphviz to be installed and on the system PATH.
 - Very large logs (>10 000 events after filtering) will trigger a warning; enabling sampling is recommended.
 - Funnel auto-derivation is a heuristic aimed at typical, roughly-linear processes — pass an explicit funnel definition (via the Funnel tab, or `funnel_steps` in `business_params`) for a guaranteed-correct funnel, especially on logs with a lot of optional/noise activity.
@@ -282,7 +282,7 @@ output/             Generated PNGs and CSVs (created on first run)
 
 - [`docs/getting_started.md`](docs/getting_started.md) - setup, running the app, troubleshooting.
 - [`docs/docs.md`](docs/docs.md) - process mining concepts (fitness, precision, alignment) explained for non-technical readers.
-- [`docs/dev_roadmap.md`](docs/dev_roadmap.md) - current development status and roadmap, for anyone tracking or contributing to PRoX.
+- [`docs/dev_roadmap.md`](docs/dev_roadmap.md) - current development status and roadmap, for anyone tracking or contributing to ProX.
 
 ---
 
