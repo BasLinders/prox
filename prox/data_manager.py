@@ -774,52 +774,80 @@ def filter_event_log(
         return None, messages
 
 
+def _take_units_until(units: pd.Index, cases_per_unit: pd.Series, case_budget: int) -> list:
+    """Random units, taken in turn until their cases fill case_budget.
+
+    The unit that reaches the budget is kept whole, so the result can overshoot
+    by up to that unit's case count minus one. Skipping it instead would bias
+    the sample against units with many cases (e.g. returning users).
+    """
+    if case_budget <= 0 or len(units) == 0:
+        return []
+    shuffled = units.to_series().sample(frac=1, replace=False)
+    sizes = cases_per_unit.loc[shuffled].to_numpy()
+    cases_before = sizes.cumsum() - sizes
+    return shuffled[cases_before < case_budget].tolist()
+
+
 def sample_log_stratified(
     event_log_df: pd.DataFrame,
     strata_col: str,
     priority_value=1,
     total_sample_size: int = 500,
-    max_priority_ratio: float = 0.5
+    max_priority_ratio: float = 0.5,
+    unit_col: str | None = None,
 ) -> Tuple[pd.DataFrame, list]:
     """
-    Stratified case-level sampling that preserves rare high-priority events (e.g. purchases).
+    Stratified sampling that preserves rare high-priority events (e.g. purchases).
 
-    Selects up to total_sample_size * max_priority_ratio priority cases, then fills
-    remaining slots with random standard cases. Falls back to random sampling if
-    strata_col is missing or raises an error.
+    Selects priority units up to total_sample_size * max_priority_ratio cases,
+    then fills the remaining case budget with random standard units. Falls back
+    to random sampling if strata_col is missing or raises an error.
+
+    unit_col sets what is drawn: by default each case on its own; with e.g.
+    'user_id', whole users, keeping every case of each drawn user. Per-user
+    metrics (repeat purchases, user journeys) need that when a case is a
+    session: drawing sessions independently splits a user's sessions across
+    sampled and unsampled, and a repeat buyer whose second purchase session
+    wasn't drawn reads as a one-time buyer. total_sample_size is still counted
+    in cases; see _take_units_until for how far it can overshoot.
     """
     messages = []
 
+    unit = unit_col if (unit_col and unit_col in event_log_df.columns) else 'case:concept:name'
+    by_unit = event_log_df.groupby(unit, observed=True)
+    cases_per_unit = by_unit['case:concept:name'].nunique()
+    units_are_cases = bool((cases_per_unit == 1).all())
+
+    def _sampled(ids):
+        sampled_df = event_log_df[event_log_df[unit].isin(ids)].copy()
+        n_cases = sampled_df['case:concept:name'].nunique()
+        if units_are_cases:
+            return sampled_df, f"{n_cases} cases"
+        return sampled_df, f"{n_cases} cases (whole '{unit}' units: {len(ids)}, all of their cases kept)"
+
     if strata_col and strata_col in event_log_df.columns:
         try:
-            case_strata = event_log_df.groupby('case:concept:name')[strata_col].max()
-            priority_cases = case_strata[case_strata == priority_value].index
-            other_cases = case_strata[case_strata != priority_value].index
+            unit_strata = by_unit[strata_col].max()
+            priority_units = unit_strata[unit_strata == priority_value].index
+            other_units = unit_strata[unit_strata != priority_value].index
 
             max_priority = int(total_sample_size * max_priority_ratio)
-            n_priority = min(len(priority_cases), max_priority)
-            n_other = min(total_sample_size - n_priority, len(other_cases))
+            priority_ids = _take_units_until(priority_units, cases_per_unit, max_priority)
+            n_priority = int(cases_per_unit.loc[priority_ids].sum())
+            other_ids = _take_units_until(other_units, cases_per_unit, total_sample_size - n_priority)
+            n_other = int(cases_per_unit.loc[other_ids].sum())
             # The ratio only caps priority cases while there are other cases to
             # fill the rest of the sample. When there aren't (e.g. a crop at
             # 'purchase' makes every case a priority case), top up with more
             # priority cases instead of returning a sample smaller than asked.
             shortfall = total_sample_size - n_priority - n_other
             if shortfall > 0:
-                n_priority = min(len(priority_cases), n_priority + shortfall)
+                remaining = priority_units.difference(priority_ids)
+                priority_ids += _take_units_until(remaining, cases_per_unit, shortfall)
 
-            priority_ids = (
-                priority_cases.to_series().sample(n_priority, replace=False)
-                if n_priority > 0 else pd.Series([], dtype=object)
-            )
-            other_ids = (
-                other_cases.to_series().sample(n_other, replace=False)
-                if n_other > 0 else pd.Series([], dtype=object)
-            )
-
-            final_ids = pd.concat([priority_ids, other_ids]).tolist()
-            sampled_df = event_log_df[event_log_df['case:concept:name'].isin(final_ids)].copy()
-
-            messages.append(f"Stratified sample: {len(final_ids)} cases total.")
+            sampled_df, desc = _sampled(priority_ids + other_ids)
+            messages.append(f"Stratified sample: {desc}.")
             messages.append(f"  {len(priority_ids)} priority ('{strata_col}'={priority_value}), {len(other_ids)} other.")
             return sampled_df, messages
 
@@ -829,14 +857,12 @@ def sample_log_stratified(
         if strata_col:
             messages.append(f"Column '{strata_col}' not found. Using random sample.")
 
-    all_ids = event_log_df['case:concept:name'].unique()
-    n = min(total_sample_size, len(all_ids))
-    if len(all_ids) == 0:
+    if len(cases_per_unit) == 0:
         return event_log_df.copy(), messages
 
-    sampled_ids = pd.Series(all_ids).sample(n, replace=False).tolist()
-    messages.append(f"Random sample: {len(sampled_ids)} cases.")
-    return event_log_df[event_log_df['case:concept:name'].isin(sampled_ids)].copy(), messages
+    sampled_df, desc = _sampled(_take_units_until(cases_per_unit.index, cases_per_unit, total_sample_size))
+    messages.append(f"Random sample: {desc}.")
+    return sampled_df, messages
 
 
 def winsorize_series(

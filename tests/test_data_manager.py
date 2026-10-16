@@ -379,6 +379,46 @@ def test_sample_log_stratified_ratio_still_caps_priority_when_others_available()
     assert sum(c.startswith('p') for c in cases) == 5
 
 
+def _two_session_users(n_users, sessions_per_user=2, priority_users=0):
+    """n_users users with sessions_per_user cases each; the first priority_users
+    have flag=1 on one of their cases."""
+    rows = []
+    for u in range(n_users):
+        for s in range(sessions_per_user):
+            flag = int(u < priority_users and s == 0)
+            rows.append((f'u{u}', f'u{u}_s{s}', 'a', pd.Timestamp('2024-01-01'), flag))
+    return pd.DataFrame(rows, columns=['user_id', 'case:concept:name', 'concept:name', 'time:timestamp', 'flag'])
+
+
+def test_sample_log_stratified_unit_col_keeps_every_case_of_a_drawn_user():
+    """Drawing sessions independently split users across sampled/unsampled, so a
+    repeat buyer could read as a one-time buyer. With unit_col whole users are
+    drawn; the budget is still counted in cases."""
+    df = _two_session_users(10, priority_users=5)
+
+    sampled, _ = sample_log_stratified(
+        df, strata_col='flag', total_sample_size=6, max_priority_ratio=0.5, unit_col='user_id'
+    )
+
+    cases_per_user = sampled.groupby('user_id')['case:concept:name'].nunique()
+    assert (cases_per_user == 2).all()
+    # 3-case priority budget: the user that reaches it is kept whole (2 users,
+    # 4 cases), then 1 other user fills the remaining 2.
+    assert sampled['case:concept:name'].nunique() == 6
+    assert (sampled.groupby('user_id')['flag'].max() == 1).sum() == 2
+
+
+def test_sample_log_stratified_unit_col_keeps_user_whole_past_the_budget():
+    df = _two_session_users(10, sessions_per_user=3)
+
+    sampled, messages = sample_log_stratified(df, strata_col=None, total_sample_size=4, unit_col='user_id')
+
+    # 1 user (3 cases) stays under the budget of 4, so a second whole user is added.
+    assert sampled['user_id'].nunique() == 2
+    assert sampled['case:concept:name'].nunique() == 6
+    assert any("whole 'user_id' units: 2" in m for m in messages)
+
+
 def test_sample_log_stratified_falls_back_to_random_when_column_missing():
     df = make_event_log([('1', 'a', pd.Timestamp('2024-01-01')), ('2', 'a', pd.Timestamp('2024-01-01'))])
     sampled, messages = sample_log_stratified(df, strata_col='missing_col', total_sample_size=1)

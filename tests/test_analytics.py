@@ -1,6 +1,9 @@
+import io
+
 import pandas as pd
 import pytest
 
+from prox.data_manager import load_and_validate_csv, optimize_dataframe_memory
 from prox.analytics import (
     get_event_log_summary,
     analyze_process_performance,
@@ -199,6 +202,56 @@ def test_analyze_repeat_purchases_detects_repeat_buyer(tmp_path):
     assert metrics['repeat_rate'] == pytest.approx(50.0)
     assert metrics['median_days_between'] == pytest.approx(5.0, abs=0.1)
     assert metrics['revenue_stats']['multiplier'] == pytest.approx(4.0)
+
+
+def _load_purchase_csv(case_grouping):
+    """make_purchase_log's buyers (u1 twice, 5 days apart; u2 once) plus two
+    non-buyers, as a raw GA4-style CSV through the app's own loading path:
+    load_and_validate_csv (case_grouping, session_id) and then
+    optimize_dataframe_memory, which turns user_id/session_id categorical."""
+    sessions = [  # (user, session, day, purchase value or None)
+        ('u1', 's1', 1, 100), ('u1', 's2', 6, 100), ('u2', 's3', 2, 50),
+        ('u3', 's4', 1, None), ('u4', 's5', 3, None),
+    ]
+    rows = []
+    for user, session, day, value in sessions:
+        t = pd.Timestamp('2024-01-01') + pd.Timedelta(days=day - 1)
+        rows.append((user, session, 'view_item', t, None))
+        rows.append((user, session, 'add_to_cart', t + pd.Timedelta(minutes=1), None))
+        if value is not None:
+            rows.append((user, session, 'purchase', t + pd.Timedelta(minutes=2), value))
+    raw = pd.DataFrame(rows, columns=['user_pseudo_id', 'ga_session_id', 'event_name', 'event_timestamp', 'event_value'])
+    df, _, _ = load_and_validate_csv(io.BytesIO(raw.to_csv(index=False).encode()), case_grouping=case_grouping)
+    return optimize_dataframe_memory(df)
+
+
+@pytest.mark.parametrize('case_grouping', ['user', 'session'])
+def test_analyze_repeat_purchases_on_app_loaded_log(tmp_path, case_grouping):
+    """Regression test: with case_grouping='user' every buyer was one case, so one
+    "order" - repeat rate, days between and the multiplier were always 0. And with
+    categorical user ids, observed=False groupbys counted non-buyers as buyers."""
+    df = _load_purchase_csv(case_grouping)
+    assert isinstance(df['user_id'].dtype, pd.CategoricalDtype)
+
+    metrics = analyze_repeat_purchases(df, output_folder=str(tmp_path))['metrics']
+
+    assert metrics['total_buyers'] == 2
+    assert metrics['repeat_rate'] == pytest.approx(50.0)
+    assert metrics['median_days_between'] == pytest.approx(5.0, abs=0.1)
+    assert metrics['revenue_stats']['multiplier'] == pytest.approx(4.0)
+    assert metrics['average_order_value'] == pytest.approx(250 / 3)
+    assert metrics['cart_abandonment']['cases_added_to_cart'] == 5
+
+
+def test_classify_sessions_ignores_sessions_filtered_out_of_categorical_ids():
+    """Regression test: a categorical session_id keeps every session as a category
+    after filtering/sampling, and observed=False returned them all as phantom
+    'Browsing' sessions."""
+    df = _load_purchase_csv('user')
+    labels = classify_sessions(df[df['user_id'] == 'u2'])
+
+    assert list(labels['session_id']) == ['u2_s3']
+    assert list(summarize_user_journeys(labels)['user_id']) == ['u2']
 
 
 def test_analyze_repeat_purchases_ignores_revenue_on_non_purchase_events(tmp_path):

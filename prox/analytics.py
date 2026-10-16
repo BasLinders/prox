@@ -512,11 +512,18 @@ def analyze_repeat_purchases(
     case_col: str = "case:concept:name",
     purchase_values=None,
     cart_values=None,
+    session_col: str = "session_id",
 ) -> Dict[str, Any]:
     """
     Identifies repeat buyers, computes loyalty metrics, inter-purchase timing,
     cart abandonment, average order value, category revenue breakdown, and a
     revenue-over-time trend. Saves charts to output_folder.
+
+    An order is a session containing a purchase: grouped by `session_col` when
+    present, else by `case_col`. Not by the case first, because with
+    load_and_validate_csv's case_grouping="user" the case is the whole user, so
+    every buyer would have exactly one "order" - repeat rate, days between
+    purchases and the repeat-buyer value multiplier would always be 0.
 
     Returns dict with 'metrics' and 'charts' keys.
     """
@@ -543,11 +550,11 @@ def analyze_repeat_purchases(
                 real_user_col = cols_map[c]
                 break
 
-    real_case_col = cols_map.get(case_col.lower())
-    if not real_case_col:
+    real_order_col = cols_map.get(session_col.lower()) or cols_map.get(case_col.lower())
+    if not real_order_col:
         for c in ['case_id', 'case', 'session_id', 'session']:
             if c in cols_map:
-                real_case_col = cols_map[c]
+                real_order_col = cols_map[c]
                 break
 
     real_time_col = cols_map.get(timestamp_col.lower())
@@ -555,7 +562,7 @@ def analyze_repeat_purchases(
 
     real_rev_col = _pick_revenue_column(df, revenue_col)
 
-    if not real_user_col or not real_time_col or not real_case_col or real_activity_col not in df.columns:
+    if not real_user_col or not real_time_col or not real_order_col or real_activity_col not in df.columns:
         logger.warning("Missing required columns for repeat purchase analysis.")
         return empty
 
@@ -564,7 +571,7 @@ def analyze_repeat_purchases(
 
     # --- Purchase detection (activity name or an explicit flag column) ---
     purchase_row_mask = _purchase_row_mask(df, real_activity_col, purchase_values)
-    purchase_case_ids = df.loc[purchase_row_mask, real_case_col].unique()
+    purchase_case_ids = df.loc[purchase_row_mask, real_order_col].unique()
 
     # --- Cart detection (activity name or an explicit flag column) ---
     # Computed independently of purchase detection so abandonment can still be
@@ -582,7 +589,7 @@ def analyze_repeat_purchases(
         except Exception:
             pass
 
-    cart_case_ids = set(df.loc[mask_cart_text | mask_cart_col, real_case_col].unique())
+    cart_case_ids = set(df.loc[mask_cart_text | mask_cart_col, real_order_col].unique())
     cart_abandonment = None
     if cart_case_ids:
         purchased_cart_cases = cart_case_ids & set(purchase_case_ids)
@@ -624,9 +631,9 @@ def analyze_repeat_purchases(
         purchase_traces[real_rev_col] = pd.to_numeric(purchase_traces[real_rev_col], errors='coerce').fillna(0)
         agg_rules[real_rev_col] = 'sum'
 
-    purchase_df = purchase_traces.groupby(real_case_col).agg(agg_rules).reset_index()
+    purchase_df = purchase_traces.groupby(real_order_col).agg(agg_rules).reset_index()
 
-    user_counts = purchase_df.groupby(real_user_col, observed=False).size().reset_index(name='purchase_count')
+    user_counts = purchase_df.groupby(real_user_col, observed=True).size().reset_index(name='purchase_count')
     repeat_buyers = user_counts[user_counts['purchase_count'] > 1]
     repeat_rate = (len(repeat_buyers) / len(user_counts)) * 100 if len(user_counts) > 0 else 0
 
@@ -661,7 +668,7 @@ def analyze_repeat_purchases(
     chart_time = None
 
     purchase_df = purchase_df.sort_values([real_user_col, real_time_col])
-    purchase_df['prev_time'] = purchase_df.groupby(real_user_col, observed=False)[real_time_col].shift(1)
+    purchase_df['prev_time'] = purchase_df.groupby(real_user_col, observed=True)[real_time_col].shift(1)
     purchase_df['days_diff'] = (
         purchase_df[real_time_col] - purchase_df['prev_time']
     ).dt.total_seconds() / (3600 * 24)
@@ -718,7 +725,7 @@ def analyze_repeat_purchases(
         purchase_df['type'] = purchase_df['purchase_count'].apply(
             lambda x: 'Repeat Buyer' if x > 1 else 'One-time Buyer'
         )
-        clv_df = purchase_df.groupby([real_user_col, 'type'], observed=False)[real_rev_col].sum().reset_index()
+        clv_df = purchase_df.groupby([real_user_col, 'type'], observed=True)[real_rev_col].sum().reset_index()
 
         avg_rep = clv_df[clv_df['type'] == 'Repeat Buyer'][real_rev_col].mean()
         avg_once = clv_df[clv_df['type'] == 'One-time Buyer'][real_rev_col].mean()
@@ -763,7 +770,7 @@ def analyze_repeat_purchases(
     real_category_col = cols_map.get('category')
     if real_category_col and real_rev_col:
         cat_df = (
-            purchase_traces.groupby(real_category_col, observed=False)[real_rev_col]
+            purchase_traces.groupby(real_category_col, observed=True)[real_rev_col]
             .agg(['sum', 'count'])
             .rename(columns={'sum': 'revenue', 'count': 'orders'})
             .sort_values('revenue', ascending=False)
@@ -798,7 +805,7 @@ def analyze_repeat_purchases(
         span_days = (trend_series.index.max() - trend_series.index.min()).days if len(trend_series) > 1 else 0
         freq = 'D' if span_days <= 60 else 'W'
         resampled = trend_series.resample(freq).agg(
-            orders=(real_case_col, 'count'), revenue=(real_rev_col, 'sum')
+            orders=(real_order_col, 'count'), revenue=(real_rev_col, 'sum')
         )
         revenue_trend = {
             str(idx.date()): {'orders': int(row['orders']), 'revenue': float(row['revenue'])}
@@ -1264,7 +1271,7 @@ def classify_sessions(
     df['_is_cart'] = _contains_any(df[real_activity_col], cart_values)
     df['_is_research'] = _contains_any(df[real_activity_col], research_keywords)
 
-    grouped = df.groupby(real_session_col, observed=False).agg(
+    grouped = df.groupby(real_session_col, observed=True).agg(
         user_id=(real_user_col, 'first'),
         event_count=(real_activity_col, 'count'),
         has_purchase=('_is_purchase', 'any'),
@@ -1304,7 +1311,7 @@ def summarize_user_journeys(session_labels_df: pd.DataFrame) -> pd.DataFrame:
 
     ordered = session_labels_df.sort_values(['user_id', 'first_activity'])
     journeys = (
-        ordered.groupby('user_id', observed=False)
+        ordered.groupby('user_id', observed=True)
         .agg(session_count=('label', 'count'), journey=('label', lambda s: ' -> '.join(s)))
         .reset_index()
     )
