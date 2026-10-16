@@ -4,6 +4,7 @@ import os
 from typing import Any, Dict, Optional
 
 from .analytics import format_business_report
+from .loops import LOOP_INFERENCE_NOTE
 
 _STYLE = """
   body { font-family: -apple-system, Arial, sans-serif; margin: 2rem; color: #1a1a1a; max-width: 1100px; }
@@ -145,6 +146,110 @@ across {summary.get('total_cases', 0):,} cases.</p>
 <tr><th>Route</th>{headers}</tr>
 {_table_rows(rows, columns)}
 </table>"""
+
+
+def _build_loop_section(loops: Dict[str, Any] | None) -> str:
+    """Back-navigation, repeat visits, what follows a loop and (when groups were
+    defined) group switches, or '' when the analysis didn't run."""
+    if not loops or not loops.get('summary'):
+        return ""
+    summary = loops['summary']
+
+    patterns = {
+        p.replace(' -> ', ' → '): {
+            'occurrences': f"{s['occurrences']:,}", 'cases': f"{s['cases']:,}",
+            'case_share': f"{s['case_share']:.1f}%",
+        }
+        for p, s in loops.get('back_navigation', {}).items()
+    }
+    repeats = {
+        act: {
+            'repeat_case_share': f"{s['repeat_case_share']:.1f}%", 'repeat_events': f"{s['repeat_events']:,}",
+            'self_loop_events': f"{s['self_loop_events']:,}", 'visits_per_case': f"{s['visits_per_case']:.2f}",
+        }
+        for act, s in loops.get('repeats', {}).items()
+    }
+
+    after = loops.get('after_loop', {}).get('back_navigation', {})
+    after_html = ""
+    if after.get('loops'):
+        position = after.get('position', {})
+        next_rows = {act: {'share': f"{s['share']:.1f}%"} for act, s in after.get('next_activity', {}).items()}
+        after_html = f"""
+<h3>After a Back-navigation</h3>
+<p>{after.get('exit_share', 0):.1f}% of back-navigations end the case. They happen early in the journey
+{position.get('early', 0):.0f}% of the time, in the middle {position.get('middle', 0):.0f}% and late
+{position.get('late', 0):.0f}%.</p>
+<table>
+<tr><th>Next Activity</th><th>Share</th></tr>
+{_table_rows(next_rows, ['share'])}
+</table>"""
+
+    outcomes_html = ""
+    outcomes = loops.get('outcomes')
+    if outcomes:
+        labels = {'back_navigation': 'Back-navigation', 'repeat': 'Repeat visit'}
+        rows = {
+            labels[kind]: {
+                'with': f"{o['with']['conversion_rate']:.1f}% ({o['with']['cases']:,} cases)",
+                'without': f"{o['without']['conversion_rate']:.1f}% ({o['without']['cases']:,} cases)",
+            }
+            for kind, o in outcomes.items()
+        }
+        outcomes_html = f"""
+<h3>Conversion With and Without Loops</h3>
+<table>
+<tr><th>Loop</th><th>Cases With It</th><th>Cases Without It</th></tr>
+{_table_rows(rows, ['with', 'without'])}
+</table>"""
+
+    switches_html = ""
+    switches = loops.get('group_switches')
+    if switches:
+        sw = switches['summary']
+        rows = {
+            t.replace(' -> ', ' → '): {
+                'occurrences': f"{s['occurrences']:,}", 'cases': f"{s['cases']:,}",
+                'case_share': f"{s['case_share']:.1f}%",
+            }
+            for t, s in switches.get('transitions', {}).items()
+        }
+        basis = (
+            f"values of column '{html.escape(str(switches.get('group_col')))}'"
+            if switches.get('source') == 'column' else "user-defined activity groups"
+        ) + ("; everything else counts as one more group, (other)" if switches.get('include_ungrouped')
+             else "; events in no group are skipped")
+        switches_html = f"""
+<h3>Switches Between Groups</h3>
+<p>Groups are {basis}. {sw['switch_case_share']:.1f}% of cases switch group at least once, and
+{sw['return_case_share']:.1f}% switch back to the group they just left.</p>
+<table>
+<tr><th>Switch</th><th>Occurrences</th><th>Cases</th><th>% of Cases</th></tr>
+{_table_rows(rows, ['occurrences', 'cases', 'case_share'])}
+</table>"""
+
+    return f"""
+<h2>Loops and Back-navigation</h2>
+<p class="note">{html.escape(LOOP_INFERENCE_NOTE.replace(' -> ', ' → '))}</p>
+<div class="metrics">
+  <div class="metric"><div class="label">Cases with Back-navigation</div><div class="value">{summary['back_nav_case_share']:.1f}%</div></div>
+  <div class="metric"><div class="label">Cases with Repeat Visits</div><div class="value">{summary['repeat_case_share']:.1f}%</div></div>
+  <div class="metric"><div class="label">Back-navigation Events</div><div class="value">{summary['back_nav_events']:,}</div></div>
+  <div class="metric"><div class="label">Repeat-visit Events</div><div class="value">{summary['repeat_events']:,}</div></div>
+</div>
+<h3>Most Common Back-navigation</h3>
+<table>
+<tr><th>Pattern</th><th>Occurrences</th><th>Cases</th><th>% of Cases</th></tr>
+{_table_rows(patterns, ['occurrences', 'cases', 'case_share'])}
+</table>
+<h3>Repeated Activities</h3>
+<table>
+<tr><th>Activity</th><th>% of Its Cases Repeating</th><th>Repeat Events</th><th>Of Which Immediate (A → A)</th><th>Visits per Case</th></tr>
+{_table_rows(repeats, ['repeat_case_share', 'repeat_events', 'self_loop_events', 'visits_per_case'])}
+</table>
+{after_html}
+{outcomes_html}
+{switches_html}"""
 
 
 def _build_narrative_summary(results: Dict[str, Any]) -> str:
@@ -324,6 +429,7 @@ def generate_html_report(results: Dict[str, Any], ai_conclusion: Optional[Dict[s
     main_flow_img = _embed_image(viz.get('bottlenecks'))
 
     variant_outcomes_section = _build_variant_outcomes_section(results.get('variant_outcomes'))
+    loop_section = _build_loop_section(results.get('loop_analysis'))
 
     narrative_summary = _build_narrative_summary(results) if results else ""
     ai_conclusion_section = _build_ai_conclusion_section(ai_conclusion)
@@ -434,6 +540,7 @@ def generate_html_report(results: Dict[str, Any], ai_conclusion: Optional[Dict[s
 {_table_rows(variant_perf.get('top_variants', {}), ['frequency', 'percentage'])}
 </table>
 {variant_outcomes_section}
+{loop_section}
 {funnel_section}
 {business_section}"""
 
@@ -452,7 +559,7 @@ def _format_comparison_cell(column: str, value: Any) -> str:
             return f"{float(value):.0f}"
         except (TypeError, ValueError):
             return str(value)
-    if column == 'repeat_rate':
+    if column in ('repeat_rate', 'back_nav_case_share', 'repeat_case_share', 'group_switch_case_share'):
         try:
             return f"{float(value):.1f}%"
         except (TypeError, ValueError):
@@ -494,8 +601,13 @@ has the healthiest process (health score <strong>{best_health[1].get('health_sco
 </div>
 """
 
-    columns = ['cases', 'health_score', 'fitness_score', 'precision_score', 'repeat_rate', 'top_variant']
-    headers = ['Cases', 'Health Score', 'Fitness', 'Precision', 'Repeat Rate', 'Most Common Path']
+    columns = ['cases', 'health_score', 'fitness_score', 'precision_score', 'repeat_rate',
+               'back_nav_case_share', 'repeat_case_share', 'top_variant']
+    headers = ['Cases', 'Health Score', 'Fitness', 'Precision', 'Repeat Rate',
+               'Back-navigation', 'Repeat Visits', 'Most Common Path']
+    if any('group_switch_case_share' in row for row in comparison_table.values()):
+        columns.insert(-1, 'group_switch_case_share')
+        headers.insert(-1, 'Group Switches')
     rows = []
     for value, row in comparison_table.items():
         cells = "".join(

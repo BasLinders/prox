@@ -161,3 +161,21 @@ def test_fit_funnel_drops_missing_steps_and_segment():
 
 def test_fit_funnel_none_passes_through():
     assert fit_funnel_to_log(None, ["a"], []) == (None, [])
+
+
+_LOOP_PARAMS = {"activity_groups": {"Nav": ["menu", "gone"]}, "group_col": None, "include_ungrouped": False}
+
+
+def test_preset_keeps_loop_groups_and_fits_them_to_the_log():
+    kept = extract_preset_config(create_analysis_config(loop_params=_LOOP_PARAMS))
+    assert kept["loop_params"] == _LOOP_PARAMS
+
+    fitted, notes = fit_config_to_log(kept, ["menu"], [])
+    assert fitted["loop_params"]["activity_groups"] == {"Nav": ["menu"]}
+    assert any("gone" in n for n in notes)
+
+
+def test_preset_with_malformed_loop_groups_is_rejected():
+    preset = build_preset("Bad loops", create_analysis_config(loop_params={"activity_groups": {"Nav": "menu"}}))
+    with pytest.raises(PresetError, match="activity_groups"):
+        preset_from_json(json.dumps(preset))

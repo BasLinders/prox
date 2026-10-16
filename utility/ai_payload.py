@@ -41,6 +41,7 @@ SECTION_LABELS = {
     "process_performance": "Process performance",
     "variants": "Variants",
     "variant_outcomes": "Conversion and revenue per route",
+    "loops": "Loops & switches",
     "bottlenecks": "Bottlenecks",
     "conformance_discovered_model": "Conformance (discovered model)",
     "conformance_reference_model": "Conformance vs. reference model",
@@ -203,6 +204,63 @@ def _variant_outcomes(results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         section["top_routes_by_revenue"] = [
             row(r, v) for r, v in _top_by(routes, "revenue") if v.get("revenue")
         ]
+    return section
+
+
+def _loops(results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    loops = results.get("loop_analysis") or {}
+    summary = loops.get("summary") or {}
+    if not summary:
+        return None
+    after = (loops.get("after_loop") or {}).get("back_navigation") or {}
+    section = {
+        "note": (
+            "Back-navigation is a return to the previous activity (A -> B -> A), inferred because a "
+            "browser back isn't an event; a link back to A looks the same. A repeat visit is any "
+            "activity seen again within the same case."
+        ),
+        "pct_of_cases_with_back_navigation": summary.get("back_nav_case_share"),
+        "pct_of_cases_with_repeat_visits": summary.get("repeat_case_share"),
+        "back_navigation_events": summary.get("back_nav_events"),
+        "repeat_visit_events": summary.get("repeat_events"),
+        "top_back_navigation_patterns": [
+            {"pattern": p, "occurrences": v.get("occurrences"), "pct_of_cases": v.get("case_share")}
+            for p, v in list((loops.get("back_navigation") or {}).items())[:_TOP_N]
+        ],
+        "most_repeated_activities": [
+            {"activity": a, "repeat_events": v.get("repeat_events"),
+             "pct_of_its_cases_repeating": v.get("repeat_case_share")}
+            for a, v in list((loops.get("repeats") or {}).items())[:_TOP_N]
+        ],
+        "after_back_navigation": {
+            "pct_ending_the_case": after.get("exit_share"),
+            "position_pct": after.get("position"),
+            "next_activities": [
+                {"activity": a, "pct": v.get("share")}
+                for a, v in list((after.get("next_activity") or {}).items())[:_TOP_N]
+            ],
+        } if after.get("loops") else None,
+    }
+    outcomes = loops.get("outcomes")
+    if outcomes:
+        section["conversion_rate_pct_with_vs_without"] = {
+            kind: {"with": o["with"]["conversion_rate"], "without": o["without"]["conversion_rate"]}
+            for kind, o in outcomes.items()
+        }
+    switches = loops.get("group_switches")
+    if switches:
+        section["group_switches"] = {
+            "groups_from": switches.get("group_col") or "user-defined activity groups",
+            "events_outside_the_groups": (
+                "counted as one more group, '(other)'" if switches.get("include_ungrouped") else "skipped"
+            ),
+            "pct_of_cases_switching": switches["summary"].get("switch_case_share"),
+            "pct_of_cases_switching_back": switches["summary"].get("return_case_share"),
+            "top_switches": [
+                {"switch": t, "occurrences": v.get("occurrences"), "pct_of_cases": v.get("case_share")}
+                for t, v in list((switches.get("transitions") or {}).items())[:_TOP_N]
+            ],
+        }
     return section
 
 
@@ -396,6 +454,9 @@ def _segment_comparison(segment_result: Optional[Dict[str, Any]]) -> Optional[Di
                 "fitness": row.get("fitness_score"),
                 "precision": row.get("precision_score"),
                 "repeat_rate_pct": row.get("repeat_rate"),
+                "pct_of_cases_with_back_navigation": row.get("back_nav_case_share"),
+                "pct_of_cases_with_repeat_visits": row.get("repeat_case_share"),
+                "pct_of_cases_switching_group": row.get("group_switch_case_share"),
                 "most_common_variant": row.get("top_variant"),
             }
             for value, row in table.items()
@@ -487,6 +548,7 @@ def build_ai_payload(
         "process_performance": _process_performance(results),
         "variants": _variants(results),
         "variant_outcomes": _variant_outcomes(results),
+        "loops": _loops(results),
         "bottlenecks": _bottlenecks(results),
         "conformance_discovered_model": _discovered_conformance(results),
         "conformance_reference_model": _reference_conformance(reference_conformance),

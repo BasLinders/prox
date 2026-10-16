@@ -106,3 +106,31 @@ def test_run_full_analysis_includes_process_graph():
     graph = results['process_graph']
     assert graph['n_cases'] == 3
     assert graph['happy_path'] == ['a', 'b', 'c']
+
+
+def test_run_full_analysis_includes_loop_analysis_with_configured_groups():
+    from conftest import make_event_log
+    base = pd.Timestamp('2024-01-01')
+    rows = []
+    for i in range(3):
+        for j, act in enumerate(['list', 'item', 'list', 'search']):
+            rows.append((f'c{i}', act, base + pd.Timedelta(hours=i, minutes=j)))
+    df = make_event_log(rows)
+    config = create_analysis_config(
+        filter_steps=[], sample_size=10,
+        loop_params={'activity_groups': {'Browse': ['list', 'item'], 'Search': ['search']}, 'group_col': None},
+    )
+    results = run_full_analysis(df, config=config)
+
+    loops = results['loop_analysis']
+    assert loops['summary']['back_nav_case_share'] == 100
+    assert list(loops['group_switches']['transitions']) == ['Browse -> Search']
+
+
+def test_run_full_analysis_loop_analysis_without_groups():
+    df = make_simple_variant_log(n_cases=3)
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+    results = run_full_analysis(df, config=config)
+
+    assert results['loop_analysis']['summary']['back_nav_events'] == 0
+    assert results['loop_analysis']['group_switches'] is None

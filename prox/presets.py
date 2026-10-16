@@ -1,13 +1,14 @@
 """
 Config presets: a small JSON file holding the analysis settings a repeat
-analyst re-enters every session (sidebar, filter, sampling) plus the funnel
-definition, that can be applied to any new upload.
+analyst re-enters every session (sidebar, filter, sampling, the Loops &
+Switches tab's activity groups) plus the funnel definition, that can be
+applied to any new upload.
 
 Distinct from saved runs (prox/saved_runs.py): a saved run restores its
 settings only together with its own event log and results. A preset carries
 no data at all, so it applies to whatever log is loaded next - which is why
 `fit_config_to_log` / `fit_funnel_to_log` exist: the new log may not contain
-an activity, column or funnel step the preset names, and those have to be
+an activity, column, loop group activity or funnel step the preset names, and those have to be
 dropped (and reported) rather than fed to a widget that can't show them.
 
 Only reusable, machine-independent settings are kept. CPU cores, chunk sizes
@@ -32,6 +33,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Tuple
 
+from .loops import fit_loop_params_to_log
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PRESETS_DIR = ".prox_presets"
@@ -47,6 +50,7 @@ _CONFIG_FIELDS = {
     "conformance_params": ("algorithm", "calculate_precision"),
     "sampling_config": None,
     "filter_steps": None,
+    "loop_params": None,
 }
 
 _SAMPLING_NONE_SENTINEL = "case:concept:name"
@@ -127,6 +131,9 @@ def validate_preset(obj: Any) -> Dict[str, Any]:
     for step in config.get("filter_steps") or []:
         if not isinstance(step, dict) or not isinstance(step.get("type"), str):
             raise PresetError("Each filter step must be an object with a 'type'.")
+    groups = (config.get("loop_params") or {}).get("activity_groups") or {}
+    if not isinstance(groups, dict) or not all(isinstance(a, list) for a in groups.values()):
+        raise PresetError("'loop_params.activity_groups' must map each group name to a list of activities.")
     funnel = obj.get("funnel")
     if funnel is not None:
         if not isinstance(funnel, dict) or funnel.get("mode") not in FUNNEL_MODES:
@@ -202,8 +209,8 @@ def fit_config_to_log(
     config: Dict[str, Any], activities: List[str], columns: List[str]
 ) -> Tuple[Dict[str, Any], List[str]]:
     """Returns (config, notes): config without the filter activities, crop
-    end point and sampling column the log doesn't have. notes is one
-    readable line per thing dropped."""
+    end point, sampling column and loop group activities/column the log
+    doesn't have. notes is one readable line per thing dropped."""
     known_acts = set(activities)
     known_cols = set(columns)
     notes: List[str] = []
@@ -252,6 +259,10 @@ def fit_config_to_log(
     if strata and strata != _SAMPLING_NONE_SENTINEL and strata not in known_cols:
         notes.append(f"Sampling: priority column '{strata}' is not in this log - plain random sample used.")
         fitted["sampling_config"] = {**sampling, "strata_col": _SAMPLING_NONE_SENTINEL}
+
+    if config.get("loop_params"):
+        fitted["loop_params"], loop_notes = fit_loop_params_to_log(config["loop_params"], activities, columns)
+        notes.extend(loop_notes)
 
     return fitted, notes
 

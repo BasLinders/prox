@@ -89,6 +89,26 @@ def _build_session(user_id, session_num, start_time, rng):
                 "add_to_cart": False,
             })
 
+        # Back-navigation: from a product page back to the list and on to
+        # another product, sometimes in another category (loop analysis).
+        if stage == "view_item" and rng.random() < 0.3:
+            browsed = rng.choice(CATEGORIES) if rng.random() < 0.4 else category
+            for back_stage, page_type in (("view_item_list", "listing"), ("view_item", "product")):
+                t += pd.Timedelta(seconds=rng.randint(5, 60))
+                rows.append({
+                    "user_pseudo_id": user_id,
+                    "ga_session_id": session_id,
+                    "event_name": back_stage,
+                    "event_timestamp": t,
+                    "event_value": np.nan,
+                    "category": browsed,
+                    "device": device,
+                    "traffic_source": traffic_source,
+                    "page_type": page_type,
+                    "purchase": False,
+                    "add_to_cart": False,
+                })
+
     return rows
 
 

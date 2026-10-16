@@ -41,6 +41,7 @@ from reportlab.platypus import (
 )
 
 from prox.analytics import format_business_report
+from prox.loops import LOOP_INFERENCE_NOTE
 
 _PAGE_SIZE = letter
 _MARGIN = 0.75 * inch
@@ -395,6 +396,70 @@ def _section_sessions(results, segment_result, styles) -> List:
     return story
 
 
+def _section_loops(results, segment_result, styles) -> List:
+    loops = results.get("loop_analysis") or {}
+    summary = loops.get("summary") or {}
+    story = [_heading("Loops & Switches", styles)]
+    if not summary:
+        story.append(Paragraph("No loop data available.", styles["Normal"]))
+        return story
+    story.append(Paragraph(html.escape(LOOP_INFERENCE_NOTE), styles["Normal"]))
+    story.append(Spacer(1, 6))
+    story.append(_metrics_table([
+        ("Cases with back-navigation", f"{summary['back_nav_case_share']:.1f}%"),
+        ("Cases with repeat visits", f"{summary['repeat_case_share']:.1f}%"),
+        ("Back-navigation events", f"{summary['back_nav_events']:,}"),
+        ("Repeat-visit events", f"{summary['repeat_events']:,}"),
+    ], styles))
+
+    patterns = loops.get("back_navigation") or {}
+    if patterns:
+        story.append(Spacer(1, 16))
+        story.append(_subheading("Most common back-navigation", styles))
+        story.append(_dict_table(
+            patterns,
+            ["occurrences", "cases", "case_share"], ["Occurrences", "Cases", "% of Cases"],
+        ))
+
+    repeats = loops.get("repeats") or {}
+    if repeats:
+        story.append(Spacer(1, 16))
+        story.append(_subheading("Repeated activities", styles))
+        story.append(_dict_table(
+            repeats, ["repeat_case_share", "repeat_events", "self_loop_events", "visits_per_case"],
+            ["% of Its Cases Repeating", "Repeat Events", "Immediate (A -> A)", "Visits per Case"],
+        ))
+
+    after = (loops.get("after_loop") or {}).get("back_navigation") or {}
+    if after.get("loops"):
+        story.append(Spacer(1, 16))
+        story.append(_subheading("After a back-navigation", styles))
+        position = after.get("position") or {}
+        story.append(Paragraph(
+            f"{after['exit_share']:.1f}% of back-navigations end the case. Position in the journey: "
+            f"early {position.get('early', 0):.0f}%, middle {position.get('middle', 0):.0f}%, "
+            f"late {position.get('late', 0):.0f}%.",
+            styles["Normal"],
+        ))
+        story.append(Spacer(1, 6))
+        story.append(_dict_table(after.get("next_activity") or {}, ["count", "share"], ["Count", "Share (%)"]))
+
+    switches = loops.get("group_switches")
+    if switches and switches.get("transitions"):
+        story.append(Spacer(1, 16))
+        story.append(_subheading("Switches between groups", styles))
+        story.append(Paragraph(
+            f"{switches['summary']['switch_case_share']:.1f}% of cases switch group at least once.",
+            styles["Normal"],
+        ))
+        story.append(Spacer(1, 6))
+        story.append(_dict_table(
+            switches["transitions"],
+            ["occurrences", "cases", "case_share"], ["Occurrences", "Cases", "% of Cases"],
+        ))
+    return story
+
+
 def _section_segments(results, segment_result, styles) -> List:
     story = [_heading("Segment Comparison", styles)]
     comparison_table = (segment_result or {}).get("comparison_table", {})
@@ -434,6 +499,9 @@ _SECTION_DEFS: List[tuple] = [
     ("funnel", "Funnel",
      lambda r, sr: bool((r.get("funnel_analysis") or {}).get("stages")),
      _section_funnel),
+    ("loops", "Loops & Switches",
+     lambda r, sr: bool((r.get("loop_analysis") or {}).get("summary")),
+     _section_loops),
     ("business", "Business Insights",
      lambda r, sr: bool(r.get("repeat_purchase_analysis")),
      _section_business),

@@ -204,3 +204,23 @@ def test_variant_outcomes_section_is_capped_to_top_five_routes():
 
 def test_variant_outcomes_section_is_not_run_without_outcomes():
     assert "variant_outcomes" in build_ai_payload({})["not_run"]
+
+
+def test_loops_section_from_a_run_with_back_navigation():
+    from prox.loops import analyze_loops
+    df = make_event_log([
+        ('1', 'list', '2024-01-01 00:00'), ('1', 'item', '2024-01-01 00:01'),
+        ('1', 'list', '2024-01-01 00:02'), ('2', 'list', '2024-01-01 00:00'),
+    ])
+    payload = build_ai_payload({"loop_analysis": analyze_loops(df)})
+
+    section = payload["loops"]
+    assert section["pct_of_cases_with_back_navigation"] == 50
+    assert section["top_back_navigation_patterns"][0]["pattern"] == "list -> item -> list"
+    assert section["after_back_navigation"]["pct_ending_the_case"] == 100
+    assert "group_switches" not in section
+    json.dumps(payload)
+
+
+def test_loops_section_is_not_run_without_loop_data():
+    assert "loops" in build_ai_payload({})["not_run"]

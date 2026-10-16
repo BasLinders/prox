@@ -335,3 +335,73 @@ def test_failed_run_names_the_filter_that_left_no_cases(app):
         for e in app.error
     )
     assert "results" not in app.session_state or not app.session_state["results"]
+
+
+def test_loops_tab_measures_back_navigation_and_group_switches(app):
+    _run_mock_analysis(app)
+    app.session_state["active_results_tab"] = "Loops & Switches"
+    app.run()
+
+    assert not app.exception
+    assert any(m.label == "Cases with Back-navigation" for m in app.metric)
+    assert any("browser back isn't recorded" in i.value for i in app.info)
+
+    app.radio(key="cfg_loop_group_mode_default").set_value("A column's values").run()
+    app.selectbox(key="cfg_loop_group_col_default").set_value("category").run()
+    next(b for b in app.button if b.label == "Analyse Switches").click().run()
+
+    assert not app.exception
+    expected = {"activity_groups": {}, "group_col": "category", "include_ungrouped": False}
+    assert app.session_state["cfg_loop_params_default"] == expected
+    assert app.session_state["loop_result"]["group_switches"]["group_col"] == "category"
+    assert any(m.label == "Cases Switching Group" for m in app.metric)
+
+    # The next run computes switches with the same groups itself.
+    next(b for b in app.button if b.label == "Run Analysis").click().run()
+    assert not app.exception
+    assert app.session_state["config"]["loop_params"] == expected
+    assert app.session_state["results"]["loop_analysis"]["group_switches"] is not None
+    assert "loop_result" not in app.session_state
+
+
+def test_loop_groups_are_saved_in_and_restored_from_a_preset(app):
+    _run_mock_analysis(app)
+    app.session_state["active_results_tab"] = "Loops & Switches"
+    app.run()
+    app.multiselect(key="cfg_loop_group_acts_0_default").set_value(["view_item_list"])
+    app.text_input(key="cfg_loop_group_name_0_default").set_value("Lists")
+    app.number_input(key="cfg_loop_group_count_default").set_value(1)
+    app.checkbox(key="cfg_loop_include_ungrouped_default").check().run()
+    next(b for b in app.button if b.label == "Analyse Switches").click().run()
+    assert not app.exception
+    assert "(other)" in app.session_state["loop_result"]["group_switches"]["group_stats"]
+
+    app.text_input(key="save_preset_name").set_value("With loops").run()
+    next(b for b in app.button if b.label == "Save preset").click().run()
+    assert not app.exception
+    (preset_id, preset), = list_presets(presets_dir=DEFAULT_PRESETS_DIR)
+    app.run()  # the sidebar lists presets before the save button runs
+    saved_loops = {"activity_groups": {"Lists": ["view_item_list"]}, "group_col": None, "include_ungrouped": True}
+    assert preset["config"]["loop_params"] == saved_loops
+
+    app.selectbox(key="preset_choice").set_value(preset_id).run()
+    next(b for b in app.button if b.label == "Apply").click().run()
+    assert not app.exception
+    assert app.session_state["cfg_loop_params_preset1"] == saved_loops
+    next(b for b in app.button if b.label == "Run Analysis").click().run()
+    assert not app.exception
+    assert app.session_state["config"]["loop_params"] == saved_loops
+
+
+def test_saved_run_restores_its_loop_groups(app):
+    loop_params = {"activity_groups": {}, "group_col": "category", "include_ungrouped": False}
+    run = save_run(
+        _mock_event_log(), "With loops", "user", save_dir=DEFAULT_SAVED_RUNS_DIR,
+        config=create_analysis_config(loop_params=loop_params),
+    )
+    app.run()
+    app.radio(key="data_source_choice").set_value("Load saved run").run()
+    app.selectbox[0].set_value(run["run_id"]).run()
+
+    assert not app.exception
+    assert app.session_state[f"cfg_loop_params_{run['run_id']}"] == loop_params

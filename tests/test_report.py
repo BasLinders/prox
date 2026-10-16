@@ -297,3 +297,46 @@ def test_generate_html_report_omits_route_section_without_purchases():
     assert results is not None
 
     assert "Conversion and Revenue per Route" not in generate_html_report(results)
+
+
+def _make_loop_results():
+    from prox.loops import analyze_loops
+    df = make_event_log([
+        ('1', 'list', '2024-01-01 00:00'), ('1', '<item>', '2024-01-01 00:01'),
+        ('1', 'list', '2024-01-01 00:02'), ('1', 'search', '2024-01-01 00:03'),
+        ('2', 'list', '2024-01-01 00:00'), ('2', 'search', '2024-01-01 00:01'),
+    ])
+    return {'loop_analysis': analyze_loops(
+        df, activity_groups={'Browse': ['list', '<item>'], 'Search': ['search']}
+    )}
+
+
+def test_generate_html_report_includes_loop_section_with_the_inference_note():
+    report = generate_html_report(_make_loop_results())
+
+    assert "Loops and Back-navigation" in report
+    assert "browser back isn&#x27;t recorded as an event" in report
+    assert "list → &lt;item&gt; → list" in report
+    assert "<item>" not in report
+    assert "Switches Between Groups" in report
+    assert "Browse → Search" in report
+
+
+def test_generate_html_report_omits_loop_section_without_loop_data():
+    assert "Loops and Back-navigation" not in generate_html_report({})
+
+
+def test_generate_segment_comparison_report_shows_loop_shares():
+    segment_result = {
+        'comparison_table': {
+            'mobile': {'cases': 5, 'health_score': 50.0, 'back_nav_case_share': 40.0,
+                       'repeat_case_share': 60.0, 'group_switch_case_share': 20.0, 'top_variant': 'a'},
+        },
+        'segments': {},
+    }
+    report = generate_segment_comparison_report(segment_result)
+
+    assert "<th>Back-navigation</th>" in report
+    assert "<th>Group Switches</th>" in report
+    assert "<td>40.0%</td>" in report
+    assert "<td>20.0%</td>" in report

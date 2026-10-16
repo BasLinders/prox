@@ -8,6 +8,7 @@ load_and_validate_csv   CSV ingestion with auto column mapping
 create_analysis_config  Build a config dict for run_full_analysis
 CONFIG                  Default configuration
 merge_incremental       Merge a freshly-loaded log with a cached recurring dataset
+analyze_loops           Back-navigation, repeat-visit and group-switch patterns
 train_propensity_model  Train a conversion-propensity classifier (optional
                          extra: pip install -e ".[ml]")
 """
@@ -47,6 +48,7 @@ from .analytics import (
 )
 from .visualizer import visualize_focused_insights, export_results, render_petri_net
 from .process_graph import build_process_graph, prune_process_graph
+from .loops import analyze_loops
 from .report import (
     generate_html_report,
     generate_segment_comparison_report,
@@ -109,6 +111,7 @@ __all__ = [
     "format_business_report",
     "classify_sessions",
     "summarize_user_journeys",
+    "analyze_loops",
     "visualize_focused_insights",
     "export_results",
     "render_petri_net",
