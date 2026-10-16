@@ -125,7 +125,7 @@ ProX expects a CSV file with at least three columns:
 | Timestamp | When the event occurred | `timestamp`, `event_timestamp`, `created_at`, `datetime`, … |
 | User ID | Customer identifier (for composite key) | `user_id`, `user_pseudo_id`, `customer_id`, … |
 
-Column names are auto-detected, including Dutch aliases (`gebruikers id`, `tijdstempel`, etc.) — see `COLUMN_MAPPINGS` in `ProX/config.py` for the full list. If both a user ID and a session ID are present, ProX creates a composite case key (`user_id + session_id`) to correctly scope sessions per user.
+Column names are auto-detected, including Dutch aliases (`gebruikers id`, `tijdstempel`, etc.) — see `COLUMN_MAPPINGS` in `prox/config.py` for the full list. If both a user ID and a session ID are present, ProX creates a composite case key (`user_id + session_id`) to correctly scope sessions per user.
 
 Optional columns that unlock additional analytics:
 
@@ -144,7 +144,7 @@ None of the above is e-commerce-only by requirement — the Funnel tab works on 
 
 ## Configuration
 
-`create_analysis_config()` builds the config dict `run_full_analysis()` expects. Parameters are grouped below by the pipeline stage they affect; see `ProX/config.py` for the full defaults.
+`create_analysis_config()` builds the config dict `run_full_analysis()` expects. Parameters are grouped below by the pipeline stage they affect; see `prox/config.py` for the full defaults.
 
 ### Discovery
 
@@ -195,7 +195,7 @@ Back-navigation and repeat visits are always measured, over every activity; swit
 
 ### Outlier handling (winsorization)
 
-Winsorization of the `price`/revenue column is opt-in and UI-only (not part of `CONFIG`/`business_params`) — off by default. Two methods are available: capping at mean ± N standard deviations (N between 1 and 5, default 3.0), or capping at the [P, 100−P] percentile range (P between 0.5 and 10, default 1.0). To use it from the engine directly, call `winsorize_series()` from the `ProX` package before running the pipeline.
+Winsorization of the `price`/revenue column is opt-in and UI-only (not part of `CONFIG`/`business_params`) — off by default. Two methods are available: capping at mean ± N standard deviations (N between 1 and 5, default 3.0), or capping at the [P, 100−P] percentile range (P between 0.5 and 10, default 1.0). To use it from the engine directly, call `winsorize_series()` from the `prox` package before running the pipeline.
 
 ### Data loading
 
@@ -232,7 +232,7 @@ Available filter types: `activity`, `crop`, `case_duration`, `endpoints`, `attri
 ## Project Structure
 
 ```
-ProX/               Engine package — import this from any Python script
+prox/               Engine package — import this from any Python script
 ├── __init__.py     Public API
 ├── config.py       Column mappings and default configuration
 ├── data_manager.py CSV loading, cleaning, filtering, sampling, winsorization
@@ -247,16 +247,16 @@ ProX/               Engine package — import this from any Python script
 ├── report.py       Self-contained HTML report export
 ├── segments.py     Segment comparison — runs the pipeline per segment, optionally in parallel
 ├── incremental.py  On-disk cache for merging recurring exports across runs
-├── predictive.py   Conversion-propensity model (Predictive Insights tab, optional: ProX[ml])
+├── predictive.py   Conversion-propensity model (Predictive Insights tab, optional: prox[ml])
 ├── mock_data.py    Mock GA4-style event log generator
 └── pipeline.py     Orchestrator — runs all stages in sequence
 
 main.py             Streamlit app (UI layer only)
 utility/            Standalone UI-layer tools main.py wires in - BigQuery live
                     data source (utility/bigquery_source.py, optional:
-                    ProX[bigquery] + .streamlit/secrets.toml) and the modular,
+                    prox[bigquery] + .streamlit/secrets.toml) and the modular,
                     opt-in-sections PDF report builder (utility/pdf_builder.py)
-tests/              pytest suite covering the ProX/ engine and utility/pdf_builder.py
+tests/              pytest suite covering the prox/engine and utility/pdf_builder.py
 scripts/            Dev tooling (e.g. pipeline profiling), not part of the installable package
 docs/               Reference docs (see Documentation below) and development status
 output/             Generated PNGs and CSVs (created on first run)
@@ -284,7 +284,7 @@ output/             Generated PNGs and CSVs (created on first run)
 
 ## Limitations
 
-- Precision calculation uses ETC Conformance Token (fast apProXimation). Full alignment-based precision is disabled due to memory cost on standard hardware.
+- Precision calculation uses ETC Conformance Token (fast approximation). Full alignment-based precision is disabled due to memory cost on standard hardware.
 - Visualisations require Graphviz to be installed and on the system PATH.
 - Very large logs (>10 000 events after filtering) will trigger a warning; enabling sampling is recommended.
 - Back-navigation is inferred from an A → B → A pattern, because a browser back isn't recorded as an event. Following a link back to A looks exactly the same.
