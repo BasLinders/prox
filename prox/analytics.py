@@ -414,7 +414,7 @@ def _generate_performance_recommendations(results: Dict[str, Any], health_score:
         top_bn = bn_summary.get('top_activity_bottleneck')
         if top_bn:
             recommendations.append(
-                f"Critical bottleneck at '{top_bn}'. Prioritise optimisation here."
+                f"Critical bottleneck at '{top_bn}'. Prioritise optimization here."
             )
 
         variant_info = results.get('variant_performance', {})
