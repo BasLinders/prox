@@ -783,16 +783,33 @@ def analyze_repeat_purchases(
 
             chart_category = os.path.join(output_folder, "revenue_by_category.png")
             try:
-                plt.figure(figsize=(8, 5))
-                top_cats = cat_df.head(10).reset_index()
-                sns.barplot(data=top_cats, x=real_category_col, y='revenue',
-                            hue=real_category_col, legend=False, palette="mako")
-                plt.title("Revenue by Category")
-                plt.ylabel(f"Revenue ({real_rev_col})")
-                plt.xticks(rotation=45, ha='right')
-                plt.tight_layout()
-                plt.savefig(chart_category)
-                plt.close()
+                # Plotted by position with plain-string labels. Handing seaborn
+                # the category column directly gave a slot to every category in
+                # its dtype once optimize_dataframe_memory made it categorical,
+                # not just these top 10: the labels piled on top of each other
+                # and the 10 bars shrank out of sight. Horizontal, so long
+                # category names stay readable without rotation.
+                top_cats = cat_df.head(10)
+                labels = [c if len(c) <= 32 else c[:31] + '…' for c in map(str, top_cats.index)]
+                values = top_cats['revenue'].to_numpy()
+                positions = range(len(top_cats))
+
+                fig, ax = plt.subplots(figsize=(8, 1.5 + 0.45 * len(top_cats)))
+                bars = ax.barh(positions, values, height=0.6, color='#2a78d6')
+                ax.set_yticks(positions, labels)
+                ax.invert_yaxis()  # highest revenue on top
+                ax.bar_label(bars, labels=[f"{v:,.0f}" for v in values], padding=4, fontsize=9, color='#444444')
+                ax.margins(x=0.12)
+                ax.xaxis.grid(True, color='#e6e6e6')
+                ax.set_axisbelow(True)
+                for side in ('top', 'right'):
+                    ax.spines[side].set_visible(False)
+                shown = f" (top 10 of {len(cat_df)})" if len(cat_df) > 10 else ""
+                ax.set_title(f"Revenue by Category{shown}")
+                ax.set_xlabel(f"Revenue ({real_rev_col})")
+                fig.tight_layout()
+                fig.savefig(chart_category)
+                plt.close(fig)
             except Exception as e:
                 logger.warning("Category chart failed: %s", e)
                 chart_category = None
