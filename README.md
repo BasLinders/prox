@@ -95,7 +95,7 @@ This opens the app in your browser. From there:
 The `ProX` package is fully importable for scripting or notebook use:
 
 ```python
-from ProX import load_and_validate_csv, create_analysis_config, run_full_analysis
+from prox import load_and_validate_csv, create_analysis_config, run_full_analysis
 
 df, messages, has_category = load_and_validate_csv(open("my_log.csv", "rb"))
 
