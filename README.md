@@ -25,6 +25,7 @@ A modular process mining tool for analysing customer journeys from any event log
 - **Conformance Checking** - Token Replay for fast fitness and precision scores; State Equation A\* for exact per-trace deviations (skipped and unsolicited activities), optionally parallelized across CPU cores.
 - **Bottleneck Analysis** - Activity and transition durations ranked by impact score; overall process health score.
 - **Variant Analysis** - Top-20 variants with frequency, coverage, and duration statistics. A second table shows conversion rate and revenue per *route* (a variant cut off at the first purchase, so buyers and non-buyers who took the same steps share a route), with each route's share of cases and revenue.
+- **Loops & Switches** - Measures the repeat and switch behaviour the process map only shows as arrows: back-navigation (A → B → A, inferred, since a browser back isn't an event), repeat visits to the same activity within a case, what follows a loop (next activity or exit) and where in the journey it happens, and conversion with vs. without loops. Define your own activity groups (e.g. menu navigation vs. search), or use a column such as category, to measure switches between them. The shares are also compared per segment in Segment Comparison.
 - **Business Insights** - Repeat buyer detection, inter-purchase timing, revenue multiplier (repeat vs. one-time buyers), average order value, cart abandonment rate, category-level revenue breakdown, and revenue-over-time trend.
 - **Funnel Analysis** - Conversion/drop-off rate across any sequence of activities you define, for any process in any industry — or let ProX auto-derive a likely order from the data as a starting point.
 - **Segment Comparison** - Split the log by any low-cardinality column (e.g. device, traffic source) and compare health score, fitness, precision, repeat rate, and happy path side by side, optionally run in parallel across CPU cores.
@@ -36,7 +37,7 @@ A modular process mining tool for analysing customer journeys from any event log
 - **Self-Contained HTML Reports** - Download a standalone report (no external dependencies, images embedded) for the full analysis or a segment comparison. Opens with a plain-language Executive Summary — health verdict, translated fitness/precision, biggest bottleneck, business/funnel highlights — for non-technical stakeholders, ahead of the detailed technical tables. Process-map diagrams are click-to-zoom.
 - **Custom PDF Reports** - Build a scoped PDF report by opting into just the result sections you want, via `reportlab` (no system PDF dependencies).
 - **Fast, Cached, and Local** - Chunked CSV loading for files up to 500 MB, categorical downcasting to reduce RAM usage, and Streamlit-layer caching (with capped cache sizes and background-threaded analysis) so re-running with unchanged inputs is near-instant and long runs don't disconnect the session. No cloud dependency and no GPU required — everything runs on your machine.
-- **Streamlit UI** - All results presented across nine tabs; no notebook required.
+- **Streamlit UI** - All results presented across ten tabs; no notebook required.
 
 ---
 
@@ -87,7 +88,7 @@ This opens the app in your browser. From there:
 3. **Handle outliers** (optional) by winsorizing revenue/price columns.
 4. **Configure** the discovery algorithm, noise threshold, conformance method, precision, CPU cores, event filters, and sampling (including stratification) inside the configuration form. **Apply Configuration** updates the filtered case and event counts without running anything.
 5. Click **Run Analysis**. It applies the form's current settings itself, so clicking Apply first is optional.
-6. Explore results across nine tabs: Process Maps, Variants, Bottlenecks, Conformance, Funnel, Business Insights, Session Insights, Segment Comparison, and Predictive Insights.
+6. Explore results across ten tabs: Process Maps, Variants, Loops & Switches, Bottlenecks, Conformance, Funnel, Business Insights, Session Insights, Segment Comparison, and Predictive Insights.
 7. **Download** a self-contained HTML report from the top of the page, a segment comparison report from the Segment Comparison tab, or build a scoped custom PDF report from the results page.
 
 ### Using the engine directly
@@ -109,7 +110,7 @@ config = create_analysis_config(
 results = run_full_analysis(df, config)
 ```
 
-`results` is a plain dict with keys: `log_summary`, `model`, `conformance`, `performance`, `visualizations`, `repeat_purchase_analysis`, `funnel_analysis`, and `variant_outcomes` (only when the log has purchase events).
+`results` is a plain dict with keys: `log_summary`, `model`, `conformance`, `performance`, `visualizations`, `repeat_purchase_analysis`, `funnel_analysis`, `loop_analysis`, and `variant_outcomes` (only when the log has purchase events).
 
 ---
 
@@ -184,6 +185,14 @@ None of the above is e-commerce-only by requirement — the Funnel tab works on 
 
 Default `business_params`: `{"user_col": "user_id", "revenue_col": "event_value", "purchase_values": ["purchase", "has_purchase"]}`. Set `cart_values` (default `["add_to_cart", "add_to_basket"]`) to change cart-abandonment detection, or `funnel_steps` (default `None`, auto-derived from the data) to define an explicit, ordered funnel — the same option exposed interactively in the Funnel tab.
 
+### Loops & switches
+
+| Parameter | Default | Description |
+|---|---|---|
+| `loop_params` | `{"activity_groups": {}, "group_col": None, "include_ungrouped": False}` | Groups to measure switches between: `activity_groups` maps a group name to its activities (e.g. `{"Navigation": ["view_item_list"], "Search": ["search"]}`), or `group_col` names a column whose values are the groups (e.g. `"category"`). `include_ungrouped` puts everything outside the groups in one more group, `(other)`, instead of skipping it |
+
+Back-navigation and repeat visits are always measured, over every activity; switches only when groups are set. By default, activities in no group are skipped, so a switch is a move straight from one group to another. With `include_ungrouped`, moves into and out of the other activities count too, and G1 → (other) → G1 counts as a switch back. Consecutive events in the same group count as one visit. In the app, groups are defined in the Loops & Switches tab and carried into later runs, Segment Comparison, presets and saved runs. `analyze_loops()` runs the same analysis on any event log.
+
 ### Outlier handling (winsorization)
 
 Winsorization of the `price`/revenue column is opt-in and UI-only (not part of `CONFIG`/`business_params`) — off by default. Two methods are available: capping at mean ± N standard deviations (N between 1 and 5, default 3.0), or capping at the [P, 100−P] percentile range (P between 0.5 and 10, default 1.0). To use it from the engine directly, call `winsorize_series()` from the `ProX` package before running the pipeline.
@@ -232,6 +241,7 @@ ProX/               Engine package — import this from any Python script
 ├── analytics.py    Performance metrics, bottlenecks, business insights, funnel analysis
 ├── visualizer.py   BPMN and Petri net diagram generation
 ├── process_graph.py Directly-follows graph data for the interactive process map
+├── loops.py        Back-navigation, repeat-visit and group-switch analysis
 ├── explorer_filters.py Turns clicks on that map into filter steps
 ├── components/     Interactive process map (Cytoscape.js, vendored, runs offline)
 ├── report.py       Self-contained HTML report export
@@ -265,6 +275,9 @@ output/             Generated PNGs and CSVs (created on first run)
 | **Value Multiplier** | Average lifetime revenue: repeat buyers ÷ one-time buyers. |
 | **Average Order Value** | Mean revenue per completed purchase. |
 | **Cart Abandonment Rate** | Percentage of add-to-cart sessions that didn't go on to purchase. |
+| **Back-navigation** | Percentage of cases that return to the activity they just left (A → B → A). |
+| **Repeat Visits** | Percentage of cases that visit the same activity more than once. |
+| **Group Switches** | Percentage of cases that move between two of your activity groups (or column values) at least once. |
 | **Funnel Drop-off** | Percentage of cases that reached a funnel stage but didn't continue to the next one. |
 
 ---
@@ -274,6 +287,7 @@ output/             Generated PNGs and CSVs (created on first run)
 - Precision calculation uses ETC Conformance Token (fast apProXimation). Full alignment-based precision is disabled due to memory cost on standard hardware.
 - Visualisations require Graphviz to be installed and on the system PATH.
 - Very large logs (>10 000 events after filtering) will trigger a warning; enabling sampling is recommended.
+- Back-navigation is inferred from an A → B → A pattern, because a browser back isn't recorded as an event. Following a link back to A looks exactly the same.
 - Funnel auto-derivation is a heuristic aimed at typical, roughly-linear processes — pass an explicit funnel definition (via the Funnel tab, or `funnel_steps` in `business_params`) for a guaranteed-correct funnel, especially on logs with a lot of optional/noise activity.
 
 ---

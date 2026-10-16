@@ -11,8 +11,8 @@ current even when the detail lives elsewhere — this is the one page meant
 to answer "where does PRoX development actually stand?" without opening
 five files.
 
-Last assessed 2026-10-06, against `main` — 275 tests passing, `pyflakes`
-clean.
+Last assessed 2026-10-16, against `feature/loop-switch-analysis` (#79) —
+385 tests passing, `pyflakes` clean.
 
 ---
 
@@ -35,7 +35,7 @@ clean.
 | AI Conclusion (optional, Gemini) | Complete | below, `AI_summary_roadmap.md` |
 | Follow-ups on shipped features (ML, performance, BigQuery) | Roadmapped (CPU Cores fix shipped) | below |
 | Process mining capability gaps (5 items, by effort) | Roadmapped (resource perspective partly shipped, interactive process explorer shipped) | below |
-| Product development options | Roadmapped (config presets shipped) | below |
+| Product development options | Roadmapped (config presets, route conversion and loop analysis shipped) | below |
 
 \* One sub-item — segment comparison v2 (automated golden-path diffing) —
 is deliberately deferred; see "Medium bets" below. Everything else under
@@ -734,12 +734,14 @@ payoff.
 
 - **Config presets — done.** A preset is a small JSON file
   (`prox/presets.py`, stored in `.prox_presets/`) holding the sidebar,
-  filter, sampling and funnel settings, with no event data, so it applies to
+  filter, sampling and funnel settings and the Loops & Switches activity
+  groups (#79), with no event data, so it applies to
   any new upload. It is saved from the **Save settings as preset** expander
   below Run Analysis, and applied, imported (JSON file) or deleted from the
   sidebar's **Configuration preset**. Machine-specific tuning (CPU cores,
-  chunk sizes) is left out. Activities, columns and funnel steps the new log
-  doesn't have are dropped with a warning instead of failing.
+  chunk sizes) is left out. Activities, columns, funnel steps and loop-group
+  activities the new log doesn't have are dropped with a warning instead of
+  failing.
 - **Conversion and revenue per variant — done (#78).**
   `analyze_variant_outcomes()` in `prox/analytics.py` groups cases by the
   route they took *up to* their first purchase and reports cases, conversion
@@ -753,6 +755,28 @@ payoff.
   as `variant_outcomes.csv`, and runs only when the log has purchase events.
   The AI Conclusion digest carries the five most common routes and the top
   five by revenue (aggregate-only, like its other sections).
+- **Loop, back-navigation and switch-pattern analysis — done (#79).** Loops
+  were arrows on the process map but unmeasured. `analyze_loops()` in
+  `prox/loops.py` reports, as share of cases and as event counts:
+  back-navigation (a return to the previous activity, A -> B -> A, inferred
+  because a browser back isn't an event - the UI and reports say so), repeat
+  visits per activity (including immediate A -> A repeats), what follows a
+  loop (next activity or exit) and where in the case it happens (early,
+  middle or late third), and, when the log has purchases, conversion of cases
+  with vs. without loops (an association, labelled as such). Switches are
+  measured between user-defined activity groups (e.g. menu navigation vs.
+  search) or a column's values (e.g. category), including switching back
+  (G1 -> G2 -> G1). Activities in no group are skipped by default, or count
+  as one more group, `(other)`, so the loops that run outside the groups show
+  up too. It runs in the pipeline (`results['loop_analysis']`, groups from
+  `config['loop_params']`) and has its own **Loops & Switches** tab, where
+  groups are defined after a run and recomputed on the run's own filtered and
+  sampled log. The groups then go into later runs, presets and saved runs.
+  Per segment it reuses `compare_segments()`: the comparison table gains
+  back-navigation, repeat-visit and group-switch case shares. Also in the
+  HTML and PDF reports, the segment report and the AI Conclusion digest. The
+  mock data generator now includes list <-> product back-navigation, some of
+  it across categories.
 
 **Still open:**
 - **Funnel in saved runs.** Deliberately not part of the presets change, but
@@ -763,6 +787,12 @@ payoff.
   handler) is all that is left; `main.py` already reads it back.
 - **Predictive, AI and segment-comparison settings in presets.** Left out of
   v1 on purpose.
+- **Loop analysis follow-ups (#79).** Not built: (a) longer back-navigation
+  (A -> B -> C -> A) - only returns after exactly one step count as
+  back-navigation now, longer ones show up as repeat visits only; (b) loop
+  and switch overlays on the interactive process map; (c) "what happens
+  after" and conversion for group switches, not only for activity loops;
+  (d) timing - how long a loop costs, e.g. extra minutes per back-navigation.
 
 #### Medium bets (real feature work, clear value)
 

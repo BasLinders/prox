@@ -108,6 +108,12 @@ CONFIG = {
         "purchase_values": ["purchase", "has_purchase"],
         "research_keywords": ["search", "filter", "view_item", "product"],
         "research_min_events": 3
+    },
+
+    "loop_params": {
+        "activity_groups": {},
+        "group_col": None,
+        "include_ungrouped": False
     }
 }
 
@@ -137,6 +143,7 @@ def create_analysis_config(
     chunk_size: int = 50000,
     remove_duplicates: bool = True,
     merge_page_views: bool = True,
+    loop_params: dict = None,
 ) -> Dict[str, Any]:
     return {
         "app_name": "PRoX",
@@ -201,5 +208,11 @@ def create_analysis_config(
             "purchase_values": ["purchase", "has_purchase"],
             "research_keywords": ["search", "filter", "view_item", "product"],
             "research_min_events": 3
+        },
+
+        "loop_params": loop_params if loop_params is not None else {
+            "activity_groups": {},
+            "group_col": None,
+            "include_ungrouped": False
         }
     }

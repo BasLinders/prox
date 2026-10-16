@@ -160,3 +160,22 @@ def test_section_variants_renders_route_conversion_table_when_present():
     story = _section_variants(results, None, _styles())
 
     assert len(story) > len(without)
+
+
+def _loop_results():
+    from prox.loops import analyze_loops
+    from conftest import make_event_log
+    df = make_event_log([
+        ('1', 'list', '2024-01-01 00:00'), ('1', 'item', '2024-01-01 00:01'),
+        ('1', 'list', '2024-01-01 00:02'), ('1', 'search', '2024-01-01 00:03'),
+    ])
+    return {'loop_analysis': analyze_loops(df, activity_groups={'Browse': ['list', 'item'], 'Search': ['search']})}
+
+
+def test_available_sections_includes_loops_when_loop_data_present():
+    assert set(_available_sections(_loop_results(), None)) == {'loops'}
+
+
+def test_pdf_with_loops_section_builds():
+    pdf = build_pdf_report(_loop_results(), ['loops'])
+    assert pdf.startswith(b'%PDF')

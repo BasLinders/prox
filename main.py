@@ -60,7 +60,9 @@ from prox import (
     train_propensity_model,
     analyze_propensity_drivers,
     summarize_propensity_scores,
+    analyze_loops,
 )
+from prox.loops import LOOP_INFERENCE_NOTE, OTHER_GROUP, fit_loop_params_to_log
 
 from prox.data_manager import find_emptying_step
 from prox.explorer_filters import (
@@ -226,7 +228,7 @@ LARGE_CASE_COUNT_THRESHOLD = 2000
 # describing the loaded data (Clear Results, or loading a saved run).
 RESULT_STATE_KEYS = (
     "results", "df", "segment_result", "funnel_result",
-    "funnel_segment_result", "reference_conformance_result",
+    "funnel_segment_result", "reference_conformance_result", "loop_result",
     "propensity_model", "propensity_insights", "ai_conclusion", "ai_conclusion_error",
 )
 
@@ -594,7 +596,8 @@ with st.sidebar:
             st.caption("A saved run brings its own settings; presets apply to the other data sources.")
         else:
             st.caption(
-                "A preset holds the sidebar, filter, sampling and funnel settings, "
+                "A preset holds the sidebar, filter, sampling and funnel settings and the "
+                "loop activity groups, "
                 "so a new upload doesn't need reconfiguring. Create one with "
                 "**Save settings as preset** below Run Analysis."
             )
@@ -1371,6 +1374,16 @@ _fitted_staged, _staged_notes = fit_config_to_log(
 st.session_state[_staged_key] = _fitted_staged["filter_steps"]
 staged_explorer_steps = st.session_state[_staged_key]
 
+# Activity groups for switch analysis. Defined in the Loops & Switches tab,
+# after a run, so like the explorer filters they live outside the form, keyed
+# per restored run/preset (_ck) so loading one re-seeds them from its config.
+# They go into every later run's config, and so into presets and saved runs.
+_loop_key = _ck("loop_params")
+if _loop_key not in st.session_state:
+    st.session_state[_loop_key] = fit_loop_params_to_log(
+        restored_config.get("loop_params"), _known_activities, list(raw_df.columns)
+    )[0]
+
 # ---------------------------------------------------------------------------
 # Filter events before analysis
 # ---------------------------------------------------------------------------
@@ -1619,6 +1632,7 @@ current_config = create_analysis_config(
         filter_steps=filter_steps,
         remove_duplicates=remove_duplicates,
         merge_page_views=merge_page_views,
+        loop_params=st.session_state[_loop_key],
     )
 
 # ---------------------------------------------------------------------------
@@ -1626,8 +1640,9 @@ current_config = create_analysis_config(
 # ---------------------------------------------------------------------------
 with st.expander("Save settings as preset"):
     st.caption(
-        "Keeps the sidebar, filter and sampling settings above, and the funnel from the "
-        "Funnel tab, in a small file you can apply to any later upload from the "
+        "Keeps the sidebar, filter and sampling settings above, the funnel from the "
+        "Funnel tab and the activity groups from the Loops & Switches tab, in a small "
+        "file you can apply to any later upload from the "
         "sidebar's **Configuration preset**. Settings are those last applied - click "
         "**Apply Configuration** first after changing the filter or sampling."
     )
@@ -1644,6 +1659,11 @@ with st.expander("Save settings as preset"):
         st.caption("No funnel is set up yet, so this preset won't include one.")
     elif _saved_funnel["mode"] == "manual" and _saved_funnel["steps"]:
         st.caption("Funnel: " + " → ".join(_saved_funnel["steps"]))
+    _saved_loop_params = current_config.get("loop_params") or {}
+    if _saved_loop_params.get("group_col"):
+        st.caption(f"Loop groups: the values of '{_saved_loop_params['group_col']}'.")
+    elif _saved_loop_params.get("activity_groups"):
+        st.caption("Loop groups: " + ", ".join(_saved_loop_params["activity_groups"]))
     preset_c1, preset_c2 = st.columns([3, 1])
     with preset_c1:
         preset_name = st.text_input(
@@ -1693,6 +1713,8 @@ if run_btn:
     st.session_state["df"] = raw_df
     st.session_state["config"] = config
     st.session_state.pop("saved_results_note", None)
+    # This run computed loops with the current groups itself.
+    st.session_state.pop("loop_result", None)
 
 # ---------------------------------------------------------------------------
 # AI conclusion helpers
@@ -1756,6 +1778,13 @@ def _propensity_insights(analysis_df: pd.DataFrame, model_bundle: dict) -> tuple
         "drivers": drivers, "summary": summary,
     }
     return drivers, summary
+
+
+def _with_loop_result(results: dict) -> dict:
+    """results, with the loop analysis the Loops & Switches tab last computed
+    (when groups were redefined there) in place of the pipeline's own."""
+    loop_result = st.session_state.get("loop_result")
+    return {**results, "loop_analysis": loop_result} if loop_result else results
 
 
 def _collect_ai_payload(results: dict) -> dict:
@@ -2029,7 +2058,9 @@ def _render_results_tabs():
                 # report_extras there. The callable runs after the run finishes,
                 # outside it, which is why it reads a plain dict and not
                 # st.session_state.
-                data=lambda: generate_html_report(results, ai_conclusion=report_extras.get("ai_conclusion")),
+                data=lambda: generate_html_report(
+                    report_extras.get("results", results), ai_conclusion=report_extras.get("ai_conclusion")
+                ),
                 file_name="prox_report.html",
                 mime="text/html",
                 width='stretch',
@@ -2099,11 +2130,12 @@ def _render_results_tabs():
 
     st.divider()
 
-    (tab_map, tab_variants, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_sessions,
+    (tab_map, tab_variants, tab_loops, tab_bottlenecks, tab_conf, tab_funnel, tab_biz, tab_sessions,
      tab_segments, tab_predictive) = st.tabs(
         [
             "Process Maps",
             "Variants",
+            "Loops & Switches",
             "Bottlenecks",
             "Conformance",
             "Funnel",
@@ -2247,6 +2279,257 @@ def _render_results_tabs():
                 )
         else:
             st.info("No variant data available.")
+
+    # ---------------------------------------------------------------------------
+    # Tab: Loops & Switches
+    # ---------------------------------------------------------------------------
+    with tab_loops:
+        st.caption(
+            "Repeat and switch behaviour within a case: going back to the previous activity, "
+            "visiting the same activity again, and moving between groups of activities you "
+            "define. The process map shows these loops as arrows; this tab measures them."
+        )
+        with st.expander("Terminology used in this tab"):
+            st.markdown(
+                """
+- **Back-navigation**: a return to the previous activity, A -> B -> A with
+  A and B different - e.g. a product page, then back to the list.
+- **Repeat visit**: an activity seen again later in the same case, however
+  many steps later. Includes **immediate repeats** (A -> A).
+- **% of Cases**: the share of all cases with at least one such event. For
+  a repeated activity, **% of its cases repeating** is the share of the
+  cases that have that activity at all.
+- **After a loop**: the activity right after the return (or the repeat
+  visit), or **(exit)** when the case ends there.
+- **Position**: where in its case the loop happens - in the early, middle
+  or late third of the case's events.
+- **Group switch**: a move from one group of activities to another.
+  Activities in no group are skipped - or, if you choose, count as one
+  more group, "(other)" - and consecutive events in the same group count
+  as one visit.
+- **Switch back**: returning to the group just left (G1 -> G2 -> G1) -
+  back-navigation at group level.
+            """
+            )
+        st.info(LOOP_INFERENCE_NOTE.replace(" -> ", " → "))
+
+        loops = st.session_state.get("loop_result") or results.get("loop_analysis")
+        if not loops or not loops.get("summary"):
+            st.info(
+                "This run has no loop data (it was saved before loop analysis existed). "
+                "Run the analysis again to add it."
+            )
+        else:
+            loop_summary = loops["summary"]
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Cases with Back-navigation", f"{loop_summary['back_nav_case_share']:.1f}%")
+            c2.metric("Cases with Repeat Visits", f"{loop_summary['repeat_case_share']:.1f}%")
+            c3.metric("Back-navigation Events", f"{loop_summary['back_nav_events']:,}")
+            c4.metric(
+                "Repeat-visit Events", f"{loop_summary['repeat_events']:,}",
+                help=f"Of which {loop_summary['self_loop_events']:,} immediate repeats (A -> A).",
+            )
+
+            st.subheader("Back-navigation (A → B → A)")
+            if loops.get("back_navigation"):
+                bn_df = pd.DataFrame.from_dict(loops["back_navigation"], orient="index")
+                bn_df.index = bn_df.index.str.replace(" -> ", " → ")
+                bn_df.index.name = "Pattern"
+                st.dataframe(
+                    bn_df.rename(columns={
+                        "occurrences": "Occurrences", "cases": "Cases", "case_share": "% of Cases",
+                    }).round(1),
+                    width='stretch',
+                )
+            else:
+                st.info("No back-navigation in this log.")
+
+            st.subheader("Repeated activities")
+            if loops.get("repeats"):
+                rep_df = pd.DataFrame.from_dict(loops["repeats"], orient="index")
+                rep_df.index.name = "Activity"
+                st.dataframe(
+                    rep_df.rename(columns={
+                        "cases_with_activity": "Cases with Activity", "repeat_cases": "Cases Repeating",
+                        "repeat_case_share": "% of Its Cases Repeating", "repeat_events": "Repeat Events",
+                        "self_loop_events": "Immediate Repeats", "back_nav_returns": "Back-navigation Returns",
+                        "visits_per_case": "Visits per Case",
+                    }).round(2),
+                    width='stretch',
+                )
+            else:
+                st.info("No activity is visited more than once within a case.")
+
+            st.subheader("What happens after a loop")
+            loop_kind_labels = {"Back-navigation": "back_navigation", "Any repeat visit": "repeat"}
+            loop_kind = loop_kind_labels[st.radio(
+                "Loop", list(loop_kind_labels), horizontal=True, key="loop_after_kind",
+            )]
+            after = loops.get("after_loop", {}).get(loop_kind, {})
+            if after.get("loops"):
+                a1, a2, a3 = st.columns(3)
+                a1.metric("Loops", f"{after['loops']:,}")
+                a2.metric("Ends the Case", f"{after['exit_share']:.1f}%",
+                          help="Share of these loops that are the case's last event.")
+                a3.metric("Average Step", f"{after['mean_step']:.1f}",
+                          help="The loop event's position in its case, counting from 1.")
+                n1, n2 = st.columns(2)
+                with n1:
+                    st.caption("Next activity")
+                    next_df = pd.DataFrame.from_dict(after["next_activity"], orient="index")
+                    next_df.index.name = "Next Activity"
+                    st.dataframe(
+                        next_df.rename(columns={"count": "Count", "share": "Share (%)"}).round(1),
+                        width='stretch',
+                    )
+                with n2:
+                    st.caption("Position in the journey (% of loops)")
+                    position = after["position"]
+                    st.bar_chart(pd.Series(
+                        [position["early"], position["middle"], position["late"]],
+                        index=pd.Index(["1. Early", "2. Middle", "3. Late"], name="Third of the case"),
+                        name="% of loops",
+                    ))
+            else:
+                st.info("No loops of this kind in this log.")
+
+            outcomes = (loops.get("outcomes") or {}).get(loop_kind)
+            if outcomes:
+                o1, o2 = st.columns(2)
+                o1.metric(
+                    "Conversion with this loop", f"{outcomes['with']['conversion_rate']:.1f}%",
+                    delta=f"{outcomes['with']['conversion_rate'] - outcomes['without']['conversion_rate']:+.1f} pp",
+                    help=f"{outcomes['with']['cases']:,} cases.",
+                )
+                o2.metric(
+                    "Conversion without it", f"{outcomes['without']['conversion_rate']:.1f}%",
+                    help=f"{outcomes['without']['cases']:,} cases.",
+                )
+                st.caption(
+                    "An association, not a cause: longer journeys have more room for both loops "
+                    "and a purchase."
+                )
+
+            st.subheader("Switches between groups")
+            st.caption(
+                "Group activities the way your site is organised (e.g. menu navigation vs. "
+                "search), or use a column's values (e.g. category), then see how often cases "
+                "move between them. To compare segments, use **Segment Comparison**: it includes "
+                "these shares per segment, with the groups defined here."
+            )
+            processed_log = results.get("processed_log")
+            if processed_log is None:
+                st.info("This run has no stored event log to analyse switches on. Run the analysis again.")
+            else:
+                # The widgets start from the groups the next run will use - those
+                # last analysed here, or restored from a preset or saved run.
+                current_loop = st.session_state.get(_ck("loop_params")) or {}
+                loop_activities = sorted(processed_log["concept:name"].dropna().astype(str).unique().tolist())
+                loop_nunique = _cached_column_nunique(processed_log)[1]
+                loop_exclude_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id", "session_id"}
+                loop_group_cols = [
+                    c for c in processed_log.columns
+                    if c not in loop_exclude_cols and 2 <= loop_nunique.get(c, 0) <= 50
+                ]
+
+                group_modes = ["Activity groups", "A column's values"]
+                group_mode = st.radio(
+                    "Groups from", group_modes, horizontal=True, key=_ck("loop_group_mode"),
+                    index=1 if current_loop.get("group_col") in loop_group_cols else 0,
+                    help=(
+                        "Activity groups: name each group and pick its activities. A column's "
+                        "values: each value of the column (e.g. each category) is a group."
+                    ),
+                )
+
+                loop_params = None
+                if group_mode == group_modes[0]:
+                    current_groups = list((current_loop.get("activity_groups") or {}).items())
+                    n_groups = st.number_input(
+                        "Number of groups", min_value=1, max_value=8,
+                        value=max(2, len(current_groups)), key=_ck("loop_group_count"),
+                    )
+                    groups = {}
+                    for i in range(int(n_groups)):
+                        default_name, default_acts = current_groups[i] if i < len(current_groups) else (f"Group {i + 1}", [])
+                        g1, g2 = st.columns([1, 3])
+                        name = g1.text_input(f"Group {i + 1} name", value=default_name, key=_ck(f"loop_group_name_{i}"))
+                        acts = g2.multiselect(
+                            f"Group {i + 1} activities", loop_activities,
+                            default=[a for a in default_acts if a in loop_activities],
+                            key=_ck(f"loop_group_acts_{i}"),
+                        )
+                        if name.strip() in groups:
+                            st.warning(f"Group name '{name.strip()}' is used twice - give each group its own name.")
+                        groups[name.strip()] = acts
+                    loop_params = {"activity_groups": groups, "group_col": None}
+                elif loop_group_cols:
+                    group_col = st.selectbox(
+                        "Column", loop_group_cols, key=_ck("loop_group_col"),
+                        index=(
+                            loop_group_cols.index(current_loop["group_col"])
+                            if current_loop.get("group_col") in loop_group_cols else 0
+                        ),
+                        help="Columns with 2-50 distinct values.",
+                    )
+                    loop_params = {"activity_groups": {}, "group_col": group_col}
+                else:
+                    st.info("No suitable column: a group column needs 2-50 distinct values.")
+
+                if loop_params:
+                    loop_params["include_ungrouped"] = st.checkbox(
+                        f"Count everything else as an '{OTHER_GROUP}' group",
+                        value=bool(current_loop.get("include_ungrouped")),
+                        key=_ck("loop_include_ungrouped"),
+                        help=(
+                            "Off: activities in no group (or events with no value in the column) are "
+                            "skipped, so a switch is a move straight from one of your groups to "
+                            "another, whatever happens in between. On: they form a group of their "
+                            f"own, so moves into and out of them count too, and G1 -> {OTHER_GROUP} -> G1 "
+                            "counts as a switch back - the loops that run outside your groups. "
+                            "With this on, one group is enough."
+                        ),
+                    )
+
+                if loop_params and st.button("Analyse Switches", width='stretch'):
+                    st.session_state[_ck("loop_params")] = loop_params
+                    st.session_state["loop_result"] = analyze_loops(
+                        processed_log,
+                        purchase_values=st.session_state.get("config", {}).get("business_params", {}).get("purchase_values"),
+                        **loop_params,
+                    )
+                    loops = st.session_state["loop_result"]
+
+                for err in loops.get("errors", []):
+                    st.warning(err)
+
+                switches = loops.get("group_switches")
+                if switches:
+                    sw = switches["summary"]
+                    s1, s2, s3 = st.columns(3)
+                    s1.metric("Cases Switching Group", f"{sw['switch_case_share']:.1f}%")
+                    s2.metric("Cases Switching Back", f"{sw['return_case_share']:.1f}%",
+                              help="Returning to the group just left: G1 -> G2 -> G1.")
+                    s3.metric("Switches", f"{sw['switch_events']:,}")
+                    if switches["transitions"]:
+                        sw_df = pd.DataFrame.from_dict(switches["transitions"], orient="index")
+                        sw_df.index = sw_df.index.str.replace(" -> ", " → ")
+                        sw_df.index.name = "Switch"
+                        st.dataframe(
+                            sw_df.drop(columns=["from", "to"]).rename(columns={
+                                "occurrences": "Occurrences", "cases": "Cases", "case_share": "% of Cases",
+                            }).round(1),
+                            width='stretch',
+                        )
+                    else:
+                        st.info("No case moves between these groups.")
+                    st.caption(
+                        f"{sw['grouped_events']:,} events fall in a group; {sw['ungrouped_events']:,} "
+                        + (f"are in none and count as '{OTHER_GROUP}'." if switches.get("include_ungrouped")
+                           else "are in none and are skipped.")
+                    )
+                elif not loops.get("errors"):
+                    st.info("Define the groups above and click **Analyse Switches**.")
 
     # ---------------------------------------------------------------------------
     # Tab 3: Bottlenecks
@@ -2946,6 +3229,10 @@ def _render_results_tabs():
 - **Health Score / Fitness / Precision / Repeat Rate**: the same metrics as
   the Bottlenecks, Conformance, and Business Insights tabs, computed
   separately per segment so they can be compared side by side.
+- **back_nav_case_share / repeat_case_share / group_switch_case_share**:
+  the share of each segment's cases with a back-navigation (A -> B -> A),
+  a repeated activity, or a switch between the groups defined in the
+  Loops & Switches tab (only when groups are defined there).
 - **Happy Path per Segment**: each segment's single most frequent variant,
   shown side by side to spot structural differences between segments.
             """
@@ -2989,8 +3276,11 @@ def _render_results_tabs():
 
             if compare_btn:
                 with st.spinner(f"Running analysis per segment of '{segment_col}'..."):
+                    # Groups defined in the Loops & Switches tab after the run
+                    # apply per segment too.
+                    segment_config = {**saved_config, "loop_params": st.session_state.get(_ck("loop_params"))}
                     segment_result = compare_segments(
-                        raw_df, segment_col=segment_col, config=saved_config,
+                        raw_df, segment_col=segment_col, config=segment_config,
                         top_n_segments=int(top_n_segments), parallel=run_parallel
                     )
                 st.session_state["segment_result"] = {**segment_result, "segment_col": segment_col}
@@ -3004,11 +3294,17 @@ def _render_results_tabs():
                 if comparison_table:
                     comp_df = pd.DataFrame.from_dict(comparison_table, orient="index")
                     comp_df.index.name = "Segment"
+                    comp_formats = {
+                        "health_score": "{:.0f}", "fitness_score": "{:.1%}",
+                        "precision_score": "{:.1%}", "repeat_rate": "{:.1f}%",
+                        "back_nav_case_share": "{:.1f}%", "repeat_case_share": "{:.1f}%",
+                        "group_switch_case_share": "{:.1f}%",
+                    }
                     st.dataframe(
-                        comp_df.style.format({
-                            "health_score": "{:.0f}", "fitness_score": "{:.1%}",
-                            "precision_score": "{:.1%}", "repeat_rate": "{:.1f}%"
-                        }),
+                        comp_df.style.format(
+                            {col: fmt for col, fmt in comp_formats.items() if col in comp_df.columns},
+                            na_rep="-",
+                        ),
                         width='stretch'
                     )
 
@@ -3238,7 +3534,9 @@ def _render_results_tabs():
     # AI conclusion + PDF export
     # ---------------------------------------------------------------------------
     st.divider()
-    ai_payload = _collect_ai_payload(results)
+    report_results = _with_loop_result(results)
+    report_extras["results"] = report_results
+    ai_payload = _collect_ai_payload(report_results)
     ai_fingerprint = _ai_payload_fingerprint(ai_payload)
 
     with st.expander("AI Conclusion"):
@@ -3262,7 +3560,7 @@ def _render_results_tabs():
                 "AI summary and next steps."
             )
         render_pdf_builder(
-            results,
+            report_results,
             segment_result=st.session_state.get("segment_result"),
             ai_conclusion=fresh_ai_conclusion,
         )

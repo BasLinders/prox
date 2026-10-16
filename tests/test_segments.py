@@ -155,3 +155,32 @@ def test_compare_segments_single_segment_skips_pool(tmp_path):
 
     assert result['errors'] == []
     assert set(result['comparison_table'].keys()) == {'mobile'}
+
+
+def test_compare_segments_includes_loop_shares(tmp_path):
+    df = make_segmented_log()
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+
+    table = compare_segments(
+        df, segment_col='device', config=config, parallel=False, output_folder=str(tmp_path)
+    )['comparison_table']
+
+    assert table['mobile']['back_nav_case_share'] == 0
+    assert table['mobile']['repeat_case_share'] == 0
+    # no groups configured, so no switch column
+    assert 'group_switch_case_share' not in table['mobile']
+
+
+def test_compare_segments_includes_group_switch_share_when_groups_are_configured(tmp_path):
+    df = make_segmented_log()
+    config = create_analysis_config(
+        filter_steps=[], sample_size=10,
+        loop_params={'activity_groups': {'Start': ['a'], 'Rest': ['b', 'c']}, 'group_col': None},
+    )
+
+    table = compare_segments(
+        df, segment_col='device', config=config, parallel=False, output_folder=str(tmp_path)
+    )['comparison_table']
+
+    assert table['mobile']['group_switch_case_share'] == 100
+    assert table['desktop']['group_switch_case_share'] == 100

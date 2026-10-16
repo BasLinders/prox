@@ -75,7 +75,10 @@ def compare_segments(
     dict with keys:
         'segments'          : {segment_value: run_full_analysis() results}
         'comparison_table'  : {segment_value: {cases, health_score, fitness_score,
-                               precision_score, repeat_rate, top_variant}}
+                               precision_score, repeat_rate, back_nav_case_share,
+                               repeat_case_share, top_variant}}, plus
+                               group_switch_case_share when config's
+                               loop_params define groups
         'errors'            : list of str
     """
     errors = []
@@ -186,6 +189,9 @@ def compare_segments(
         stats = results.get('performance', {}).get('summary_statistics', {})
         top_variants = results.get('performance', {}).get('variant_performance', {}).get('top_variants', {})
         biz = results.get('repeat_purchase_analysis')
+        loops = results.get('loop_analysis') or {}
+        loop_summary = loops.get('summary', {})
+        switches = loops.get('group_switches')
 
         comparison_table[value] = {
             'cases': len(case_id_lookup[value]),
@@ -193,6 +199,9 @@ def compare_segments(
             'fitness_score': overall.get('fitness_score', 0),
             'precision_score': overall.get('precision_score', 0),
             'repeat_rate': biz.get('metrics', {}).get('repeat_rate', 0) if biz else 0,
+            'back_nav_case_share': loop_summary.get('back_nav_case_share', 0),
+            'repeat_case_share': loop_summary.get('repeat_case_share', 0),
+            **({'group_switch_case_share': switches['summary']['switch_case_share']} if switches else {}),
             'top_variant': next(iter(top_variants), 'N/A'),
         }
 
