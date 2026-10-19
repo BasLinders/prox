@@ -15,7 +15,7 @@ this module both renders its own Streamlit UI and depends on reportlab, a
 dependency none of the rest of prox/ needs.
 
 Public entry point: render_pdf_builder(results, segment_result=None,
-ai_conclusion=None) - draws the section checkboxes + Generate/Download flow
+ai_conclusion=None, predictive=None) - draws the section checkboxes + Generate/Download flow
 in the current Streamlit container.
 """
 
@@ -211,6 +211,99 @@ def _section_ai_conclusion(conclusion: Dict[str, Any], styles) -> List:
         "sections that follow before acting on it.</i>",
         ParagraphStyle(name="PRoXAINote", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#888888")),
     ))
+    return story
+
+
+def _section_predictive(predictive: Dict[str, Any], styles) -> List:
+    """The Predictive Insights tab's trained propensity model: its
+    cross-validated metrics, top drivers and in-progress score summary. Like
+    the AI conclusion, kept outside _SECTION_DEFS since the model lives in
+    session state rather than `results` - passed to build_pdf_report()
+    separately as {"model_bundle", "drivers", "summary"}."""
+    bundle = predictive.get("model_bundle") or {}
+    metrics = bundle.get("metrics") or {}
+    training = bundle.get("training_config") or {}
+    bullet = ParagraphStyle(name="PRoXPredictiveBullet", parent=styles["Normal"], leftIndent=16, bulletIndent=4, spaceAfter=4)
+    note = ParagraphStyle(name="PRoXPredictiveNote", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#888888"))
+
+    outcome = training.get("outcome_activity")
+    outcomes = outcome if isinstance(outcome, (list, tuple)) else [outcome]
+    attributes = training.get("case_attribute_cols") or []
+    story = [_heading("Predictive Insights", styles)]
+    story.append(Paragraph(
+        "A logistic regression model predicting whether a case reaches "
+        f"<b>{html.escape(' or '.join(str(o) for o in outcomes))}</b>, trained on completed cases"
+        + (f" using case attributes {html.escape(', '.join(attributes))}" if attributes else "")
+        + ". A prediction, not a measurement.",
+        styles["Normal"],
+    ))
+    story.append(Spacer(1, 6))
+
+    story.append(_subheading("Validation", styles))
+    story.append(_metrics_table([
+        ("Completed cases", f"{metrics.get('n_completed', 0):,}"),
+        ("Reached / didn't reach the outcome", f"{metrics.get('n_positive', 0):,} / {metrics.get('n_negative', 0):,}"),
+        ("Accuracy", f"{metrics['accuracy_mean']:.1%} ± {metrics['accuracy_std']:.1%}"),
+        ("Precision", f"{metrics['precision_mean']:.1%} ± {metrics['precision_std']:.1%}"),
+        ("Recall", f"{metrics['recall_mean']:.1%} ± {metrics['recall_std']:.1%}"),
+        ("ROC AUC", f"{metrics['roc_auc_mean']:.2f} ± {metrics['roc_auc_std']:.2f}"),
+    ], styles))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph(
+        "Stratified k-fold cross-validation. The model scoring in-progress cases is refit on all "
+        "completed cases afterward, so these metrics describe the cross-validation process's typical "
+        "performance, not literally that exact refit model.",
+        note,
+    ))
+
+    story.append(Spacer(1, 16))
+    story.append(_subheading("Top Drivers", styles))
+    drivers = predictive.get("drivers") or []
+    if drivers:
+        story.append(Paragraph(
+            "<i>Associative, not causal - what tends to go together with reaching the outcome.</i>",
+            styles["Normal"],
+        ))
+        story.append(Spacer(1, 4))
+        for sentence in drivers:
+            story.append(Paragraph(html.escape(sentence), bullet, bulletText="•"))
+    else:
+        story.append(Paragraph("No drivers to report.", styles["Normal"]))
+
+    story.append(Spacer(1, 16))
+    story.append(_subheading("In-Progress Cases", styles))
+    summary = predictive.get("summary") or {}
+    if summary.get("n_scored"):
+        hist_rate = summary.get("historical_positive_rate")
+        story.append(_metrics_table([
+            ("In-progress cases scored", f"{summary['n_scored']:,}"),
+            ("Average propensity", f"{summary['mean_score']:.1%}"),
+            ("Historical conversion rate", f"{hist_rate:.1%}" if hist_rate is not None else "N/A"),
+            ("Median propensity (IQR)", f"{summary['median_score']:.1%} ({summary['q1_score']:.1%} - {summary['q3_score']:.1%})"),
+        ], styles))
+        story.append(Spacer(1, 6))
+        tiers = summary.get("risk_tiers") or {}
+        tier_table = Table(
+            [["Propensity tier", "Cases"]] + [
+                [label, f"{tiers.get(key, 0):,}"]
+                for key, label in [
+                    ("high_risk", "High risk (lowest-scoring third)"),
+                    ("medium_risk", "Medium risk"),
+                    ("low_risk", "Low risk (highest-scoring third)"),
+                ]
+            ],
+            colWidths=[_CONTENT_WIDTH * 0.7, _CONTENT_WIDTH * 0.3],
+        )
+        tier_table.setStyle(_table_style())
+        story.append(tier_table)
+        story.append(Spacer(1, 6))
+        for sentence in summary.get("narrative") or []:
+            story.append(Paragraph(html.escape(sentence), bullet, bulletText="•"))
+    else:
+        story.append(Paragraph(
+            "No in-progress cases to score - every case in the log has either reached the outcome or aged out.",
+            styles["Normal"],
+        ))
     return story
 
 
@@ -546,6 +639,12 @@ def _cover_page(section_labels: List[str], results: Dict[str, Any], styles) -> L
 
 AI_CONCLUSION_KEY = "ai_conclusion"
 AI_CONCLUSION_LABEL = "AI Summary & Next Steps"
+PREDICTIVE_KEY = "predictive"
+PREDICTIVE_LABEL = "Predictive Insights"
+
+
+def _has_trained_model(predictive: Optional[Dict[str, Any]]) -> bool:
+    return bool(predictive) and (predictive.get("model_bundle") or {}).get("model") is not None
 
 
 def build_pdf_report(
@@ -553,6 +652,7 @@ def build_pdf_report(
     section_keys: List[str],
     segment_result: Optional[Dict[str, Any]] = None,
     ai_conclusion: Optional[Dict[str, Any]] = None,
+    predictive: Optional[Dict[str, Any]] = None,
 ) -> bytes:
     """
     Builds a PDF containing only the requested sections (each a key from
@@ -563,6 +663,11 @@ def build_pdf_report(
     `ai_conclusion` is a parsed ai_client conclusion ({"summary",
     "key_findings", "next_steps"}, plus optional "model"/"generated_at");
     when given and AI_CONCLUSION_KEY is selected, it opens the report.
+
+    `predictive` is {"model_bundle": train_propensity_model() output,
+    "drivers": analyze_propensity_drivers() sentences, "summary":
+    summarize_propensity_scores() output}; when its model is trained and
+    PREDICTIVE_KEY is selected, it closes the report, matching the tab order.
 
     Returns the PDF as bytes, ready for a Streamlit download_button.
     """
@@ -580,7 +685,9 @@ def build_pdf_report(
     }
     if ai_conclusion:
         builders_by_key[AI_CONCLUSION_KEY] = (AI_CONCLUSION_LABEL, lambda: _section_ai_conclusion(ai_conclusion, styles))
-    section_order = [AI_CONCLUSION_KEY] + [key for key, *_ in _SECTION_DEFS]
+    if _has_trained_model(predictive):
+        builders_by_key[PREDICTIVE_KEY] = (PREDICTIVE_LABEL, lambda: _section_predictive(predictive, styles))
+    section_order = [AI_CONCLUSION_KEY] + [key for key, *_ in _SECTION_DEFS] + [PREDICTIVE_KEY]
     ordered_keys = [key for key in section_order if key in section_keys and key in builders_by_key]
     section_labels = [builders_by_key[k][0] for k in ordered_keys]
 
@@ -612,10 +719,11 @@ def render_pdf_builder(
     results: Optional[Dict[str, Any]],
     segment_result: Optional[Dict[str, Any]] = None,
     ai_conclusion: Optional[Dict[str, Any]] = None,
+    predictive: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Renders the section checkboxes + Generate/Download flow. Call this
     from main.py after `results` (and optionally `segment_result` /
-    `ai_conclusion`) exist."""
+    `ai_conclusion` / `predictive`) exist."""
     st.caption(
         "Pick which sections to include - the PDF only contains what's "
         "checked below, so you can share a focused report (e.g. just "
@@ -625,6 +733,8 @@ def render_pdf_builder(
     available = _available_sections(results or {}, segment_result)
     if available and ai_conclusion:
         available = {AI_CONCLUSION_KEY: AI_CONCLUSION_LABEL, **available}
+    if available and _has_trained_model(predictive):
+        available[PREDICTIVE_KEY] = PREDICTIVE_LABEL
     if not available:
         st.info("Run an analysis first to build a PDF report.")
         return
@@ -643,7 +753,9 @@ def render_pdf_builder(
 
     if st.button("Generate PDF Report", type="primary", width='stretch'):
         with st.spinner("Building PDF..."):
-            st.session_state["pdf_report_bytes"] = build_pdf_report(results, selected_keys, segment_result, ai_conclusion)
+            st.session_state["pdf_report_bytes"] = build_pdf_report(
+                results, selected_keys, segment_result, ai_conclusion, predictive,
+            )
 
     pdf_bytes = st.session_state.get("pdf_report_bytes")
     if pdf_bytes:
