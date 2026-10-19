@@ -55,6 +55,7 @@ summarize_propensity_scores  Aggregate, non-case-level summary of in-progress
                               case scoring
 """
 import logging
+import time
 from typing import Any, Dict, List
 
 import numpy as np
@@ -300,6 +301,11 @@ def _build_propensity_features(
         timestamp_col=timestamp_col, censor_percentile=censor_percentile,
     )
     errors = list(split['errors'])
+    logger.info(
+        "Propensity split: %d positive, %d negative, %d in-progress case(s) (censor cutoff %s).",
+        len(split['positive_case_ids']), len(split['negative_case_ids']),
+        len(split['in_progress_case_ids']), split['censor_cutoff'],
+    )
 
     completed_ids = split['positive_case_ids'] + split['negative_case_ids']
     completed_df = df[df[case_col].isin(completed_ids)]
@@ -310,9 +316,19 @@ def _build_propensity_features(
 
     by_case = {cid: events for cid, events in df.groupby(case_col)}
 
-    def build_rows(case_ids, cutoff_map):
+    def build_rows(case_ids, cutoff_map, bucket):
         rows = []
-        for cid in case_ids:
+        total = len(case_ids)
+        # Per-case extraction is a plain Python loop, the slowest step on a
+        # large log - log at each quarter so the console doesn't look stalled.
+        checkpoints = {total * q // 4 for q in range(1, 5)} - {0}
+        start = time.monotonic()
+        for i, cid in enumerate(case_ids, 1):
+            if i in checkpoints:
+                logger.info(
+                    "Extracting %s case features: %d/%d (%.1fs).",
+                    bucket, i, total, time.monotonic() - start,
+                )
             events = by_case.get(cid)
             if events is None:
                 continue
@@ -324,9 +340,9 @@ def _build_propensity_features(
             rows.append(row)
         return pd.DataFrame(rows)
 
-    positive_rows = build_rows(split['positive_case_ids'], split['outcome_timestamps'])
-    negative_rows = build_rows(split['negative_case_ids'], {})
-    in_progress_rows = build_rows(split['in_progress_case_ids'], {})
+    positive_rows = build_rows(split['positive_case_ids'], split['outcome_timestamps'], 'positive')
+    negative_rows = build_rows(split['negative_case_ids'], {}, 'negative')
+    in_progress_rows = build_rows(split['in_progress_case_ids'], {}, 'in-progress')
 
     if not positive_rows.empty:
         positive_rows['label'] = 1
@@ -492,7 +508,12 @@ def train_propensity_model(
     fold_metrics = {'accuracy': [], 'precision': [], 'recall': [], 'roc_auc': []}
     importances_per_fold = []
 
-    for train_idx, test_idx in skf.split(X, y):
+    logger.info(
+        "Training propensity model: %d completed cases, %d features, %d-fold CV.",
+        len(X), len(feature_columns), n_splits,
+    )
+    for fold, (train_idx, test_idx) in enumerate(skf.split(X, y), 1):
+        fold_start = time.monotonic()
         X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
         y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
@@ -516,6 +537,10 @@ def train_propensity_model(
             importances_per_fold.append(dict(zip(feature_columns, perm.importances_mean)))
         except ValueError:
             pass
+        logger.info(
+            "CV fold %d/%d done in %.1fs (ROC AUC %.3f).",
+            fold, n_splits, time.monotonic() - fold_start, fold_metrics['roc_auc'][-1],
+        )
 
     metrics = {
         'n_completed': n_positive + n_negative,
@@ -533,6 +558,7 @@ def train_propensity_model(
             vals = [fold.get(feat, 0.0) for fold in importances_per_fold]
             permutation_importances[feat] = float(np.mean(vals))
 
+    logger.info("Refitting propensity model on all %d completed cases.", len(X))
     final_model = make_pipeline()
     final_model.fit(X, y)
 
@@ -705,6 +731,7 @@ def _score_in_progress_cases(df: pd.DataFrame, model_bundle: Dict[str, Any]) -> 
         if c in X.columns:
             X[c] = X[c].astype(str)
 
+    logger.info("Scoring %d in-progress case(s).", len(X))
     scores = model.predict_proba(X)[:, 1]
 
     result = pd.DataFrame({

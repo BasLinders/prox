@@ -3,8 +3,10 @@ import pytest
 
 from utility.pdf_builder import (
     AI_CONCLUSION_KEY,
+    PREDICTIVE_KEY,
     _available_sections,
     _section_ai_conclusion,
+    _section_predictive,
     _section_business,
     _section_sessions,
     _section_variants,
@@ -179,3 +181,60 @@ def test_available_sections_includes_loops_when_loop_data_present():
 def test_pdf_with_loops_section_builds():
     pdf = build_pdf_report(_loop_results(), ['loops'])
     assert pdf.startswith(b'%PDF')
+
+
+def make_predictive(model=object(), n_scored=40):
+    """A {"model_bundle", "drivers", "summary"} dict shaped like main.py
+    passes it - the section only reads the bundle's dicts, never the model
+    itself, so any non-None placeholder stands in for a fitted pipeline."""
+    metrics = {'n_completed': 120, 'n_positive': 50, 'n_negative': 70}
+    for name in ('accuracy', 'precision', 'recall', 'roc_auc'):
+        metrics[f'{name}_mean'], metrics[f'{name}_std'] = 0.8, 0.05
+    return {
+        'model_bundle': {
+            'model': model, 'metrics': metrics,
+            'training_config': {'outcome_activity': ['purchase'], 'case_attribute_cols': ['device']},
+        },
+        'drivers': ["Cases that visited 'cart' reached the outcome 3.0x more often <b>"],
+        'summary': {
+            'n_scored': n_scored, 'mean_score': 0.3, 'median_score': 0.25,
+            'q1_score': 0.1, 'q3_score': 0.5,
+            'risk_tiers': {'high_risk': 14, 'medium_risk': 13, 'low_risk': 13},
+            'historical_positive_rate': 0.42,
+            'narrative': ['14 of 40 in-progress cases (35%) are in the bottom (highest-risk) propensity tier.'],
+        },
+    }
+
+
+def _story_text(story):
+    return ' '.join(getattr(f, 'text', '') for f in story)
+
+
+def test_section_predictive_renders_validation_drivers_and_in_progress():
+    text = _story_text(_section_predictive(make_predictive(), _styles()))
+    assert 'purchase' in text
+    assert 'Top Drivers' in text
+    assert 'In-Progress Cases' in text
+    assert 'highest-risk' in text
+    # Driver sentences are escaped, not parsed as reportlab markup.
+    assert 'often &lt;b&gt;' in text
+
+
+def test_section_predictive_notes_when_no_in_progress_cases():
+    text = _story_text(_section_predictive(make_predictive(n_scored=0), _styles()))
+    assert 'No in-progress cases to score' in text
+
+
+def test_build_pdf_report_includes_predictive_only_when_selected(tmp_path):
+    results = make_results_with_business_and_sessions(tmp_path)
+    without = build_pdf_report(results, ['sessions'], predictive=make_predictive())
+    with_predictive = build_pdf_report(results, ['sessions', PREDICTIVE_KEY], predictive=make_predictive())
+    assert with_predictive.startswith(b'%PDF')
+    assert len(with_predictive) > len(without)
+
+
+def test_build_pdf_report_skips_predictive_without_a_trained_model(tmp_path):
+    results = make_results_with_business_and_sessions(tmp_path)
+    baseline = build_pdf_report(results, ['sessions'])
+    untrained = build_pdf_report(results, ['sessions', PREDICTIVE_KEY], predictive=make_predictive(model=None))
+    assert len(untrained) == len(baseline)

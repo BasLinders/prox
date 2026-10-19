@@ -3548,7 +3548,19 @@ def _render_results_tabs():
     fresh_ai_conclusion = ai_conclusion if ai_conclusion and ai_conclusion["fingerprint"] == ai_fingerprint else None
     report_extras["ai_conclusion"] = fresh_ai_conclusion
 
+    # Same dataset the Predictive Insights tab trains and scores on, and the
+    # same cached drivers/summary it shows.
+    model_bundle = st.session_state.get("propensity_model")
+    predictive = None
+    if model_bundle and model_bundle.get("model") is not None:
+        drivers, score_summary = _propensity_insights(_predictive_log(), model_bundle)
+        predictive = {"model_bundle": model_bundle, "drivers": drivers, "summary": score_summary}
+
     with st.expander("Build a Custom PDF Report"):
+        if not predictive:
+            st.caption(
+                "Train a model under **Predictive Insights** to include it in the report."
+            )
         if ai_conclusion and not fresh_ai_conclusion:
             st.caption(
                 "The AI conclusion is out of date, so it isn't offered below. Generate it "
@@ -3563,6 +3575,7 @@ def _render_results_tabs():
             report_results,
             segment_result=st.session_state.get("segment_result"),
             ai_conclusion=fresh_ai_conclusion,
+            predictive=predictive,
         )
 
 
