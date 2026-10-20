@@ -25,19 +25,29 @@ check doesn't have to be re-run to look at it again. The results reference
 chart images by path in the shared output folder, which the next run
 overwrites - so those files are copied in alongside and the paths repointed.
 
+The tabs' own follow-up analyses (a manually defined funnel, segment
+comparison, the propensity model, ...) are kept too, in a file of their own,
+along with the funnel settings (in the manifest) so the Funnel tab's widgets
+come back as they were. Unlike the results they can still change after a
+save, so saving them again under the same label, event log and config
+replaces that entry's analyses rather than adding a second entry.
+
 Duplicates: repeating a label is expected (monthly snapshots), but saving the
 same label with the same event log *and* the same config again - e.g.
 clicking Save twice, or re-saving a run that was just loaded - returns the
-existing entry instead of adding an identical one.
+existing entry instead of adding an identical one (updating its tab analyses
+if those changed, see above).
 
 Layout:
 
     <save_dir>/<run_id>.manifest.json
     <save_dir>/<run_id>.data.csv.gz      - only present when source_dataset_id is None
     <save_dir>/<run_id>.results.pkl.gz   - only present when results were saved
+    <save_dir>/<run_id>.analyses.pkl.gz  - only present when tab analyses were saved
     <save_dir>/<run_id>.assets/          - chart images the saved results point to
+    <save_dir>/<run_id>.assets/analyses-<suffix>/ - ...and those the analyses point to
 
-The results file is a pickle - fine for a library this app wrote itself on
+The results and analyses files are pickles - fine for a library this app wrote itself on
 the analyst's own machine, but it means a saved-runs folder should never be
 loaded from an untrusted source.
 
@@ -98,6 +108,10 @@ def _assets_dir(run_id: str, save_dir: str) -> str:
     return os.path.join(save_dir, f"{run_id}.assets")
 
 
+def _analyses_path(run_id: str, save_dir: str) -> str:
+    return os.path.join(save_dir, f"{run_id}.analyses.pkl.gz")
+
+
 def _data_fingerprint(df: pd.DataFrame) -> Optional[str]:
     """Content hash of the event log, used to recognise a repeat save of the
     same data. None (never matches anything) if the frame can't be hashed."""
@@ -144,6 +158,44 @@ def _relocate_assets(obj: Any, assets_dir: str, copied: Dict[str, str]) -> Any:
     return obj
 
 
+def _analyses_fingerprint(analyses: Optional[Dict[str, Any]], funnel: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Identifies the tab analyses + funnel settings as handed to save_run, so
+    clicking Save again without changing anything doesn't rewrite them."""
+    if not analyses and funnel is None:
+        return None
+    return hashlib.sha1(pickle.dumps((analyses, funnel), protocol=pickle.HIGHEST_PROTOCOL)).hexdigest()
+
+
+def _write_pickle(obj: Any, path: str) -> None:
+    tmp_path = path + ".tmp"
+    with gzip.open(tmp_path, "wb") as f:
+        pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(tmp_path, path)  # atomic on the same filesystem
+
+
+def _write_manifest(manifest: Dict[str, Any], save_dir: str) -> None:
+    manifest_path = _manifest_path(manifest["run_id"], save_dir)
+    tmp_manifest_path = manifest_path + ".tmp"
+    with open(tmp_manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, default=str)
+    os.replace(tmp_manifest_path, manifest_path)
+
+
+def _write_analyses(run_id: str, save_dir: str, analyses: Dict[str, Any]) -> None:
+    """Pickles analyses with their chart files copied in, replacing any saved
+    before. The charts go to a freshly named folder, and the old ones are only
+    removed once the new pickle is in place: re-saving a loaded run hands
+    back analyses whose paths point into the old folder."""
+    assets_root = _assets_dir(run_id, save_dir)
+    new_assets = os.path.join(assets_root, f"analyses-{os.urandom(4).hex()}")
+    _write_pickle(_relocate_assets(analyses, new_assets, {}), _analyses_path(run_id, save_dir))
+    if os.path.isdir(assets_root):
+        for name in os.listdir(assets_root):
+            path = os.path.join(assets_root, name)
+            if name.startswith("analyses-") and path != new_assets:
+                shutil.rmtree(path, ignore_errors=True)
+
+
 def _find_duplicate(save_dir: str, label: str, data_fp: Optional[str], config_fp: str) -> Optional[Dict[str, Any]]:
     if data_fp is None:
         return None
@@ -178,6 +230,8 @@ def save_run(
     save_dir: str = DEFAULT_SAVED_RUNS_DIR,
     config: Optional[Dict[str, Any]] = None,
     results: Optional[Dict[str, Any]] = None,
+    analyses: Optional[Dict[str, Any]] = None,
+    funnel: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Registers df in the saved-runs library under a fresh run_id.
 
@@ -188,16 +242,33 @@ def save_run(
 
     config (the dict passed to run_full_analysis) goes in the manifest;
     results (what it returned) is pickled alongside, with its chart files
-    copied in. If an entry with the same label, event log and config already
-    exists, nothing is written and that entry's manifest is returned with
-    "already_saved": True.
+    copied in. analyses (the tabs' follow-up results, keyed by name) is
+    pickled the same way; funnel (presets.build_funnel_settings) goes in the
+    manifest.
+
+    If an entry with the same label, event log and config already exists, no
+    new entry is made and that entry's manifest is returned with
+    "already_saved": True. If analyses/funnel differ from what that entry
+    holds, they replace its saved ones, and "analyses_updated" is True too.
     """
     label = label.strip()
     data_fp = _data_fingerprint(df)
     config_fp = _config_fingerprint(config)
+    analyses_fp = _analyses_fingerprint(analyses, funnel)
     existing = _find_duplicate(save_dir, label, data_fp, config_fp)
     if existing is not None:
-        return {**existing, "already_saved": True}
+        if analyses_fp is None or analyses_fp == existing.get("analyses_fingerprint"):
+            return {**existing, "already_saved": True}
+        if analyses:
+            _write_analyses(existing["run_id"], save_dir, analyses)
+        updated = {
+            **existing,
+            "funnel": funnel if funnel is not None else existing.get("funnel"),
+            "analyses": sorted(analyses) if analyses else existing.get("analyses", []),
+            "analyses_fingerprint": analyses_fp,
+        }
+        _write_manifest(updated, save_dir)
+        return {**updated, "already_saved": True, "analyses_updated": True}
 
     os.makedirs(save_dir, exist_ok=True)
     run_id = _safe_run_id(label)
@@ -210,11 +281,9 @@ def save_run(
 
     if results is not None:
         portable_results = _relocate_assets(results, _assets_dir(run_id, save_dir), {})
-        results_path = _results_path(run_id, save_dir)
-        tmp_path = results_path + ".tmp"
-        with gzip.open(tmp_path, "wb") as f:
-            pickle.dump(portable_results, f, protocol=pickle.HIGHEST_PROTOCOL)
-        os.replace(tmp_path, results_path)
+        _write_pickle(portable_results, _results_path(run_id, save_dir))
+    if analyses:
+        _write_analyses(run_id, save_dir, analyses)
 
     manifest = {
         "run_id": run_id,
@@ -229,14 +298,13 @@ def save_run(
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "config": config,
         "has_results": results is not None,
+        "funnel": funnel,
+        "analyses": sorted(analyses) if analyses else [],
         "data_fingerprint": data_fp,
         "config_fingerprint": config_fp,
+        "analyses_fingerprint": analyses_fp,
     }
-    manifest_path = _manifest_path(run_id, save_dir)
-    tmp_manifest_path = manifest_path + ".tmp"
-    with open(tmp_manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, indent=2, default=str)
-    os.replace(tmp_manifest_path, manifest_path)
+    _write_manifest(manifest, save_dir)
     return manifest
 
 
@@ -339,13 +407,36 @@ def load_saved_results(
         )
 
 
+def load_saved_analyses(
+    manifest: Dict[str, Any], save_dir: str = DEFAULT_SAVED_RUNS_DIR
+) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Returns (analyses, note): the tab analyses saved with this entry ({}
+    if none), and a note when there were some but they couldn't be read.
+    Only meaningful alongside its results - call it once load_saved_results
+    has returned them, which also covers the staleness check."""
+    if not manifest.get("analyses"):
+        return {}, None
+    try:
+        with gzip.open(_analyses_path(manifest["run_id"], save_dir), "rb") as f:
+            return pickle.load(f), None
+    except (OSError, EOFError, pickle.UnpicklingError, AttributeError, ImportError) as e:
+        logger.warning("Saved analyses for '%s' unreadable: %s", manifest.get("run_id"), e)
+        return {}, (
+            f"The saved tab analyses (funnel, segment comparison, ...) for '{manifest.get('label')}' "
+            f"couldn't be read ({e}) - run them again in their tabs."
+        )
+
+
 def delete_saved_run(run_id: str, save_dir: str = DEFAULT_SAVED_RUNS_DIR) -> bool:
-    """Deletes a saved-run entry (manifest, plus its own data/results/assets, if any).
+    """Deletes a saved-run entry (manifest, plus its own data/results/analyses/assets, if any).
     Never touches a linked incremental-cache dataset - that's a shared
     resource managed separately via clear_cached_dataset(). Returns True if
     anything was removed."""
     removed = False
-    for path in (_manifest_path(run_id, save_dir), _data_path(run_id, save_dir), _results_path(run_id, save_dir)):
+    for path in (
+        _manifest_path(run_id, save_dir), _data_path(run_id, save_dir),
+        _results_path(run_id, save_dir), _analyses_path(run_id, save_dir),
+    ):
         if os.path.isfile(path):
             os.remove(path)
             removed = True

@@ -70,6 +70,7 @@ from .saved_runs import (
     load_saved_run,
     get_saved_run_manifest,
     load_saved_results,
+    load_saved_analyses,
     delete_saved_run,
     DEFAULT_SAVED_RUNS_DIR,
 )
@@ -134,6 +135,7 @@ __all__ = [
     "load_saved_run",
     "get_saved_run_manifest",
     "load_saved_results",
+    "load_saved_analyses",
     "delete_saved_run",
     "DEFAULT_SAVED_RUNS_DIR",
     "split_completed_in_progress",

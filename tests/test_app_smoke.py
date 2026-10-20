@@ -10,7 +10,7 @@ from prox.incremental import DEFAULT_CACHE_DIR, save_cached_dataset
 from prox.presets import (
     DEFAULT_PRESETS_DIR, build_funnel_settings, build_preset, list_presets, save_preset,
 )
-from prox.saved_runs import DEFAULT_SAVED_RUNS_DIR, save_run
+from prox.saved_runs import DEFAULT_SAVED_RUNS_DIR, list_saved_runs, save_run
 
 MAIN_PY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main.py")
 
@@ -405,3 +405,28 @@ def test_saved_run_restores_its_loop_groups(app):
 
     assert not app.exception
     assert app.session_state[f"cfg_loop_params_{run['run_id']}"] == loop_params
+
+
+def test_saved_run_keeps_the_analyses_run_in_its_tabs(app):
+    _run_mock_analysis(app)
+    app.radio(key="cfg_funnel_mode_default").set_value("Define manually").run()
+    steps = app.multiselect(key="cfg_funnel_steps_default").options[:2]
+    app.multiselect(key="cfg_funnel_steps_default").set_value(steps).run()
+    next(b for b in app.button if b.label == "Run Funnel Analysis").click().run()
+    funnel_result = app.session_state["funnel_result"]
+    assert list(funnel_result["stages"]) == steps
+
+    app.text_input(key="save_run_label").set_value("Acme").run()
+    next(b for b in app.button if b.label == "Save to Library").click().run()
+    assert not app.exception
+    [saved] = list_saved_runs(save_dir=DEFAULT_SAVED_RUNS_DIR)
+    assert saved["analyses"] and saved["funnel"]["steps"] == steps
+    run_id = saved["run_id"]
+
+    app.radio(key="data_source_choice").set_value("Load saved run").run()
+    app.selectbox[0].set_value(run_id).run()
+
+    assert not app.exception
+    assert app.session_state["funnel_result"]["stages"] == funnel_result["stages"]
+    assert app.multiselect(key=f"cfg_funnel_steps_{run_id}").value == steps
+    assert app.radio(key=f"cfg_funnel_mode_{run_id}").value == "Define manually"
