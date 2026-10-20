@@ -241,6 +241,19 @@ SAVED_ANALYSIS_KEYS = (
     "reference_conformance_result", "loop_result", "propensity_model", "ai_conclusion",
 )
 
+
+def _predictive_source() -> tuple:
+    """What the Predictive Insights tab's log is made from (see
+    _predictive_log): the run's raw log and config objects."""
+    return st.session_state.get("df"), st.session_state.get("config")
+
+
+def _insights_match_log(insights: dict) -> bool:
+    """Whether cached propensity insights were computed on the current log.
+    Scoring in-progress cases is about as slow as training on a large log, so
+    they're kept with a saved run too rather than recomputed on load."""
+    return all(a is b for a, b in zip(insights["source"], _predictive_source()))
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
 
 st.set_page_config(
@@ -1080,11 +1093,23 @@ elif data_source == "Load saved run":
             # The Loops & Switches groups the restored loop_result was made with,
             # which can differ from the config's (they're redefined after a run).
             saved_loop_params = saved_analyses.pop("loop_params", None)
+            # Runs saved before the pipeline's own funnel was left out of the
+            # analyses (see Save to Library) hold a copy of it: drop that, so the
+            # Funnel tab falls back to the results' own object as for a fresh run.
+            if saved_analyses.get("funnel_result") == saved_results.get("funnel_analysis"):
+                saved_analyses.pop("funnel_result", None)
             if saved_loop_params is not None:
                 st.session_state[_ck("loop_params")] = saved_loop_params
             for key in SAVED_ANALYSIS_KEYS:
                 if key in saved_analyses:
                     st.session_state[key] = saved_analyses[key]
+            # The model's drivers and in-progress scores, as shown when it was saved.
+            if saved_analyses.get("propensity_insights") and "propensity_model" in saved_analyses:
+                st.session_state["propensity_insights"] = {
+                    **saved_analyses["propensity_insights"],
+                    "model_bundle": st.session_state["propensity_model"],
+                    "source": _predictive_source(),
+                }
             saved_results_note = (
                 "success",
                 "Restored this run's saved results and settings below"
@@ -1796,14 +1821,16 @@ def _propensity_insights(analysis_df: pd.DataFrame, model_bundle: dict) -> tuple
     """(drivers, score summary) for a trained propensity model, computed once
     per model/dataset and reused on later reruns - scoring every in-progress
     case again on each rerun would slow down every widget in the results
-    fragment once the AI payload needs it too."""
+    fragment once the AI payload needs it too. Keyed on the log analysis_df
+    is made from (see _predictive_source), so a saved run can hand back the
+    ones saved with it before analysis_df has been built."""
     cached = st.session_state.get("propensity_insights")
-    if cached and cached["model_bundle"] is model_bundle and cached["analysis_df"] is analysis_df:
+    if cached and cached["model_bundle"] is model_bundle and _insights_match_log(cached):
         return cached["drivers"], cached["summary"]
     drivers = analyze_propensity_drivers(model_bundle)
     summary = summarize_propensity_scores(analysis_df, model_bundle)
     st.session_state["propensity_insights"] = {
-        "model_bundle": model_bundle, "analysis_df": analysis_df,
+        "model_bundle": model_bundle, "source": _predictive_source(),
         "drivers": drivers, "summary": summary,
     }
     return drivers, summary
@@ -2131,8 +2158,20 @@ def _render_results_tabs():
                                 key: st.session_state[key] for key in SAVED_ANALYSIS_KEYS
                                 if st.session_state.get(key) is not None
                             }
+                            # The pipeline's own funnel (the Funnel tab's default) is
+                            # already in the results. A separate copy would no longer be
+                            # that same object once loaded, which the AI payload takes
+                            # to mean a user-defined funnel (see ai_payload.build_ai_payload).
+                            if analyses.get("funnel_result") is results.get("funnel_analysis"):
+                                analyses.pop("funnel_result")
                             if "loop_result" in analyses:
                                 analyses["loop_params"] = st.session_state.get(_ck("loop_params"))
+                            insights = st.session_state.get("propensity_insights")
+                            if (insights and insights["model_bundle"] is analyses.get("propensity_model")
+                                    and _insights_match_log(insights)):
+                                analyses["propensity_insights"] = {
+                                    "drivers": insights["drivers"], "summary": insights["summary"],
+                                }
                             manifest = save_run(
                                 event_log_df,
                                 save_label.strip(),
