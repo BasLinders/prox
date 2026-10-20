@@ -6,6 +6,7 @@ from prox.saved_runs import (
     load_saved_run,
     get_saved_run_manifest,
     load_saved_results,
+    load_saved_analyses,
     delete_saved_run,
     _safe_run_id,
 )
@@ -261,6 +262,108 @@ def test_delete_saved_run_removes_results_and_assets(tmp_path):
     save_dir = tmp_path / "saved_runs"
     df = make_event_log([('c1', 'a', '2024-01-01 00:00:00')])
     manifest = save_run(df, "Acme Corp", "user", save_dir=str(save_dir), results={"chart": str(chart)})
+
+    delete_saved_run(manifest["run_id"], save_dir=str(save_dir))
+
+    assert os.listdir(save_dir) == []
+
+
+# --- tab analyses (funnel, segment comparison, predictive model, ...) ---
+
+def _segment_chart(tmp_path, content=b"seg-png"):
+    seg_dir = tmp_path / "output" / "segment_mobile"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    chart = seg_dir / "happy_path_model.png"
+    chart.write_bytes(content)
+    return str(chart)
+
+
+def test_analyses_and_funnel_round_trip(tmp_path):
+    chart = _segment_chart(tmp_path)
+    analyses = {
+        "funnel_result": {"stages": {"a": {"cases_reached": 1}}},
+        "segment_result": {"segment_col": "device", "segments": {"mobile": {"visualizations": {"happy_path": chart}}}},
+    }
+    funnel = {"mode": "manual", "steps": ["a", "b"], "segment_col": None}
+    df = make_event_log([('c1', 'a', '2024-01-01 00:00:00')])
+    save_dir = str(tmp_path / "saved_runs")
+
+    manifest = save_run(df, "Acme Corp", "user", save_dir=save_dir, results={"ok": True},
+                        analyses=analyses, funnel=funnel)
+    os.remove(chart)  # the next segment comparison overwrites the output folder
+
+    stored = get_saved_run_manifest(manifest["run_id"], save_dir=save_dir)
+    assert stored["funnel"] == funnel
+    assert stored["analyses"] == ["funnel_result", "segment_result"]
+    loaded, note = load_saved_analyses(stored, save_dir=save_dir)
+    assert note is None
+    assert loaded["funnel_result"] == analyses["funnel_result"]
+    restored_chart = loaded["segment_result"]["segments"]["mobile"]["visualizations"]["happy_path"]
+    assert open(restored_chart, "rb").read() == b"seg-png"
+
+
+def test_load_saved_analyses_empty_when_none_were_saved(tmp_path):
+    df = make_event_log([('c1', 'a', '2024-01-01 00:00:00')])
+    manifest = save_run(df, "Acme Corp", "user", save_dir=str(tmp_path), results={"ok": True})
+
+    assert load_saved_analyses(manifest, save_dir=str(tmp_path)) == ({}, None)
+
+
+def test_resaving_with_new_analyses_updates_the_existing_entry(tmp_path):
+    """Running the funnel after saving, then saving again, adds it to that
+    entry instead of creating a near-identical second one."""
+    df = make_event_log([('c1', 'a', '2024-01-01 00:00:00')])
+    save_dir = str(tmp_path / "saved_runs")
+    first = save_run(df, "Acme Corp", "user", save_dir=save_dir, config={"x": 1}, results={"ok": True},
+                     analyses={"funnel_result": {"v": 1}})
+
+    second = save_run(df, "Acme Corp", "user", save_dir=save_dir, config={"x": 1}, results={"ok": True},
+                      analyses={"funnel_result": {"v": 2}, "propensity_model": {"model": None}})
+
+    assert second["run_id"] == first["run_id"]
+    assert second["already_saved"] is True and second["analyses_updated"] is True
+    assert len(list_saved_runs(save_dir=save_dir)) == 1
+    stored = get_saved_run_manifest(first["run_id"], save_dir=save_dir)
+    assert stored["analyses"] == ["funnel_result", "propensity_model"]
+    assert load_saved_analyses(stored, save_dir=save_dir)[0]["funnel_result"] == {"v": 2}
+
+
+def test_resaving_unchanged_analyses_is_not_an_update(tmp_path):
+    df = make_event_log([('c1', 'a', '2024-01-01 00:00:00')])
+    analyses = {"funnel_result": {"v": 1}}
+    save_run(df, "Acme Corp", "user", save_dir=str(tmp_path), analyses=analyses)
+
+    second = save_run(df, "Acme Corp", "user", save_dir=str(tmp_path), analyses=analyses)
+
+    assert second["already_saved"] is True
+    assert "analyses_updated" not in second
+
+
+def test_resaving_loaded_analyses_keeps_their_charts(tmp_path):
+    """A loaded run's analyses point into its own assets folder - re-saving
+    them must not delete the files it's copying from."""
+    chart = _segment_chart(tmp_path)
+    df = make_event_log([('c1', 'a', '2024-01-01 00:00:00')])
+    save_dir = str(tmp_path / "saved_runs")
+    manifest = save_run(df, "Acme Corp", "user", save_dir=save_dir,
+                        analyses={"segment_result": {"chart": chart}})
+    loaded, _ = load_saved_analyses(manifest, save_dir=save_dir)
+
+    save_run(df, "Acme Corp", "user", save_dir=save_dir,
+             analyses={**loaded, "funnel_result": {"v": 1}})
+
+    reloaded, _ = load_saved_analyses(get_saved_run_manifest(manifest["run_id"], save_dir=save_dir), save_dir=save_dir)
+    assert open(reloaded["segment_result"]["chart"], "rb").read() == b"seg-png"
+    assets = os.listdir(os.path.join(save_dir, f"{manifest['run_id']}.assets"))
+    assert len([a for a in assets if a.startswith("analyses-")]) == 1
+
+
+def test_delete_saved_run_removes_analyses(tmp_path):
+    chart = _segment_chart(tmp_path)
+    save_dir = tmp_path / "saved_runs"
+    df = make_event_log([('c1', 'a', '2024-01-01 00:00:00')])
+    manifest = save_run(df, "Acme Corp", "user", save_dir=str(save_dir), results={"ok": True},
+                        analyses={"segment_result": {"chart": chart}})
 
     delete_saved_run(manifest["run_id"], save_dir=str(save_dir))
 

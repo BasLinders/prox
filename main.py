@@ -55,6 +55,7 @@ from prox import (
     load_saved_run,
     get_saved_run_manifest,
     load_saved_results,
+    load_saved_analyses,
     delete_saved_run,
     DEFAULT_SAVED_RUNS_DIR,
     train_propensity_model,
@@ -230,6 +231,14 @@ RESULT_STATE_KEYS = (
     "results", "df", "segment_result", "funnel_result",
     "funnel_segment_result", "reference_conformance_result", "loop_result",
     "propensity_model", "propensity_insights", "ai_conclusion", "ai_conclusion_error",
+)
+
+# The tab follow-ups kept with a saved run (Save Event Log to Library), so
+# loading it brings those tabs back too. Leaves out what's derived from them
+# on the fly (propensity_insights) and a failed AI request.
+SAVED_ANALYSIS_KEYS = (
+    "segment_result", "funnel_result", "funnel_segment_result",
+    "reference_conformance_result", "loop_result", "propensity_model", "ai_conclusion",
 )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
@@ -516,8 +525,8 @@ if st.session_state.get("data_source_choice") == "Load saved run" and st.session
     if _restored_manifest and _restored_manifest.get("config"):
         restored_config = _restored_manifest["config"]
         _config_scope = _restored_manifest["run_id"]
-        # Saved runs don't store a funnel yet; when they do, it goes in the
-        # manifest under "funnel" (see prox/presets.py) and is picked up here.
+        # The funnel set up when the run was saved, if any - same shape as a
+        # preset's (see prox/presets.py).
         restored_funnel = _restored_manifest.get("funnel")
 elif st.session_state.get("active_preset"):
     # A config preset (sidebar -> Configuration preset) stands in for a saved
@@ -997,6 +1006,8 @@ elif data_source == "Load saved run":
     for m in known_runs:
         link_note = f", linked to cache '{m['source_dataset_id']}'" if m.get("source_dataset_id") else ""
         results_note = ", results saved" if m.get("has_results") else ""
+        if m.get("analyses"):
+            results_note += " (incl. tab analyses)"
         run_labels[m.get("run_id")] = (
             f"{m.get('label')} — {m.get('n_events', 0):,} events, "
             f"{m.get('n_cases', 0):,} cases, saved {m.get('saved_at', '?')}{link_note}{results_note}"
@@ -1065,11 +1076,23 @@ elif data_source == "Load saved run":
         if saved_results is not None:
             st.session_state["results"] = saved_results
             st.session_state["df"] = restored_df
+            saved_analyses, saved_analyses_note = load_saved_analyses(saved_manifest, save_dir=DEFAULT_SAVED_RUNS_DIR)
+            # The Loops & Switches groups the restored loop_result was made with,
+            # which can differ from the config's (they're redefined after a run).
+            saved_loop_params = saved_analyses.pop("loop_params", None)
+            if saved_loop_params is not None:
+                st.session_state[_ck("loop_params")] = saved_loop_params
+            for key in SAVED_ANALYSIS_KEYS:
+                if key in saved_analyses:
+                    st.session_state[key] = saved_analyses[key]
             saved_results_note = (
                 "success",
-                "Restored this run's saved results and settings below - no need to run the "
-                "analysis again, unless you change the settings.",
+                "Restored this run's saved results and settings below"
+                + (", including the analyses run in its tabs" if saved_analyses else "")
+                + " - no need to run the analysis again, unless you change the settings.",
             )
+            if saved_analyses_note:
+                saved_results_note = ("warning", saved_analyses_note)
         elif saved_results_note:
             saved_results_note = ("warning", saved_results_note)
         # Shown until the next Run Analysis replaces these results.
@@ -1638,6 +1661,20 @@ current_config = create_analysis_config(
 # ---------------------------------------------------------------------------
 # Save the current settings (plus the funnel, if one is set up) as a preset
 # ---------------------------------------------------------------------------
+def _current_funnel_settings() -> dict | None:
+    """The Funnel tab's widgets as funnel settings (for a preset or a saved
+    run), or None before that tab has rendered."""
+    mode_label = st.session_state.get(_ck("funnel_mode"))
+    if not mode_label:
+        return None
+    segment = st.session_state.get(_ck("funnel_segment"))
+    return build_funnel_settings(
+        "auto" if mode_label == "Auto-detect from data" else "manual",
+        st.session_state.get(_ck("funnel_steps")),
+        segment if segment != "None" else None,
+    )
+
+
 with st.expander("Save settings as preset"):
     st.caption(
         "Keeps the sidebar, filter and sampling settings above, the funnel from the "
@@ -1646,15 +1683,7 @@ with st.expander("Save settings as preset"):
         "sidebar's **Configuration preset**. Settings are those last applied - click "
         "**Apply Configuration** first after changing the filter or sampling."
     )
-    _funnel_mode_label = st.session_state.get(_ck("funnel_mode"))
-    _saved_funnel = (
-        build_funnel_settings(
-            "auto" if _funnel_mode_label == "Auto-detect from data" else "manual",
-            st.session_state.get(_ck("funnel_steps")),
-            st.session_state.get(_ck("funnel_segment")) if st.session_state.get(_ck("funnel_segment")) != "None" else None,
-        )
-        if _funnel_mode_label else None
-    )
+    _saved_funnel = _current_funnel_settings()
     if _saved_funnel is None:
         st.caption("No funnel is set up yet, so this preset won't include one.")
     elif _saved_funnel["mode"] == "manual" and _saved_funnel["steps"]:
@@ -2074,8 +2103,10 @@ def _render_results_tabs():
                 st.caption(
                     "Register this run's event log so you can pick it back up later "
                     "from Step 1 → **Load saved run**, without re-running conformance "
-                    "checks or other configurables. Useful when saving separate runs "
-                    "for different clients."
+                    "checks or other configurables. Analyses run in the tabs below "
+                    "(funnel, segment comparison, predictive model, ...) are kept too - "
+                    "save again after running more to add them. Useful when saving "
+                    "separate runs for different clients."
                 )
                 if active_source_dataset_id:
                     st.caption(
@@ -2096,6 +2127,12 @@ def _render_results_tabs():
                         if not save_label.strip():
                             st.warning("Enter a label first.")
                         else:
+                            analyses = {
+                                key: st.session_state[key] for key in SAVED_ANALYSIS_KEYS
+                                if st.session_state.get(key) is not None
+                            }
+                            if "loop_result" in analyses:
+                                analyses["loop_params"] = st.session_state.get(_ck("loop_params"))
                             manifest = save_run(
                                 event_log_df,
                                 save_label.strip(),
@@ -2104,8 +2141,16 @@ def _render_results_tabs():
                                 save_dir=DEFAULT_SAVED_RUNS_DIR,
                                 config=st.session_state.get("config"),
                                 results=results,
+                                analyses=analyses,
+                                funnel=_current_funnel_settings(),
                             )
-                            if manifest.get("already_saved"):
+                            if manifest.get("analyses_updated"):
+                                st.success(
+                                    f"Updated '{manifest['label']}' ({manifest.get('saved_at', '?')}) with the "
+                                    "analyses now in its tabs (funnel, segment comparison, predictive model, ...). "
+                                    "Same event log and settings, so no second entry was added."
+                                )
+                            elif manifest.get("already_saved"):
                                 st.info(
                                     f"This exact run (same event log and settings) is already saved as "
                                     f"'{manifest['label']}' ({manifest.get('saved_at', '?')}) - not adding a duplicate."
@@ -3253,11 +3298,22 @@ def _render_results_tabs():
                 "values (e.g. device type, traffic source, category)."
             )
         else:
+            # Start from the comparison shown below (e.g. one restored with a
+            # saved run), so the widgets match it.
+            shown_segments = st.session_state.get("segment_result") or {}
             c1, c2, c3 = st.columns([2, 1, 1])
             with c1:
-                segment_col = st.selectbox("Segment by column", segment_candidates)
+                segment_col = st.selectbox(
+                    "Segment by column", segment_candidates,
+                    index=(
+                        segment_candidates.index(shown_segments["segment_col"])
+                        if shown_segments.get("segment_col") in segment_candidates else 0
+                    ),
+                )
             with c2:
-                top_n_segments = st.number_input("Max segments", min_value=2, max_value=10, value=5)
+                top_n_segments = st.number_input(
+                    "Max segments", min_value=2, max_value=10, value=shown_segments.get("top_n_segments", 5)
+                )
             with c3:
                 st.write("")
                 st.write("")
@@ -3283,7 +3339,9 @@ def _render_results_tabs():
                         raw_df, segment_col=segment_col, config=segment_config,
                         top_n_segments=int(top_n_segments), parallel=run_parallel
                     )
-                st.session_state["segment_result"] = {**segment_result, "segment_col": segment_col}
+                st.session_state["segment_result"] = {
+                    **segment_result, "segment_col": segment_col, "top_n_segments": int(top_n_segments),
+                }
 
             segment_result = st.session_state.get("segment_result")
             if segment_result:
@@ -3408,9 +3466,15 @@ def _render_results_tabs():
                     "the event filter, so it can't be picked as an outcome here. Remove it from "
                     "the event filter and re-run the analysis to predict it."
                 )
+            # Start from the settings of the model shown below (e.g. one
+            # restored with a saved run), so the widgets match it.
+            shown_training = (st.session_state.get("propensity_model") or {}).get("training_config") or {}
+            shown_outcome = shown_training.get("outcome_activity") or []
+            shown_outcome = [shown_outcome] if isinstance(shown_outcome, str) else list(shown_outcome)
             outcome_activities = st.multiselect(
                 "Outcome activity (what counts as success)",
                 options=activities,
+                default=[a for a in shown_outcome if a in activities],
                 help=(
                     "The activity/activities that mark a case as having succeeded, "
                     "e.g. 'purchase'. A case is labelled positive if it reaches any "
@@ -3428,6 +3492,7 @@ def _render_results_tabs():
             case_attribute_cols = st.multiselect(
                 "Case attributes to include (optional)",
                 options=attribute_candidates,
+                default=[c for c in shown_training.get("case_attribute_cols") or [] if c in attribute_candidates],
                 help=(
                     "Static or slowly-changing columns (e.g. device, category) added "
                     "as features alongside the activities visited so far."
@@ -3437,7 +3502,13 @@ def _render_results_tabs():
             revenue_candidates = [c for c in ["price", "event_value", "revenue", "amount"] if c in analysis_df.columns]
             revenue_col = None
             if revenue_candidates:
-                revenue_choice = st.selectbox("Revenue column (optional)", options=["None"] + revenue_candidates)
+                revenue_choice = st.selectbox(
+                    "Revenue column (optional)", options=["None"] + revenue_candidates,
+                    index=(
+                        revenue_candidates.index(shown_training["revenue_col"]) + 1
+                        if shown_training.get("revenue_col") in revenue_candidates else 0
+                    ),
+                )
                 if revenue_choice != "None":
                     revenue_col = revenue_choice
 
