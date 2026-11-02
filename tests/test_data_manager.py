@@ -733,6 +733,25 @@ def test_merge_page_views_requires_same_url_when_column_present():
     assert merge_page_views_into_page_events(different)[1] == 0
 
 
+def test_merge_page_views_ignores_query_string_and_fragment():
+    df = _pv_log([('page_view', 0), ('view_item', 1)], page_location=['/p/1?gclid=abc#top', '/p/1'])
+    result, removed = merge_page_views_into_page_events(df)
+    assert removed == 1
+    assert result['page_location'].tolist() == ['/p/1']
+
+
+def test_merge_page_views_previous_page_view_not_absorbed_when_url_differs():
+    # view_item fires before its own page_view; without the URL check it would
+    # merge the previous page's page_view instead.
+    df = _pv_log(
+        [('page_view', 0), ('view_item', 2), ('page_view', 2.3)],
+        page_location=['/', '/p/1', '/p/1'],
+    )
+    result, removed = merge_page_views_into_page_events(df)
+    assert removed == 0
+    assert len(result) == 3
+
+
 def test_merge_page_views_noop_without_both_kinds():
     only_pv = _pv_log([('page_view', 0), ('click', 1)])
     result, removed = merge_page_views_into_page_events(only_pv)

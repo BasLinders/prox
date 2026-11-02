@@ -895,6 +895,8 @@ SELECT
   COALESCE(session_traffic_source_last_click.manual_campaign.medium,
            traffic_source.medium)                     AS traffic_medium,
   geo.country                                         AS geo_country,
+  (SELECT value.string_value FROM UNNEST(event_params)
+   WHERE key = 'page_location')                       AS page_location,
   IF(event_name = 'purchase', 1, 0)                   AS purchase,
   IF(event_name = 'add_to_cart', 1, 0)                AS add_to_cart
 FROM

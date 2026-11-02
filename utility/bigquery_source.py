@@ -209,8 +209,10 @@ def render_bigquery_source() -> Optional[bytes]:
     # conventions throughout. include_geo adds geo_country, which -- unlike
     # category -- comes from GA4's own automatic IP geolocation rather than
     # the site's ecommerce/GTM setup, so it's a reliable fallback segment
-    # dimension even when category comes back empty.
-    connection = BQConnectionConfig(project=project, dataset=dataset, location=default_location)
+    # dimension even when category comes back empty. attribute_params pulls
+    # page_location, which merge_page_views_into_page_events uses to only
+    # merge a page_view with a page-specific event from the same URL.
+    connection =BQConnectionConfig(project=project, dataset=dataset, location=default_location)
     date_range = DateRange(start_date=start_date, end_date=end_date)
     try:
         params = EventLogExtractionParams(
@@ -223,6 +225,7 @@ def render_bigquery_source() -> Optional[bytes]:
             include_traffic_source=True,
             include_item_category=True,
             include_geo=True,
+            attribute_params=["page_location"],
             event_names=event_names,
         )
     except Exception as e:
