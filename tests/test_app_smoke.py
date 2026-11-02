@@ -430,3 +430,97 @@ def test_saved_run_keeps_the_analyses_run_in_its_tabs(app):
     assert app.session_state["funnel_result"]["stages"] == funnel_result["stages"]
     assert app.multiselect(key=f"cfg_funnel_steps_{run_id}").value == steps
     assert app.radio(key=f"cfg_funnel_mode_{run_id}").value == "Define manually"
+
+
+def _train_model_and_generate_ai_conclusion(app, monkeypatch):
+    from utility import ai_client
+
+    monkeypatch.setattr(ai_client, "is_configured", lambda: True)
+    monkeypatch.setattr(ai_client, "generate_conclusion", lambda data, language, on_progress=None, **kwargs: {
+        "ok": True, "error": None, "error_kind": None, "model_used": None,
+        "model_requested": "fake-model", "models_tried": ["fake-model"],
+        "text": '{"summary": "All good.", "key_findings": ["F1"], "next_steps": ["N1"]}',
+    })
+    _run_mock_analysis(app)
+    next(m for m in app.multiselect if m.label.startswith("Outcome activity")).set_value(["purchase"]).run()
+    next(n for n in app.number_input if n.label.startswith("Minimum completed")).set_value(5).run()
+    next(b for b in app.button if b.label == "Train Propensity Model").click().run()
+    next(b for b in app.button if b.label == "Generate AI Conclusion").click().run()
+    assert not app.exception
+    assert any(c.label == "AI Summary & Next Steps" for c in app.checkbox)
+
+
+def _load_saved_run(app, run_id):
+    app.radio(key="data_source_choice").set_value("Load saved run").run()
+    app.selectbox[0].set_value(run_id).run()
+    assert not app.exception
+
+
+def _assert_ai_conclusion_still_current(app):
+    assert app.session_state["ai_conclusion"]["next_steps"] == ["N1"]
+    assert not any("changed since this conclusion" in w.value for w in app.warning)
+    assert any(c.label == "AI Summary & Next Steps" for c in app.checkbox)
+    assert any(c.label == "Predictive Insights" for c in app.checkbox)
+
+
+def test_saved_run_keeps_its_ai_conclusion_current(app, monkeypatch):
+    """The pipeline's own (auto-detected) funnel must come back as that, not as
+    a user-defined one - otherwise the AI payload changes and the restored
+    conclusion is flagged out of date and left out of the reports."""
+    _train_model_and_generate_ai_conclusion(app, monkeypatch)
+    app.text_input(key="save_run_label").set_value("Acme").run()
+    next(b for b in app.button if b.label == "Save to Library").click().run()
+    [saved] = list_saved_runs(save_dir=DEFAULT_SAVED_RUNS_DIR)
+    assert "funnel_result" not in saved["analyses"]
+
+    _load_saved_run(app, saved["run_id"])
+
+    _assert_ai_conclusion_still_current(app)
+
+
+def test_run_saved_with_a_copy_of_the_pipeline_funnel_keeps_its_ai_conclusion_current(app, monkeypatch):
+    """Runs saved before the pipeline's funnel was left out of the analyses."""
+    import copy
+
+    _train_model_and_generate_ai_conclusion(app, monkeypatch)
+    results = app.session_state["results"]
+    saved = save_run(
+        app.session_state["df"], "Acme", "user", save_dir=DEFAULT_SAVED_RUNS_DIR,
+        config=app.session_state["config"], results=results,
+        analyses={
+            "funnel_result": copy.deepcopy(results["funnel_analysis"]),
+            "propensity_model": app.session_state["propensity_model"],
+            "ai_conclusion": app.session_state["ai_conclusion"],
+        },
+    )
+
+    _load_saved_run(app, saved["run_id"])
+
+    _assert_ai_conclusion_still_current(app)
+
+
+def test_saved_run_shows_its_predictive_insights_without_rescoring(app, monkeypatch):
+    """Scoring every in-progress case again is about as slow as training on a
+    large log - a loaded run shows the drivers and scores it was saved with."""
+    import prox
+
+    _run_mock_analysis(app)
+    next(m for m in app.multiselect if m.label.startswith("Outcome activity")).set_value(["purchase"]).run()
+    next(n for n in app.number_input if n.label.startswith("Minimum completed")).set_value(5).run()
+    next(b for b in app.button if b.label == "Train Propensity Model").click().run()
+    shown = [m.value for m in app.metric if m.label in ("In-Progress Cases Scored", "Average Propensity")]
+    app.text_input(key="save_run_label").set_value("Acme").run()
+    next(b for b in app.button if b.label == "Save to Library").click().run()
+    [saved] = list_saved_runs(save_dir=DEFAULT_SAVED_RUNS_DIR)
+    assert "propensity_insights" in saved["analyses"]
+
+    def no_rescoring(*args, **kwargs):
+        raise AssertionError("in-progress cases were scored again")
+
+    monkeypatch.setattr(prox, "summarize_propensity_scores", no_rescoring)
+    fresh = AppTest.from_file(MAIN_PY, default_timeout=180)
+    fresh.run()
+    _load_saved_run(fresh, saved["run_id"])
+
+    assert {"Top Drivers", "In-Progress Cases"} <= {s.value for s in fresh.subheader}
+    assert [m.value for m in fresh.metric if m.label in ("In-Progress Cases Scored", "Average Propensity")] == shown
