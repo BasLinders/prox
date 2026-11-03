@@ -374,6 +374,8 @@ PAGE_VIEW_MERGE_WINDOW_SECONDS = 5.0
 
 # Columns that, when present, identify the page an event fired on and so
 # tighten the match (a page_view only merges with an event from the same URL).
+# The query string and fragment are ignored: tracking parameters such as gclid
+# can sit on the page_view's URL and not on the page-specific event's.
 _PAGE_KEY_COLUMNS = ('page_location', 'page_url')
 
 
@@ -393,7 +395,8 @@ def merge_page_views_into_page_events(
 
     A page_view is merged when a page-specific event in the same case occurs
     at the same time or up to window_seconds after it (and, if the log has a
-    page_location / page_url column, on the same URL). The page-specific event
+    page_location / page_url column, on the same URL, ignoring the query string
+    and fragment). The page-specific event
     is never strictly *before* its own page_view, so an event that fired
     earlier belongs to the previous page and does not absorb the page_view of
     the next one. Because equal timestamps count as a match, the result does
@@ -433,7 +436,9 @@ def merge_page_views_into_page_events(
         out = df.loc[mask, cols].copy()
         out['_row'] = np.flatnonzero(mask)  # position, so a non-unique index is safe
         if key_col:
-            out['_page_key'] = out.pop(key_col).fillna('').astype(str)
+            out['_page_key'] = (
+                out.pop(key_col).fillna('').astype(str).str.replace(r'[?#].*', '', regex=True)
+            )
         return out.sort_values('time:timestamp', kind='stable')
 
     right = _frame(is_page_view)
