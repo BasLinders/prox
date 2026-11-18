@@ -224,3 +224,19 @@ def test_loops_section_from_a_run_with_back_navigation():
 
 def test_loops_section_is_not_run_without_loop_data():
     assert "loops" in build_ai_payload({})["not_run"]
+
+
+def test_loops_section_includes_url_split_and_page_loops():
+    from prox.loops import analyze_loops
+    df = make_event_log([
+        ('1', 'list', '2024-01-01 00:00'), ('1', 'item', '2024-01-01 00:01'),
+        ('1', 'list', '2024-01-01 00:02'), ('2', 'list', '2024-01-01 00:00'),
+    ])
+    df['page_location'] = ['https://a.nl/c/x?email=me@example.com', '/p/1', '/c/x', '/c/x']
+    payload = build_ai_payload({"loop_analysis": analyze_loops(df, url_col='page_location', group_by_section=True)})
+
+    section = payload["loops"]
+    assert section["back_navigation_by_url"]["pct_of_cases_returning_to_the_same_url"] == 50
+    assert section["page_level_loops"]["top_page_back_navigation_patterns"][0]["pattern"] == "/c/x -> /p/{id} -> /c/x"
+    assert section["group_switches"]["groups_from"] == "site sections from the page URLs"
+    assert "example.com" not in json.dumps(payload)

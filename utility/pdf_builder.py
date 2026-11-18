@@ -505,13 +505,24 @@ def _section_loops(results, segment_result, styles) -> List:
         ("Repeat-visit events", f"{summary['repeat_events']:,}"),
     ], styles))
 
+    has_urls = "back_nav_same_url_events" in summary
     patterns = loops.get("back_navigation") or {}
     if patterns:
         story.append(Spacer(1, 16))
         story.append(_subheading("Most common back-navigation", styles))
         story.append(_dict_table(
             patterns,
-            ["occurrences", "cases", "case_share"], ["Occurrences", "Cases", "% of Cases"],
+            ["occurrences", "cases", "case_share"] + (["same_url", "other_url"] if has_urls else []),
+            ["Occurrences", "Cases", "% of Cases"] + (["Same URL", "Other URL"] if has_urls else []),
+        ))
+    if has_urls:
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(
+            f"By URL: {summary['back_nav_same_url_case_share']:.1f}% of cases return to the same URL, "
+            f"{summary['back_nav_other_url_case_share']:.1f}% move to another page of the same kind "
+            f"(e.g. one product, the list, then another product) and "
+            f"{summary['back_nav_in_page_case_share']:.1f}% have back-navigation within one page.",
+            styles["Normal"],
         ))
 
     repeats = loops.get("repeats") or {}
@@ -536,6 +547,31 @@ def _section_loops(results, segment_result, styles) -> List:
         ))
         story.append(Spacer(1, 6))
         story.append(_dict_table(after.get("next_activity") or {}, ["count", "share"], ["Count", "Share (%)"]))
+
+    page = loops.get("page_loops") or {}
+    page_summary = page.get("summary") or {}
+    if page_summary:
+        story.append(Spacer(1, 16))
+        story.append(_subheading("Loops between pages", styles))
+        story.append(Paragraph(
+            f"On page visits from '{html.escape(str(page.get('url_col')))}' (consecutive events on one page "
+            f"are one visit): {page_summary['back_nav_case_share']:.1f}% of cases go back to the page before, "
+            f"{page_summary['repeat_case_share']:.1f}% visit a page again. "
+            f"{page_summary['events_without_url']:,} events have no URL and are left out.",
+            styles["Normal"],
+        ))
+        if page.get("back_navigation"):
+            story.append(Spacer(1, 6))
+            story.append(_dict_table(
+                page["back_navigation"],
+                ["occurrences", "cases", "case_share"], ["Occurrences", "Cases", "% of Cases"],
+            ))
+        if page.get("repeats"):
+            story.append(Spacer(1, 6))
+            story.append(_dict_table(
+                page["repeats"], ["repeat_case_share", "repeat_events", "visits_per_case"],
+                ["% of Its Cases Revisiting", "Repeat Visits", "Visits per Case"],
+            ))
 
     switches = loops.get("group_switches")
     if switches and switches.get("transitions"):

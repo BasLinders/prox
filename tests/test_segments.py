@@ -184,3 +184,15 @@ def test_compare_segments_includes_group_switch_share_when_groups_are_configured
 
     assert table['mobile']['group_switch_case_share'] == 100
     assert table['desktop']['group_switch_case_share'] == 100
+
+
+def test_compare_segments_includes_same_url_back_nav_share_with_urls(tmp_path):
+    df = make_segmented_log()
+    df['page_location'] = '/' + df['concept:name'].astype(str)
+    config = create_analysis_config(filter_steps=[], sample_size=10)
+
+    table = compare_segments(
+        df, segment_col='device', config=config, parallel=False, output_folder=str(tmp_path)
+    )['comparison_table']
+
+    assert table['mobile']['same_url_back_nav_case_share'] == 0

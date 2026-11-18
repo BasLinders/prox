@@ -10,7 +10,7 @@ from .analytics import (
 )
 from .visualizer import visualize_focused_insights, export_results
 from .process_graph import build_process_graph
-from .loops import analyze_loops
+from .loops import analyze_loops, resolve_loop_params
 from .data_manager import filter_event_log, FILTER_HANDLERS, sample_log_stratified
 
 logger = logging.getLogger(__name__)
@@ -375,13 +375,10 @@ def run_full_analysis(
             'journeys': summarize_user_journeys(session_labels),
         }
 
-    loop_cfg = config.get("loop_params") or {}
     loop_analysis = analyze_loops(
         log_df,
-        activity_groups=loop_cfg.get("activity_groups"),
-        group_col=loop_cfg.get("group_col"),
-        include_ungrouped=loop_cfg.get("include_ungrouped", False),
         purchase_values=biz_cfg.get("purchase_values", ['purchase', 'has_purchase']),
+        **resolve_loop_params(config.get("loop_params"), log_df.columns),
     )
     if loop_analysis['summary']:
         pipeline_results['loop_analysis'] = loop_analysis
