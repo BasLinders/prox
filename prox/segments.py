@@ -78,7 +78,9 @@ def compare_segments(
                                precision_score, repeat_rate, back_nav_case_share,
                                repeat_case_share, top_variant}}, plus
                                group_switch_case_share when config's
-                               loop_params define groups
+                               loop_params define groups, and
+                               same_url_back_nav_case_share when the log
+                               has page URLs
         'errors'            : list of str
     """
     errors = []
@@ -202,6 +204,8 @@ def compare_segments(
             'back_nav_case_share': loop_summary.get('back_nav_case_share', 0),
             'repeat_case_share': loop_summary.get('repeat_case_share', 0),
             **({'group_switch_case_share': switches['summary']['switch_case_share']} if switches else {}),
+            **({'same_url_back_nav_case_share': loop_summary['back_nav_same_url_case_share']}
+               if 'back_nav_same_url_case_share' in loop_summary else {}),
             'top_variant': next(iter(top_variants), 'N/A'),
         }
 

@@ -63,7 +63,11 @@ from prox import (
     summarize_propensity_scores,
     analyze_loops,
 )
-from prox.loops import LOOP_INFERENCE_NOTE, OTHER_GROUP, fit_loop_params_to_log
+from prox.loops import (
+    LOOP_INFERENCE_NOTE, OTHER_GROUP, URL_PARAM_KEYS, detect_url_column, fit_loop_params_to_log,
+    format_sections_text, format_url_rules_text, parse_sections_text, parse_url_rules_text,
+    resolve_loop_params,
+)
 
 from prox.data_manager import find_emptying_step
 from prox.explorer_filters import (
@@ -1716,7 +1720,9 @@ with st.expander("Save settings as preset"):
     elif _saved_funnel["mode"] == "manual" and _saved_funnel["steps"]:
         st.caption("Funnel: " + " → ".join(_saved_funnel["steps"]))
     _saved_loop_params = current_config.get("loop_params") or {}
-    if _saved_loop_params.get("group_col"):
+    if _saved_loop_params.get("group_by_section"):
+        st.caption("Loop groups: site sections from the page URLs.")
+    elif _saved_loop_params.get("group_col"):
         st.caption(f"Loop groups: the values of '{_saved_loop_params['group_col']}'.")
     elif _saved_loop_params.get("activity_groups"):
         st.caption("Loop groups: " + ", ".join(_saved_loop_params["activity_groups"]))
@@ -2395,9 +2401,96 @@ def _render_results_tabs():
   as one visit.
 - **Switch back**: returning to the group just left (G1 -> G2 -> G1) -
   back-navigation at group level.
+- **With page URLs** (e.g. GA4's page_location), each back-navigation is
+  also split by URL: **to the same URL** (a real step back), **to another
+  URL** (the same kind of page, a different one - product A, the list,
+  then product B: comparing rather than going back) or **within one page**
+  (all three events on one URL: an in-page event, not a page change).
+- **Loops between pages**: the same analysis on page visits instead of
+  events. Consecutive events on one page are one visit, so it finds the
+  loops event names hide - e.g. between content pages that are all
+  page_view. Paths are cleaned (no domain, query string or fragment) and
+  IDs can be collapsed to {id}, so all product pages read as one.
+- **Site section**: the part of the site a page belongs to - by your
+  section rules, else the path's first segment.
             """
             )
         st.info(LOOP_INFERENCE_NOTE.replace(" -> ", " → "))
+
+        loop_purchase_values = (
+            st.session_state.get("config", {}).get("business_params", {}).get("purchase_values")
+        )
+        url_log = results.get("processed_log")
+        if url_log is not None:
+            url_loop = st.session_state.get(_ck("loop_params")) or {}
+            url_core_cols = {"case:concept:name", "concept:name", "time:timestamp", "user_id", "session_id"}
+            url_col_options = ["(none)"] + [
+                c for c in url_log.columns
+                if c not in url_core_cols and not str(c).startswith("_")
+                and (pd.api.types.is_string_dtype(url_log[c]) or isinstance(url_log[c].dtype, pd.CategoricalDtype))
+            ]
+            current_url_col = (
+                url_loop["url_col"] if "url_col" in url_loop else detect_url_column(url_log.columns)
+            )
+            with st.expander("Page URLs", expanded=False):
+                st.caption(
+                    "With a column holding each event's URL, back-navigation is split by URL and "
+                    "loops are also measured between pages. Only the path is used - no domain, "
+                    "query string or fragment, which can hold personal data."
+                )
+                url_choice = st.selectbox(
+                    "URL column", url_col_options, key=_ck("loop_url_col"),
+                    index=url_col_options.index(current_url_col) if current_url_col in url_col_options else 0,
+                    help="Detected automatically when the log has page_location, page_url or page_path.",
+                )
+                url_collapse = st.checkbox(
+                    "Collapse IDs in paths to {id}", value=bool(url_loop.get("collapse_ids", True)),
+                    key=_ck("loop_collapse_ids"),
+                    help=(
+                        "Path segments that are numbers, UUIDs, long hex strings or contain 5+ digits in a "
+                        "row become {id}, so /p/123 and /p/456 are one page. Off: every product is its "
+                        "own page. Doesn't affect the same-URL / another-URL split, which compares exact paths."
+                    ),
+                )
+                url_rules_text = st.text_area(
+                    "Path rules (optional)", value=format_url_rules_text(url_loop.get("url_rules")),
+                    key=_ck("loop_url_rules"),
+                    placeholder="^/(nl|en)(/|$) => /\n^/p/[^/]+$ => /p/{slug}",
+                    help=(
+                        "One rule per line: regex => replacement, applied in order to each path "
+                        "(lower case, starting with /). Use them to drop a language prefix or to "
+                        "treat all pages of one template as one page."
+                    ),
+                )
+                url_sections_text = st.text_area(
+                    "Site sections (optional)", value=format_sections_text(url_loop.get("sections")),
+                    key=_ck("loop_url_sections"),
+                    placeholder="Product = ^/p/\nCategory = ^/c/\nCheckout = ^/(cart|checkout)",
+                    help=(
+                        "One per line: section name = regex, matched against the path after the rules. "
+                        "A page matching none gets its path's first segment ('home' for /). Used when "
+                        "switches are grouped by site section."
+                    ),
+                )
+                parsed_rules, rule_errors = parse_url_rules_text(url_rules_text)
+                parsed_sections, section_errors = parse_sections_text(url_sections_text)
+                for err in rule_errors + section_errors:
+                    st.warning(err)
+                if st.button("Apply URL Settings", width='stretch', disabled=bool(rule_errors or section_errors)):
+                    url_params = {
+                        "url_col": None if url_choice == "(none)" else url_choice,
+                        "collapse_ids": url_collapse,
+                        "url_rules": parsed_rules,
+                        "sections": parsed_sections,
+                    }
+                    new_loop_params = {**url_loop, **url_params}
+                    if url_params["url_col"] is None:
+                        new_loop_params.pop("group_by_section", None)
+                    st.session_state[_ck("loop_params")] = new_loop_params
+                    st.session_state["loop_result"] = analyze_loops(
+                        url_log, purchase_values=loop_purchase_values,
+                        **resolve_loop_params(new_loop_params, url_log.columns),
+                    )
 
         loops = st.session_state.get("loop_result") or results.get("loop_analysis")
         if not loops or not loops.get("summary"):
@@ -2415,6 +2508,26 @@ def _render_results_tabs():
                 "Repeat-visit Events", f"{loop_summary['repeat_events']:,}",
                 help=f"Of which {loop_summary['self_loop_events']:,} immediate repeats (A -> A).",
             )
+            page_loops = loops.get("page_loops") or {}
+            if "back_nav_same_url_events" in loop_summary:
+                u1, u2, u3 = st.columns(3)
+                u1.metric(
+                    "Cases Going Back to the Same URL", f"{loop_summary['back_nav_same_url_case_share']:.1f}%",
+                    help="A -> B -> A where the second A is on the same URL as the first: a real step back.",
+                )
+                u2.metric(
+                    "Cases Moving to Another URL", f"{loop_summary['back_nav_other_url_case_share']:.1f}%",
+                    help="A -> B -> A on different URLs: the same kind of page, another one - e.g. product A, "
+                         "the list, then product B. Comparing, not going back.",
+                )
+                u3.metric(
+                    "Cases with It Within One Page", f"{loop_summary['back_nav_in_page_case_share']:.1f}%",
+                    help="A, B and A all on one URL: an event on the page, not a page change.",
+                )
+                st.caption(
+                    f"By the URLs in '{page_loops.get('url_col', 'the URL column')}'. "
+                    f"{loop_summary['back_nav_unknown_url_events']:,} back-navigation events have no URL to compare."
+                )
 
             st.subheader("Back-navigation (A → B → A)")
             if loops.get("back_navigation"):
@@ -2424,6 +2537,7 @@ def _render_results_tabs():
                 st.dataframe(
                     bn_df.rename(columns={
                         "occurrences": "Occurrences", "cases": "Cases", "case_share": "% of Cases",
+                        "same_url": "To the Same URL", "other_url": "To Another URL", "in_page": "Within One Page",
                     }).round(1),
                     width='stretch',
                 )
@@ -2439,7 +2553,8 @@ def _render_results_tabs():
                         "cases_with_activity": "Cases with Activity", "repeat_cases": "Cases Repeating",
                         "repeat_case_share": "% of Its Cases Repeating", "repeat_events": "Repeat Events",
                         "self_loop_events": "Immediate Repeats", "back_nav_returns": "Back-navigation Returns",
-                        "visits_per_case": "Visits per Case",
+                        "visits_per_case": "Visits per Case", "same_url_repeat_events": "Repeats on the Same URL",
+                        "distinct_urls_per_case": "Distinct URLs per Case",
                     }).round(2),
                     width='stretch',
                 )
@@ -2448,6 +2563,9 @@ def _render_results_tabs():
 
             st.subheader("What happens after a loop")
             loop_kind_labels = {"Back-navigation": "back_navigation", "Any repeat visit": "repeat"}
+            if "back_navigation_same_url" in loops.get("after_loop", {}):
+                loop_kind_labels["Back to the same URL"] = "back_navigation_same_url"
+                loop_kind_labels["To another URL"] = "back_navigation_other_url"
             loop_kind = loop_kind_labels[st.radio(
                 "Loop", list(loop_kind_labels), horizontal=True, key="loop_after_kind",
             )]
@@ -2496,6 +2614,73 @@ def _render_results_tabs():
                     "and a purchase."
                 )
 
+            st.subheader("Loops between pages")
+            page_summary = page_loops.get("summary")
+            if page_summary:
+                st.caption(
+                    f"The same analysis on page visits from '{page_loops['url_col']}': consecutive events "
+                    "on one page count as one visit"
+                    + (", and IDs in paths are collapsed to {id}" if page_loops.get("collapse_ids") else "")
+                    + f". {page_summary['page_visits']:,} visits over {page_summary['distinct_pages']:,} pages; "
+                    f"{page_summary['events_without_url']:,} events have no URL and are left out."
+                )
+                p1, p2, p3 = st.columns(3)
+                p1.metric("Cases with Page Back-navigation", f"{page_summary['back_nav_case_share']:.1f}%",
+                          help="Page A -> page B -> page A.")
+                p2.metric("Cases Revisiting a Page", f"{page_summary['repeat_case_share']:.1f}%")
+                p_after = (page_loops.get("after_loop") or {}).get("back_navigation") or {}
+                if p_after.get("loops"):
+                    p3.metric("Page Back-navigations Ending the Case", f"{p_after['exit_share']:.1f}%")
+                pb1, pb2 = st.columns(2)
+                with pb1:
+                    st.caption("Page back-navigation (A → B → A)")
+                    if page_loops.get("back_navigation"):
+                        pbn_df = pd.DataFrame.from_dict(page_loops["back_navigation"], orient="index")
+                        pbn_df.index = pbn_df.index.str.replace(" -> ", " → ")
+                        pbn_df.index.name = "Pages"
+                        st.dataframe(
+                            pbn_df.rename(columns={
+                                "occurrences": "Occurrences", "cases": "Cases", "case_share": "% of Cases",
+                            }).round(1),
+                            width='stretch',
+                        )
+                    else:
+                        st.info("No page back-navigation.")
+                with pb2:
+                    st.caption("Pages visited again")
+                    if page_loops.get("repeats"):
+                        prep_df = pd.DataFrame.from_dict(page_loops["repeats"], orient="index")
+                        prep_df.index.name = "Page"
+                        st.dataframe(
+                            prep_df[["repeat_case_share", "repeat_events", "visits_per_case"]].rename(columns={
+                                "repeat_case_share": "% of Its Cases Revisiting", "repeat_events": "Repeat Visits",
+                                "visits_per_case": "Visits per Case",
+                            }).round(2),
+                            width='stretch',
+                        )
+                    else:
+                        st.info("No page is visited twice within a case.")
+                if p_after.get("loops"):
+                    st.caption("Next page after a page back-navigation")
+                    pnext_df = pd.DataFrame.from_dict(p_after["next_activity"], orient="index")
+                    pnext_df.index.name = "Next Page"
+                    st.dataframe(
+                        pnext_df.rename(columns={"count": "Count", "share": "Share (%)"}).round(1),
+                        width='stretch',
+                    )
+                p_outcomes = (page_loops.get("outcomes") or {}).get("back_navigation")
+                if p_outcomes:
+                    st.caption(
+                        f"Conversion with page back-navigation: {p_outcomes['with']['conversion_rate']:.1f}% "
+                        f"({p_outcomes['with']['cases']:,} cases), without: "
+                        f"{p_outcomes['without']['conversion_rate']:.1f}% ({p_outcomes['without']['cases']:,} cases)."
+                    )
+            else:
+                st.info(
+                    "No page URLs in this analysis. Pick the column with each event's URL under "
+                    "**Page URLs** at the top of this tab."
+                )
+
             st.subheader("Switches between groups")
             st.caption(
                 "Group activities the way your site is organised (e.g. menu navigation vs. "
@@ -2518,13 +2703,19 @@ def _render_results_tabs():
                     if c not in loop_exclude_cols and 2 <= loop_nunique.get(c, 0) <= 50
                 ]
 
-                group_modes = ["Activity groups", "A column's values"]
+                loop_url_col = resolve_loop_params(current_loop, processed_log.columns)["url_col"]
+                group_modes = ["Activity groups", "A column's values", "Site sections (from URLs)"]
                 group_mode = st.radio(
                     "Groups from", group_modes, horizontal=True, key=_ck("loop_group_mode"),
-                    index=1 if current_loop.get("group_col") in loop_group_cols else 0,
+                    index=(
+                        2 if current_loop.get("group_by_section")
+                        else 1 if current_loop.get("group_col") in loop_group_cols else 0
+                    ),
                     help=(
                         "Activity groups: name each group and pick its activities. A column's "
-                        "values: each value of the column (e.g. each category) is a group."
+                        "values: each value of the column (e.g. each category) is a group. Site "
+                        "sections: the part of the site each event's URL is in - set the URL "
+                        "column and section rules under Page URLs."
                     ),
                 )
 
@@ -2549,6 +2740,15 @@ def _render_results_tabs():
                             st.warning(f"Group name '{name.strip()}' is used twice - give each group its own name.")
                         groups[name.strip()] = acts
                     loop_params = {"activity_groups": groups, "group_col": None}
+                elif group_mode == group_modes[2]:
+                    if loop_url_col:
+                        st.caption(
+                            f"Sections from the URLs in '{loop_url_col}': by your section rules under "
+                            "**Page URLs**, else each path's first segment."
+                        )
+                        loop_params = {"activity_groups": {}, "group_col": None, "group_by_section": True}
+                    else:
+                        st.info("No URL column - pick one under **Page URLs** at the top of this tab.")
                 elif loop_group_cols:
                     group_col = st.selectbox(
                         "Column", loop_group_cols, key=_ck("loop_group_col"),
@@ -2578,11 +2778,15 @@ def _render_results_tabs():
                     )
 
                 if loop_params and st.button("Analyse Switches", width='stretch'):
+                    # Keep the URL settings from Page URLs; the group settings are the ones above.
+                    loop_params = {
+                        **{k: current_loop[k] for k in URL_PARAM_KEYS if k in current_loop and k != "group_by_section"},
+                        **loop_params,
+                    }
                     st.session_state[_ck("loop_params")] = loop_params
                     st.session_state["loop_result"] = analyze_loops(
-                        processed_log,
-                        purchase_values=st.session_state.get("config", {}).get("business_params", {}).get("purchase_values"),
-                        **loop_params,
+                        processed_log, purchase_values=loop_purchase_values,
+                        **resolve_loop_params(loop_params, processed_log.columns),
                     )
                     loops = st.session_state["loop_result"]
 
@@ -3319,6 +3523,9 @@ def _render_results_tabs():
   the share of each segment's cases with a back-navigation (A -> B -> A),
   a repeated activity, or a switch between the groups defined in the
   Loops & Switches tab (only when groups are defined there).
+- **same_url_back_nav_case_share**: the share of cases with a
+  back-navigation that returns to the same URL (only when the log has page
+  URLs).
 - **Happy Path per Segment**: each segment's single most frequent variant,
   shown side by side to spot structural differences between segments.
             """
@@ -3397,7 +3604,7 @@ def _render_results_tabs():
                         "health_score": "{:.0f}", "fitness_score": "{:.1%}",
                         "precision_score": "{:.1%}", "repeat_rate": "{:.1f}%",
                         "back_nav_case_share": "{:.1f}%", "repeat_case_share": "{:.1f}%",
-                        "group_switch_case_share": "{:.1f}%",
+                        "group_switch_case_share": "{:.1f}%", "same_url_back_nav_case_share": "{:.1f}%",
                     }
                     st.dataframe(
                         comp_df.style.format(

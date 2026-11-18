@@ -40,8 +40,32 @@ def _gen_user_pool(n_users):
     return [f"u{idx:05d}" for idx in range(1, n_users + 1)]
 
 
+SITE = "https://shop.example"
+
+# The page each funnel stage fires on; view_item and add_to_cart are on a
+# product page and view_item_list on a category page, built per event below.
+_STAGE_PATHS = {
+    "session_start": "/",
+    "begin_checkout": "/checkout",
+    "purchase": "/checkout/thanks",
+}
+
+
+def _slug(category):
+    return category.lower().replace(" & ", "-").replace(" ", "-")
+
+
 def _build_session(user_id, session_num, start_time, rng):
+    """One session's events. page_location is derived from values already
+    drawn (no extra rng calls), so adding it left every other column of a
+    seeded log unchanged."""
     rows = []
+    page = SITE + "/"
+
+    def product_page(cat):
+        # Unique per event within the log: session_num * 20 + the row about to be added.
+        return f"{SITE}/p/{_slug(cat)}-{100000 + session_num * 20 + len(rows)}"
+
     session_id = f"s{session_num:06d}"
     device = rng.choices(DEVICES, weights=DEVICE_WEIGHTS, k=1)[0]
     traffic_source = rng.choices(TRAFFIC_SOURCES, weights=TRAFFIC_WEIGHTS, k=1)[0]
@@ -57,6 +81,13 @@ def _build_session(user_id, session_num, start_time, rng):
 
         t += pd.Timedelta(seconds=rng.randint(8, 90))
         event_value = price if stage in ("add_to_cart", "begin_checkout", "purchase") else np.nan
+        if stage == "view_item_list":
+            page = f"{SITE}/c/{_slug(category)}"
+        elif stage == "view_item":
+            page = product_page(category)
+        elif stage in _STAGE_PATHS:
+            page = SITE + _STAGE_PATHS[stage]
+        # add_to_cart stays on the product page last viewed
 
         rows.append({
             "user_pseudo_id": user_id,
@@ -68,6 +99,7 @@ def _build_session(user_id, session_num, start_time, rng):
             "device": device,
             "traffic_source": traffic_source,
             "page_type": "product" if stage in ("view_item", "add_to_cart") else "listing",
+            "page_location": page,
             "purchase": stage == "purchase",
             "add_to_cart": stage == "add_to_cart",
         })
@@ -75,16 +107,19 @@ def _build_session(user_id, session_num, start_time, rng):
         # Occasionally inject a noise event between funnel steps (process variants).
         if stage in ("view_item_list", "view_item") and rng.random() < 0.25:
             t += pd.Timedelta(seconds=rng.randint(5, 40))
+            noise = rng.choice(NOISE_EVENTS)
             rows.append({
                 "user_pseudo_id": user_id,
                 "ga_session_id": session_id,
-                "event_name": rng.choice(NOISE_EVENTS),
+                "event_name": noise,
                 "event_timestamp": t,
                 "event_value": np.nan,
                 "category": category,
                 "device": device,
                 "traffic_source": traffic_source,
                 "page_type": "listing",
+                # a search is a page of its own; the other noise events fire on the current page
+                "page_location": f"{SITE}/search?q={_slug(category)}" if noise == "search" else page,
                 "purchase": False,
                 "add_to_cart": False,
             })
@@ -95,6 +130,7 @@ def _build_session(user_id, session_num, start_time, rng):
             browsed = rng.choice(CATEGORIES) if rng.random() < 0.4 else category
             for back_stage, page_type in (("view_item_list", "listing"), ("view_item", "product")):
                 t += pd.Timedelta(seconds=rng.randint(5, 60))
+                page = f"{SITE}/c/{_slug(browsed)}" if back_stage == "view_item_list" else product_page(browsed)
                 rows.append({
                     "user_pseudo_id": user_id,
                     "ga_session_id": session_id,
@@ -105,6 +141,7 @@ def _build_session(user_id, session_num, start_time, rng):
                     "device": device,
                     "traffic_source": traffic_source,
                     "page_type": page_type,
+                    "page_location": page,
                     "purchase": False,
                     "add_to_cart": False,
                 })

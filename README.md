@@ -25,7 +25,7 @@ A modular process mining tool for analysing customer journeys from any event log
 - **Conformance Checking** - Token Replay for fast fitness and precision scores; State Equation A\* for exact per-trace deviations (skipped and unsolicited activities), optionally parallelized across CPU cores.
 - **Bottleneck Analysis** - Activity and transition durations ranked by impact score; overall process health score.
 - **Variant Analysis** - Top-20 variants with frequency, coverage, and duration statistics. A second table shows conversion rate and revenue per *route* (a variant cut off at the first purchase, so buyers and non-buyers who took the same steps share a route), with each route's share of cases and revenue.
-- **Loops & Switches** - Measures the repeat and switch behaviour the process map only shows as arrows: back-navigation (A → B → A, inferred, since a browser back isn't an event), repeat visits to the same activity within a case, what follows a loop (next activity or exit) and where in the journey it happens, and conversion with vs. without loops. Define your own activity groups (e.g. menu navigation vs. search), or use a column such as category, to measure switches between them. The shares are also compared per segment in Segment Comparison.
+- **Loops & Switches** - Measures the repeat and switch behaviour the process map only shows as arrows: back-navigation (A → B → A, inferred, since a browser back isn't an event), repeat visits to the same activity within a case, what follows a loop (next activity or exit) and where in the journey it happens, and conversion with vs. without loops. Define your own activity groups (e.g. menu navigation vs. search), use a column such as category, or use site sections from the page URLs, to measure switches between them. With a page URL column (e.g. GA4's `page_location`, detected automatically), each back-navigation is split into a return to the same URL, a move to another page of the same kind (product A → list → product B) or an event within one page, and loops are also measured between pages. The shares are also compared per segment in Segment Comparison.
 - **Business Insights** - Repeat buyer detection, inter-purchase timing, revenue multiplier (repeat vs. one-time buyers), average order value, cart abandonment rate, category-level revenue breakdown, and revenue-over-time trend.
 - **Funnel Analysis** - Conversion/drop-off rate across any sequence of activities you define, for any process in any industry — or let ProX auto-derive a likely order from the data as a starting point.
 - **Segment Comparison** - Split the log by any low-cardinality column (e.g. device, traffic source) and compare health score, fitness, precision, repeat rate, and happy path side by side, optionally run in parallel across CPU cores.
@@ -190,8 +190,15 @@ Default `business_params`: `{"user_col": "user_id", "revenue_col": "event_value"
 | Parameter | Default | Description |
 |---|---|---|
 | `loop_params` | `{"activity_groups": {}, "group_col": None, "include_ungrouped": False}` | Groups to measure switches between: `activity_groups` maps a group name to its activities (e.g. `{"Navigation": ["view_item_list"], "Search": ["search"]}`), or `group_col` names a column whose values are the groups (e.g. `"category"`). `include_ungrouped` puts everything outside the groups in one more group, `(other)`, instead of skipping it |
+| `loop_params["url_col"]` | detected | The column with each event's URL. Without the key, the first of `page_location`, `page_url` or `page_path` in the log is used; `None` turns the URL analysis off |
+| `loop_params["url_rules"]` | `[]` | `[[regex, replacement], ...]` applied in order to each page path, e.g. `[["^/(nl\|en)(/\|$)", "/"], ["^/p/[^/]+$", "/p/{slug}"]]` to drop a language prefix and treat all product pages as one |
+| `loop_params["collapse_ids"]` | `True` | Replace ID-like path segments (digits, UUIDs, long hex, runs of 5+ digits) with `{id}` |
+| `loop_params["sections"]` | `{}` | `{section: [regex, ...]}` matched against each page path; a page matching none gets its path's first segment (`home` for `/`) |
+| `loop_params["group_by_section"]` | `False` | Use the site sections as the groups for switches |
 
 Back-navigation and repeat visits are always measured, over every activity; switches only when groups are set. By default, activities in no group are skipped, so a switch is a move straight from one group to another. With `include_ungrouped`, moves into and out of the other activities count too, and G1 → (other) → G1 counts as a switch back. Consecutive events in the same group count as one visit. In the app, groups are defined in the Loops & Switches tab and carried into later runs, Segment Comparison, presets and saved runs. `analyze_loops()` runs the same analysis on any event log.
+
+URLs are reduced to their path - no domain, query string or fragment, which can carry personal data - before anything is reported, shown or sent to the AI conclusion. The same-URL / another-URL split compares exact paths; the page-level analysis and sections use the paths after `url_rules` and `collapse_ids`. In the page-level analysis, consecutive events on one page (within one session) are one visit and events without a URL are left out, so it finds loops that event names hide, such as between content pages that are all `page_view`.
 
 ### Outlier handling (winsorization)
 
@@ -287,7 +294,7 @@ output/             Generated PNGs and CSVs (created on first run)
 - Precision calculation uses ETC Conformance Token (fast approximation). Full alignment-based precision is disabled due to memory cost on standard hardware.
 - Visualisations require Graphviz to be installed and on the system PATH.
 - Very large logs (>10 000 events after filtering) will trigger a warning; enabling sampling is recommended.
-- Back-navigation is inferred from an A → B → A pattern, because a browser back isn't recorded as an event. Following a link back to A looks exactly the same.
+- Back-navigation is inferred from an A → B → A pattern, because a browser back isn't recorded as an event. Following a link back to A looks exactly the same. Page URLs narrow this down (same URL, another URL, within one page) but can't tell a back button from a link either.
 - Funnel auto-derivation is a heuristic aimed at typical, roughly-linear processes — pass an explicit funnel definition (via the Funnel tab, or `funnel_steps` in `business_params`) for a guaranteed-correct funnel, especially on logs with a lot of optional/noise activity.
 
 ---

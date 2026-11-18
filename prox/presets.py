@@ -131,9 +131,16 @@ def validate_preset(obj: Any) -> Dict[str, Any]:
     for step in config.get("filter_steps") or []:
         if not isinstance(step, dict) or not isinstance(step.get("type"), str):
             raise PresetError("Each filter step must be an object with a 'type'.")
-    groups = (config.get("loop_params") or {}).get("activity_groups") or {}
+    loop_params = config.get("loop_params") or {}
+    groups = loop_params.get("activity_groups") or {}
     if not isinstance(groups, dict) or not all(isinstance(a, list) for a in groups.values()):
         raise PresetError("'loop_params.activity_groups' must map each group name to a list of activities.")
+    url_rules = loop_params.get("url_rules") or []
+    if not isinstance(url_rules, list) or not all(isinstance(r, list) and len(r) == 2 for r in url_rules):
+        raise PresetError("'loop_params.url_rules' must be a list of [pattern, replacement] pairs.")
+    sections = loop_params.get("sections") or {}
+    if not isinstance(sections, dict) or not all(isinstance(p, list) for p in sections.values()):
+        raise PresetError("'loop_params.sections' must map each section name to a list of patterns.")
     funnel = obj.get("funnel")
     if funnel is not None:
         if not isinstance(funnel, dict) or funnel.get("mode") not in FUNNEL_MODES:

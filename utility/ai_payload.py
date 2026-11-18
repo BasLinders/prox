@@ -241,6 +241,38 @@ def _loops(results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             ],
         } if after.get("loops") else None,
     }
+    if "back_nav_same_url_events" in summary:
+        section["back_navigation_by_url"] = {
+            "note": (
+                "Each back-navigation split by the page URLs (path only): a return to the same URL is a "
+                "real step back; another URL is the same kind of page, a different one (e.g. product A -> "
+                "list -> product B, i.e. comparing); within one page is an in-page event, not navigation."
+            ),
+            "pct_of_cases_returning_to_the_same_url": summary.get("back_nav_same_url_case_share"),
+            "pct_of_cases_moving_to_another_url": summary.get("back_nav_other_url_case_share"),
+            "pct_of_cases_within_one_page": summary.get("back_nav_in_page_case_share"),
+            "pct_of_cases_repeating_an_activity_on_the_same_url": summary.get("repeat_same_url_case_share"),
+        }
+    page = loops.get("page_loops") or {}
+    page_summary = page.get("summary") or {}
+    if page_summary:
+        section["page_level_loops"] = {
+            "note": (
+                "The same loop analysis on page visits (URL paths, consecutive events on one page are one "
+                "visit). IDs in paths may be collapsed to {id}."
+            ),
+            "pct_of_cases_with_page_back_navigation": page_summary.get("back_nav_case_share"),
+            "pct_of_cases_revisiting_a_page": page_summary.get("repeat_case_share"),
+            "top_page_back_navigation_patterns": [
+                {"pattern": p, "occurrences": v.get("occurrences"), "pct_of_cases": v.get("case_share")}
+                for p, v in list((page.get("back_navigation") or {}).items())[:_TOP_N]
+            ],
+            "most_revisited_pages": [
+                {"page": a, "repeat_visits": v.get("repeat_events"),
+                 "pct_of_its_cases_revisiting": v.get("repeat_case_share")}
+                for a, v in list((page.get("repeats") or {}).items())[:_TOP_N]
+            ],
+        }
     outcomes = loops.get("outcomes")
     if outcomes:
         section["conversion_rate_pct_with_vs_without"] = {
@@ -250,7 +282,10 @@ def _loops(results: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     switches = loops.get("group_switches")
     if switches:
         section["group_switches"] = {
-            "groups_from": switches.get("group_col") or "user-defined activity groups",
+            "groups_from": (
+                "site sections from the page URLs" if switches.get("source") == "section"
+                else switches.get("group_col") or "user-defined activity groups"
+            ),
             "events_outside_the_groups": (
                 "counted as one more group, '(other)'" if switches.get("include_ungrouped") else "skipped"
             ),
@@ -457,6 +492,7 @@ def _segment_comparison(segment_result: Optional[Dict[str, Any]]) -> Optional[Di
                 "pct_of_cases_with_back_navigation": row.get("back_nav_case_share"),
                 "pct_of_cases_with_repeat_visits": row.get("repeat_case_share"),
                 "pct_of_cases_switching_group": row.get("group_switch_case_share"),
+                "pct_of_cases_with_back_navigation_to_the_same_url": row.get("same_url_back_nav_case_share"),
                 "most_common_variant": row.get("top_variant"),
             }
             for value, row in table.items()
