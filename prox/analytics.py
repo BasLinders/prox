@@ -447,7 +447,7 @@ def _generate_performance_recommendations(results: Dict[str, Any], health_score:
     return recommendations
 
 
-def _normalise_values(values, default: list) -> list:
+def _normalize_values(values, default: list) -> list:
     """None -> default list, a bare string -> one-item list, otherwise unchanged."""
     if values is None:
         return default
@@ -536,8 +536,8 @@ def analyze_repeat_purchases(
     }
     empty = {"metrics": empty_metrics, "charts": {}}
 
-    purchase_values = _normalise_values(purchase_values, ['purchase', 'has_purchase'])
-    cart_values = _normalise_values(cart_values, ['add_to_cart', 'add_to_basket'])
+    purchase_values = _normalize_values(purchase_values, ['purchase', 'has_purchase'])
+    cart_values = _normalize_values(cart_values, ['add_to_cart', 'add_to_basket'])
 
     os.makedirs(output_folder, exist_ok=True)
     cols_map = {c.lower(): c for c in df.columns}
@@ -1083,7 +1083,7 @@ def analyze_variant_outcomes(
     errors: List[str] = []
     empty = {'routes': {}, 'summary': {}, 'errors': errors}
 
-    purchase_values = _normalise_values(purchase_values, ['purchase', 'has_purchase'])
+    purchase_values = _normalize_values(purchase_values, ['purchase', 'has_purchase'])
 
     if df is None or df.empty:
         errors.append("Event log is empty.")
