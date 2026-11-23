@@ -225,7 +225,7 @@ def render_bigquery_source() -> Optional[bytes]:
             include_traffic_source=True,
             include_item_category=True,
             include_geo=True,
-            attribute_params=["page_location"],
+            attribute_params=["page_location"], # ["page_location", "page_referrer"]
             event_names=event_names,
         )
     except Exception as e:
