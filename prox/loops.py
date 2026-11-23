@@ -41,7 +41,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from .analytics import _normalise_values, _purchase_row_mask
+from .analytics import _normalize_values, _purchase_row_mask
 
 EXIT_LABEL = '(exit)'
 
@@ -220,11 +220,11 @@ def normalize_url_paths(urls: pd.Series, url_rules=None, collapse_ids: bool = Tr
     Invalid rules are skipped (compile_url_rules reports them)."""
     rules = compile_url_rules(url_rules)[0]
 
-    def normalise(url):
+    def normalize(url):
         path = _base_path(str(url))
         return None if path is None else _template_path(path, rules, collapse_ids)
 
-    return _map_unique(urls, normalise)
+    return _map_unique(urls, normalize)
 
 
 def page_sections(paths: pd.Series, sections=None) -> pd.Series:
@@ -743,7 +743,7 @@ def analyze_loops(
     result.update(core)
 
     purchase_mask = _purchase_row_mask(
-        work, activity_col, _normalise_values(purchase_values, ['purchase', 'has_purchase'])
+        work, activity_col, _normalize_values(purchase_values, ['purchase', 'has_purchase'])
     )
     converted_cases = set(work.loc[purchase_mask, case_col]) if purchase_mask.any() else None
 
