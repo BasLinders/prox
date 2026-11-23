@@ -9,3 +9,5 @@ venv/
 .prox_cache/
 .prox_saved_runs/
 .prox_presets/
+.DS_Store
+build/

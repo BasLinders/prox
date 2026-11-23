@@ -8,6 +8,7 @@ from utility.pdf_builder import (
     _section_ai_conclusion,
     _section_predictive,
     _section_business,
+    _section_loops,
     _section_sessions,
     _section_variants,
     _styles,
@@ -238,3 +239,20 @@ def test_build_pdf_report_skips_predictive_without_a_trained_model(tmp_path):
     baseline = build_pdf_report(results, ['sessions'])
     untrained = build_pdf_report(results, ['sessions', PREDICTIVE_KEY], predictive=make_predictive(model=None))
     assert len(untrained) == len(baseline)
+
+
+def test_pdf_with_url_loop_data_builds():
+    from prox.loops import analyze_loops
+    from conftest import make_event_log
+    df = make_event_log([
+        ('1', 'list', '2024-01-01 00:00'), ('1', 'item', '2024-01-01 00:01'),
+        ('1', 'list', '2024-01-01 00:02'), ('1', 'page_view', '2024-01-01 00:03'),
+    ])
+    df['page_location'] = ['/c/x', '/p/1', '/c/x', '/faq']
+    results = {'loop_analysis': analyze_loops(df, url_col='page_location')}
+
+    story = _section_loops(results, None, _styles())
+    text = " ".join(getattr(f, 'text', '') for f in story)
+    assert "By URL: 100.0% of cases return to the same URL" in text
+    assert "On page visits from 'page_location'" in text
+    assert build_pdf_report(results, ['loops']).startswith(b'%PDF')

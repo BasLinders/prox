@@ -4,7 +4,7 @@ import os
 from typing import Any, Dict, Optional
 
 from .analytics import format_business_report
-from .loops import LOOP_INFERENCE_NOTE
+from .loops import LOOP_INFERENCE_NOTE, LOOP_KIND_LABELS
 
 _STYLE = """
   body { font-family: -apple-system, Arial, sans-serif; margin: 2rem; color: #1a1a1a; max-width: 1100px; }
@@ -155,13 +155,26 @@ def _build_loop_section(loops: Dict[str, Any] | None) -> str:
         return ""
     summary = loops['summary']
 
+    has_urls = 'back_nav_same_url_events' in summary
     patterns = {
         p.replace(' -> ', ' → '): {
             'occurrences': f"{s['occurrences']:,}", 'cases': f"{s['cases']:,}",
             'case_share': f"{s['case_share']:.1f}%",
+            'same_url': f"{s.get('same_url', 0):,}", 'other_url': f"{s.get('other_url', 0):,}",
         }
         for p, s in loops.get('back_navigation', {}).items()
     }
+    pattern_cols = ['occurrences', 'cases', 'case_share'] + (['same_url', 'other_url'] if has_urls else [])
+    pattern_headers = "<th>Occurrences</th><th>Cases</th><th>% of Cases</th>" + (
+        "<th>To the Same URL</th><th>To Another URL</th>" if has_urls else ""
+    )
+    url_split_html = ""
+    if has_urls:
+        url_split_html = f"""
+<p>By URL: {summary['back_nav_same_url_case_share']:.1f}% of cases return to the same URL (a real step
+back), {summary['back_nav_other_url_case_share']:.1f}% move to another page of the same kind (e.g. one
+product, the list, then another product) and {summary['back_nav_in_page_case_share']:.1f}% have
+back-navigation within one page (events on the same URL, not a page change).</p>"""
     repeats = {
         act: {
             'repeat_case_share': f"{s['repeat_case_share']:.1f}%", 'repeat_events': f"{s['repeat_events']:,}",
@@ -188,9 +201,8 @@ def _build_loop_section(loops: Dict[str, Any] | None) -> str:
     outcomes_html = ""
     outcomes = loops.get('outcomes')
     if outcomes:
-        labels = {'back_navigation': 'Back-navigation', 'repeat': 'Repeat visit'}
         rows = {
-            labels[kind]: {
+            LOOP_KIND_LABELS.get(kind, kind): {
                 'with': f"{o['with']['conversion_rate']:.1f}% ({o['with']['cases']:,} cases)",
                 'without': f"{o['without']['conversion_rate']:.1f}% ({o['without']['cases']:,} cases)",
             }
@@ -214,11 +226,14 @@ def _build_loop_section(loops: Dict[str, Any] | None) -> str:
             }
             for t, s in switches.get('transitions', {}).items()
         }
-        basis = (
-            f"values of column '{html.escape(str(switches.get('group_col')))}'"
-            if switches.get('source') == 'column' else "user-defined activity groups"
-        ) + ("; everything else counts as one more group, (other)" if switches.get('include_ungrouped')
-             else "; events in no group are skipped")
+        basis = {
+            'column': f"values of column '{html.escape(str(switches.get('group_col')))}'",
+            'section': "site sections from the page URLs",
+        }.get(switches.get('source'), "user-defined activity groups")
+        basis += (
+            "; everything else counts as one more group, (other)" if switches.get('include_ungrouped')
+            else "; events in no group are skipped"
+        )
         switches_html = f"""
 <h3>Switches Between Groups</h3>
 <p>Groups are {basis}. {sw['switch_case_share']:.1f}% of cases switch group at least once, and
@@ -227,6 +242,8 @@ def _build_loop_section(loops: Dict[str, Any] | None) -> str:
 <tr><th>Switch</th><th>Occurrences</th><th>Cases</th><th>% of Cases</th></tr>
 {_table_rows(rows, ['occurrences', 'cases', 'case_share'])}
 </table>"""
+
+    page_html = _build_page_loop_section(loops.get('page_loops'))
 
     return f"""
 <h2>Loops and Back-navigation</h2>
@@ -239,9 +256,10 @@ def _build_loop_section(loops: Dict[str, Any] | None) -> str:
 </div>
 <h3>Most Common Back-navigation</h3>
 <table>
-<tr><th>Pattern</th><th>Occurrences</th><th>Cases</th><th>% of Cases</th></tr>
-{_table_rows(patterns, ['occurrences', 'cases', 'case_share'])}
+<tr><th>Pattern</th>{pattern_headers}</tr>
+{_table_rows(patterns, pattern_cols)}
 </table>
+{url_split_html}
 <h3>Repeated Activities</h3>
 <table>
 <tr><th>Activity</th><th>% of Its Cases Repeating</th><th>Repeat Events</th><th>Of Which Immediate (A → A)</th><th>Visits per Case</th></tr>
@@ -249,7 +267,48 @@ def _build_loop_section(loops: Dict[str, Any] | None) -> str:
 </table>
 {after_html}
 {outcomes_html}
+{page_html}
 {switches_html}"""
+
+
+def _build_page_loop_section(page: Dict[str, Any] | None) -> str:
+    """The loop analysis on page visits (analyze_loops' page_loops), or ''."""
+    if not page or not page.get('summary'):
+        return ""
+    summary = page['summary']
+    patterns = {
+        p.replace(' -> ', ' → '): {
+            'occurrences': f"{s['occurrences']:,}", 'cases': f"{s['cases']:,}",
+            'case_share': f"{s['case_share']:.1f}%",
+        }
+        for p, s in page.get('back_navigation', {}).items()
+    }
+    repeats = {
+        path: {
+            'repeat_case_share': f"{s['repeat_case_share']:.1f}%", 'repeat_events': f"{s['repeat_events']:,}",
+            'visits_per_case': f"{s['visits_per_case']:.2f}",
+        }
+        for path, s in page.get('repeats', {}).items()
+    }
+    after = (page.get('after_loop') or {}).get('back_navigation') or {}
+    after_text = (
+        f" {after['exit_share']:.1f}% of page back-navigations end the case." if after.get('loops') else ""
+    )
+    return f"""
+<h3>Loops Between Pages</h3>
+<p>The same analysis on page visits from '{html.escape(str(page.get('url_col')))}': consecutive events on
+one page count as one visit. {summary['back_nav_case_share']:.1f}% of cases go back to the page before
+(page A → page B → page A) and {summary['repeat_case_share']:.1f}% visit a page again.{after_text}
+{summary['page_visits']:,} page visits over {summary['distinct_pages']:,} pages;
+{summary['events_without_url']:,} events have no URL and are left out.</p>
+<table>
+<tr><th>Pages</th><th>Occurrences</th><th>Cases</th><th>% of Cases</th></tr>
+{_table_rows(patterns, ['occurrences', 'cases', 'case_share'])}
+</table>
+<table>
+<tr><th>Page Visited Again</th><th>% of Its Cases Revisiting</th><th>Repeat Visits</th><th>Visits per Case</th></tr>
+{_table_rows(repeats, ['repeat_case_share', 'repeat_events', 'visits_per_case'])}
+</table>"""
 
 
 def _build_narrative_summary(results: Dict[str, Any]) -> str:
@@ -559,7 +618,8 @@ def _format_comparison_cell(column: str, value: Any) -> str:
             return f"{float(value):.0f}"
         except (TypeError, ValueError):
             return str(value)
-    if column in ('repeat_rate', 'back_nav_case_share', 'repeat_case_share', 'group_switch_case_share'):
+    if column in ('repeat_rate', 'back_nav_case_share', 'repeat_case_share', 'group_switch_case_share',
+                  'same_url_back_nav_case_share'):
         try:
             return f"{float(value):.1f}%"
         except (TypeError, ValueError):
@@ -608,6 +668,9 @@ has the healthiest process (health score <strong>{best_health[1].get('health_sco
     if any('group_switch_case_share' in row for row in comparison_table.values()):
         columns.insert(-1, 'group_switch_case_share')
         headers.insert(-1, 'Group Switches')
+    if any('same_url_back_nav_case_share' in row for row in comparison_table.values()):
+        columns.insert(-1, 'same_url_back_nav_case_share')
+        headers.insert(-1, 'Back to Same URL')
     rows = []
     for value, row in comparison_table.items():
         cells = "".join(

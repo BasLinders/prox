@@ -157,3 +157,18 @@ def test_run_full_analysis_loop_analysis_without_groups():
 
     assert results['loop_analysis']['summary']['back_nav_events'] == 0
     assert results['loop_analysis']['group_switches'] is None
+
+
+def test_run_full_analysis_detects_the_url_column_for_loops():
+    df = make_simple_variant_log(n_cases=3)
+    df['page_location'] = df['concept:name'].map({'a': '/a', 'b': '/b', 'c': '/a'})
+
+    results = run_full_analysis(df, config=create_analysis_config(filter_steps=[], sample_size=10))
+    page = results['loop_analysis']['page_loops']
+    assert page['url_col'] == 'page_location'
+    assert page['summary']['back_nav_case_share'] == 100
+
+    off = run_full_analysis(df, config=create_analysis_config(
+        filter_steps=[], sample_size=10, loop_params={'url_col': None},
+    ))
+    assert off['loop_analysis']['page_loops'] is None

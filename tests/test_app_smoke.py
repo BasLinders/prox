@@ -524,3 +524,54 @@ def test_saved_run_shows_its_predictive_insights_without_rescoring(app, monkeypa
 
     assert {"Top Drivers", "In-Progress Cases"} <= {s.value for s in fresh.subheader}
     assert [m.value for m in fresh.metric if m.label in ("In-Progress Cases Scored", "Average Propensity")] == shown
+
+
+def test_loops_tab_uses_page_urls_and_site_sections(app):
+    _run_mock_analysis(app)
+    app.session_state["active_results_tab"] = "Loops & Switches"
+    app.run()
+
+    # The mock log's page_location is picked up by the run itself.
+    assert not app.exception
+    assert app.session_state["results"]["loop_analysis"]["page_loops"]["url_col"] == "page_location"
+    assert any(m.label == "Cases Going Back to the Same URL" for m in app.metric)
+    assert any(m.label == "Cases with Page Back-navigation" for m in app.metric)
+    assert app.selectbox(key="cfg_loop_url_col_default").value == "page_location"
+
+    app.text_area(key="cfg_loop_url_rules_default").set_value("^/p/[^/]+$ => /p/{slug}")
+    app.text_area(key="cfg_loop_url_sections_default").set_value("Product = ^/p/\nCategory = ^/c/")
+    next(b for b in app.button if b.label == "Apply URL Settings").click().run()
+    assert not app.exception
+    params = app.session_state["cfg_loop_params_default"]
+    assert params["url_rules"] == [["^/p/[^/]+$", "/p/{slug}"]]
+    assert params["sections"] == {"Product": ["^/p/"], "Category": ["^/c/"]}
+    page = app.session_state["loop_result"]["page_loops"]
+    assert any("/p/{slug}" in p for p in page["back_navigation"])
+
+    app.radio(key="cfg_loop_group_mode_default").set_value("Site sections (from URLs)").run()
+    next(b for b in app.button if b.label == "Analyse Switches").click().run()
+    assert not app.exception
+    params = app.session_state["cfg_loop_params_default"]
+    assert params["group_by_section"] is True
+    assert params["sections"] == {"Product": ["^/p/"], "Category": ["^/c/"]}  # kept from Page URLs
+    switches = app.session_state["loop_result"]["group_switches"]
+    assert switches["source"] == "section"
+    assert {"Product", "Category"} <= set(switches["group_stats"])
+
+    # The next run uses the same URL settings.
+    next(b for b in app.button if b.label == "Run Analysis").click().run()
+    assert not app.exception
+    assert app.session_state["results"]["loop_analysis"]["group_switches"]["source"] == "section"
+
+
+def test_page_urls_can_be_turned_off(app):
+    _run_mock_analysis(app)
+    app.session_state["active_results_tab"] = "Loops & Switches"
+    app.run()
+    app.selectbox(key="cfg_loop_url_col_default").set_value("(none)")
+    next(b for b in app.button if b.label == "Apply URL Settings").click().run()
+
+    assert not app.exception
+    assert app.session_state["cfg_loop_params_default"]["url_col"] is None
+    assert app.session_state["loop_result"]["page_loops"] is None
+    assert any("No page URLs in this analysis" in i.value for i in app.info)

@@ -179,3 +179,24 @@ def test_preset_with_malformed_loop_groups_is_rejected():
     preset = build_preset("Bad loops", create_analysis_config(loop_params={"activity_groups": {"Nav": "menu"}}))
     with pytest.raises(PresetError, match="activity_groups"):
         preset_from_json(json.dumps(preset))
+
+
+def test_preset_keeps_url_loop_settings():
+    params = {**_LOOP_PARAMS, "url_col": "page_location", "url_rules": [["^/nl", ""]],
+              "sections": {"Product": ["^/p/"]}, "group_by_section": True, "collapse_ids": False}
+    kept = extract_preset_config(create_analysis_config(loop_params=params))
+    preset = build_preset("URLs", create_analysis_config(loop_params=params))
+
+    assert kept["loop_params"] == params
+    assert preset_from_json(json.dumps(preset))["config"]["loop_params"] == params
+
+
+@pytest.mark.parametrize("bad", [
+    {"url_rules": ["^/nl => /"]},
+    {"url_rules": [["^/nl"]]},
+    {"sections": {"Product": "^/p/"}},
+])
+def test_preset_with_malformed_url_loop_settings_is_rejected(bad):
+    preset = build_preset("Bad URLs", create_analysis_config(loop_params={"activity_groups": {}, **bad}))
+    with pytest.raises(PresetError, match="url_rules|sections"):
+        preset_from_json(json.dumps(preset))

@@ -340,3 +340,46 @@ def test_generate_segment_comparison_report_shows_loop_shares():
     assert "<th>Group Switches</th>" in report
     assert "<td>40.0%</td>" in report
     assert "<td>20.0%</td>" in report
+
+
+def _make_url_loop_results():
+    from prox.loops import analyze_loops
+    df = make_event_log([
+        ('1', 'view_item_list', '2024-01-01 00:00'), ('1', 'view_item', '2024-01-01 00:01'),
+        ('1', 'view_item_list', '2024-01-01 00:02'), ('1', 'purchase', '2024-01-01 00:03'),
+        ('2', 'page_view', '2024-01-01 00:00'), ('2', 'page_view', '2024-01-01 00:01'),
+        ('2', 'page_view', '2024-01-01 00:02'),
+    ])
+    df['page_location'] = [
+        'https://a.nl/c/shoes', 'https://a.nl/p/123456', 'https://a.nl/c/shoes', 'https://a.nl/thanks',
+        'https://a.nl/faq', 'https://a.nl/<script>', 'https://a.nl/faq',
+    ]
+    return {'loop_analysis': analyze_loops(
+        df, url_col='page_location', group_by_section=True, sections={'Product': ['^/p/']},
+    )}
+
+
+def test_generate_html_report_includes_url_split_and_page_loops():
+    report = generate_html_report(_make_url_loop_results())
+
+    assert "<th>To the Same URL</th>" in report
+    assert "By URL: 50.0% of cases return to the same URL" in report
+    assert "Loops Between Pages" in report
+    assert "/faq → /&lt;script&gt; → /faq" in report
+    assert "/<script>" not in report
+    assert "site sections from the page URLs" in report
+    assert "Back-navigation to the same URL" in report  # the URL loop kinds in the outcomes table
+
+
+def test_generate_segment_comparison_report_shows_same_url_share():
+    segment_result = {
+        'comparison_table': {
+            'mobile': {'cases': 5, 'health_score': 50.0, 'back_nav_case_share': 40.0,
+                       'repeat_case_share': 60.0, 'same_url_back_nav_case_share': 12.5, 'top_variant': 'a'},
+        },
+        'segments': {},
+    }
+    report = generate_segment_comparison_report(segment_result)
+
+    assert "<th>Back to Same URL</th>" in report
+    assert "<td>12.5%</td>" in report
